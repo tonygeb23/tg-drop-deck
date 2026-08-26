@@ -1,0 +1,6 @@
+wxPython
+numpy
+sounddevice
+soundfile
+soxr
+accessible_output2

@@ -1,0 +1,814 @@
+{
+  "app": "TG Drop Deck",
+  "format": 2,
+  "sfx_volume": 0.75,
+  "bed_volume": 0.5,
+  "ducking": true,
+  "duck_db": -9.0,
+  "device_name": null,
+  "device_hostapi": null,
+  "last_sound_dir": "",
+  "slots": [
+    {
+      "filepath": "sfx/applause.flac",
+      "name": "applause",
+      "duration": 4.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/cheer.flac",
+      "name": "crowd cheer",
+      "duration": 3.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/laughter.flac",
+      "name": "audience laugh",
+      "duration": 3.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/buzzer.flac",
+      "name": "buzzer",
+      "duration": 1.48,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/ding.flac",
+      "name": "correct ding",
+      "duration": 1.48,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/airhorn.flac",
+      "name": "air horn",
+      "duration": 2.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/whoosh.flac",
+      "name": "whoosh",
+      "duration": 1.48,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/riser.flac",
+      "name": "riser",
+      "duration": 4.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/impact.flac",
+      "name": "impact boom",
+      "duration": 3.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/rimshot.flac",
+      "name": "rimshot",
+      "duration": 2.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/scratch.flac",
+      "name": "record scratch",
+      "duration": 1.48,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/kaching.flac",
+      "name": "cash register",
+      "duration": 2.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/shutter.flac",
+      "name": "camera shutter",
+      "duration": 1.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/phone.flac",
+      "name": "phone ring",
+      "duration": 3.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/notify.flac",
+      "name": "notification",
+      "duration": 1.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/swoosh_up.flac",
+      "name": "rising swoosh",
+      "duration": 1.48,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/thunder.flac",
+      "name": "thunder",
+      "duration": 5.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/knock.flac",
+      "name": "door knock",
+      "duration": 2.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/crickets.flac",
+      "name": "crickets",
+      "duration": 4.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "sfx/drumroll.flac",
+      "name": "drum roll",
+      "duration": 4.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/lofi_chill.ogg",
+      "name": "lo-fi chill",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/upbeat_pop.ogg",
+      "name": "upbeat pop",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/corporate_uplift.ogg",
+      "name": "corporate uplift",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/dark_tension.ogg",
+      "name": "dark tension",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/funky_groove.ogg",
+      "name": "funky groove",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/ambient_pad.ogg",
+      "name": "ambient pad",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/news_urgent.ogg",
+      "name": "news urgency",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/cinematic_epic.ogg",
+      "name": "cinematic epic",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/synthwave.ogg",
+      "name": "synthwave",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/acoustic_warm.ogg",
+      "name": "acoustic warm",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/boom_bap.ogg",
+      "name": "boom bap",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/mystery.ogg",
+      "name": "mystery",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/playful_quirky.ogg",
+      "name": "playful quirky",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/sports_energy.ogg",
+      "name": "sports energy",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/meditation.ogg",
+      "name": "meditation",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/tech_electronic.ogg",
+      "name": "tech electronic",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/suspense_pulse.ogg",
+      "name": "suspense pulse",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/documentary.ogg",
+      "name": "documentary",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/celebration.ogg",
+      "name": "celebration",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": "beds/late_night_jazz.ogg",
+      "name": "late night jazz",
+      "duration": 30.0,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": true,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    },
+    {
+      "filepath": null,
+      "name": null,
+      "duration": null,
+      "custom_hotkey": null,
+      "key_code": null,
+      "modifiers": null,
+      "loop": false,
+      "trim_db": 0.0
+    }
+  ],
+  "note": "Demo pack. Every sound and bed was generated with ElevenLabs AI \u2014 nothing here is recorded or sampled from a commercial library."
+}

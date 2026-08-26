@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Tony's own bank — it carries the absolute paths of his machine, and this
+# repository is public.
+boards/
+
+# Build output
+build/
+dist/
+*.spec
+
+# Half-written encodes and local scratch
+*.part
+scratch-validate/
