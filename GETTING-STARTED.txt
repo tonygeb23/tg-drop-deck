@@ -1,0 +1,125 @@
+TG DROP DECK
+An accessible soundboard for podcasts, radio and live shows.
+
+
+RUNNING IT
+
+Double-click "TG Drop Deck.exe". Nothing to install.
+
+Keep the "demo" folder next to the executable. That is where the forty
+sounds that come with the app live, and the app looks for it there.
+
+Windows may say "Windows protected your PC" the first time, because the
+program is not code signed. Choose "More info", then "Run anyway".
+
+
+THE FIRST THING TO KNOW
+
+The whole app is the number row. Press 1. You should hear applause.
+
+  1 to 0                    Sound effects 1 to 10
+  Shift + 1 to 0            Sound effects 11 to 20
+  Ctrl + 1 to 0             Dialog drops 1 to 10
+  Ctrl + Shift + 1 to 0     Dialog drops 11 to 20
+  Alt + Ctrl + 1 to 0       Music beds 1 to 10, press again to stop
+  Alt + Ctrl + Shift + 1-0  Music beds 11 to 20
+
+  Ctrl + Tab                Move to the next bank
+  Escape                    Stop everything
+
+Sound effects and drops overlap. They never cut each other off. Music beds
+toggle: the same key starts one and stops it.
+
+
+TWO VOLUMES
+
+A music bed and a sound effect should never fight over one fader, so they
+have their own.
+
+  F2 and F3                 Sound volume, for banks 1, 2 and 4
+  F5 and F6                 Bed volume, for bank 3
+
+While a sound effect or a drop plays, the music beds automatically duck
+down and come back up when it finishes. Ctrl+D turns that off.
+
+
+EVERYTHING ELSE
+
+  F1                        The full list of keys
+  Ctrl + E                  Search every bank by name
+  Ctrl + L                  Say what is playing right now
+  F4                        Rename the sound you are on
+  Delete                    Clear the slot you are on
+  Ctrl + P                  Choose the audio output device
+  Ctrl + S / Ctrl + O       Save or open a board
+  Ctrl + N                  Start an empty board
+
+
+MAKING IT YOURS
+
+The forty sounds that ship with it are a demo. Here is how to build a board
+of your own.
+
+1. Press Ctrl+N to empty all eighty slots. Answer Yes.
+
+2. Tab to any button, or press Ctrl+Tab to reach the bank you want.
+   The tabs are: 1 Sound Effects, 2 Dialog Drops, 3 Music Beds,
+   4 Miscellaneous.
+
+3. Press Space on an empty slot. A file browser opens. Choose any WAV,
+   MP3, FLAC, OGG or AIFF file. It is now on that key.
+
+4. Press F4 to give it a name you will recognise when you are live. This
+   is the name the screen reader reads, and the name search finds.
+
+5. Repeat. Put your stings and hits in bank 1, your own recorded clips in
+   bank 2, and anything you want looping under your voice in bank 3.
+
+6. Your board saves itself. There is nothing to remember to do.
+
+Some things worth knowing while you build:
+
+  - Bank 3 loops by default. Right-click a bed to turn looping off if you
+    want it to play once.
+
+  - Bank 4 has no fixed keys. Right-click any button there and choose
+    "Hotkey" to give it whatever combination you like.
+
+  - Right-click any button (or press the Applications key) for rename,
+    level, looping, hotkey and clear.
+
+  - "Level" adjusts one sound on its own, for when a single clip is much
+    louder or quieter than everything else.
+
+  - Sounds are not copied into the app. It remembers where they are. If
+    you later move your sound folder, use File then "Relink missing
+    sounds", point it at the new location, and the whole board repairs
+    itself in one go.
+
+  - Ctrl+S saves the board to a file of its own, so you can keep one board
+    per show and open whichever you need with Ctrl+O.
+
+  - File then "Load the demo pack" brings the demo sounds back at any
+    time. You cannot lose them.
+
+
+SENDING SOUND SOMEWHERE ELSE
+
+Ctrl+P chooses where the audio comes out. If you have a virtual audio
+cable installed, pick it here to feed a stream or a recorder while you
+keep listening on your own speakers.
+
+The device is remembered by its name, so plugging in a headset later will
+not silently move your sound somewhere you did not expect.
+
+
+ABOUT THE DEMO SOUNDS
+
+The twenty sound effects and twenty music beds that come with the app were
+generated with ElevenLabs AI. None of them is recorded or sampled from a
+commercial sound library, which is what makes it safe to give them away
+with a free program. Use them for whatever you like.
+
+
+TG Drop Deck is free and MIT licensed.
+Source: https://github.com/tonygeb23/tg-drop-deck

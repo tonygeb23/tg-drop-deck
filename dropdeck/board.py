@@ -8,6 +8,7 @@ keeps working.
 from __future__ import annotations
 
 import json
+import sys
 import os
 
 from . import constants as C
@@ -29,7 +30,14 @@ def default_board_path():
 
 
 def app_dir():
-    """The folder the app was installed or checked out into."""
+    """The folder the app was installed or checked out into.
+
+    Frozen, that is the folder holding the executable — which is where the demo
+    pack sits, deliberately outside the bundle so it can be opened, replaced or
+    added to like any other folder of sounds.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
