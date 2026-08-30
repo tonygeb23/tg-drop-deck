@@ -23,12 +23,24 @@ And specific to this one:
 - **The keyboard map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
   `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty; `F2`/`F3` for
   sounds and `F5`/`F6` for beds. It is muscle memory built over years. A new
-  feature gets a new key; it never takes one of these.
+  feature gets a new key; it never takes one of these. Global hotkeys in 2.1.0
+  took `Ctrl+G` and nothing else.
+- **A global hotkey always needs a modifier.** `globalhotkeys.parse` refuses a
+  bare key and there is a test for it. RegisterHotKey on a bare key takes that
+  key away from every other program on the machine, including whatever the user
+  is typing into.
 - **Nothing goes between a keypress and a sound.** No confirmation, no
   animation, no lazy decode on the hot path. Short sounds are decoded into
   memory at assignment time precisely so the key is instant.
 - **Sounds in banks 1, 2 and 4 overlap and never cut each other off.** Beds
   toggle. That is the whole interaction model.
+- **A bank may be routed to its own sound card**, so `MixerGroup` can hold
+  several `Mixer`s. Banks sharing a device share a mixer - the common case
+  of one output is still one stream. Ducking is shared through a `DuckBus`
+  precisely so routing the beds elsewhere does not silently disable it.
+- **Speech about playback is optional; speech about failure is not.**
+  `announce_playback()` is gated by a setting and always writes the status
+  bar; `announce()` always speaks. A missing file must never be silent.
 
 ## Layout
 
@@ -37,11 +49,15 @@ dropdeck/
   constants.py   banks, hotkey labels, fades, help text — one source of truth
   slot.py        one button's state, and how it describes itself out loud
   engine.py      voices: memory playback, disk streaming, gain envelopes
-  mixer.py       the output stream, ducking, the two masters
+  mixer.py       output streams, per-bank routing, ducking, the two masters
   board.py       eighty slots on disk, legacy import, relinking
   speech.py      accessible_output2, with a fallback to doing nothing
   dialogs.py     hotkey capture, search, level, audio settings
   ui.py          the frame, the four tabs, the accelerator table
+  globalhotkeys.py  Windows RegisterHotKey, on its own listener thread
+  singleinstance.py one copy at a time; identical to the Prompt Vault's copy
+  appupdate.py   signed update manifest; identical in shape to the Prompt Vault
+  appicon.py     the drawn mark, and the .ico the build stamps in
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
@@ -52,6 +68,26 @@ why `tests/test_engine.py` can render the entire mixer and inspect the samples
 with no sound card present.
 
 ## Things that will bite
+
+- **A wx.CallAfter with no wx.App raises**, and inside the hotkey listener
+  thread that killed the thread *before it reached the message loop* — leaving
+  every combination registered with Windows, firing nothing, and unavailable to
+  every other program until the process died. Unregistering now happens in a
+  `finally`, and the hop to the UI thread is guarded. A test asserts the thread
+  is still alive after registering.
+- **Do not point PyInstaller's `--distpath` inside Dropbox.** `--clean` dies on
+  "cannot access the file because it is being used by another process" every
+  time. The whole build goes to `%LOCALAPPDATA%\TG Studios Build\drop-deck`
+  and only the zip and the installer are copied back.
+- **A daemon thread inside libsndfile at interpreter shutdown segfaults.** The
+  cache warmer decodes on a background thread, and tearing the process down
+  under it crashed on exit about one run in three - after every check had
+  passed, so it only showed as an exit code. `stop_background_work()` is called
+  from **both** `_on_close` and `Destroy`, because **Destroy does not raise
+  EVT_CLOSE** and the tests tear frames down that way.
+- **The selftest must close the mixer.** An open audio stream keeps the process
+  alive after the report is printed, so a selftest that forgets looks exactly
+  like one that hung.
 
 - **libsndfile's Vorbis encoder kills the process** on a one-shot write of more
   than a few seconds. No exception, no traceback — the interpreter just exits.

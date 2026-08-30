@@ -7,16 +7,21 @@ everything that happens says so out loud.
 
 from __future__ import annotations
 
+import ctypes
 import os
+import threading
 
 import wx
 
+from . import appicon
 from . import constants as C
+from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
 from .dialogs import (AssignHotkeyDialog, SearchDialog, SettingsDialog,
                       TrimDialog, audio_file_dialog, key_label)
 from .engine import probe
-from .mixer import Mixer, describe_device, output_devices
+from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
+                    output_devices, resolve_device)
 from .slot import format_duration
 from .speech import Speaker, percent
 
@@ -42,6 +47,9 @@ ID_SHORTCUTS = wx.ID_HIGHEST + 17
 ID_IMPORT = wx.ID_HIGHEST + 18
 ID_SAVE_AS = wx.ID_HIGHEST + 19
 ID_DEMO = wx.ID_HIGHEST + 20
+ID_GLOBAL_HOTKEY = wx.ID_HIGHEST + 21
+ID_GLOBAL_TOGGLE = wx.ID_HIGHEST + 22
+ID_CHECK_UPDATES = wx.ID_HIGHEST + 23
 
 #: Which slot each fixed hotkey fires, as (modifiers, key_code, slot_index).
 def fixed_accelerators():
@@ -59,29 +67,242 @@ def fixed_accelerators():
     return entries
 
 
+def _escaped(label):
+    """Double every ampersand, for a label going onto a wx.Button.
+
+    Win32 treats a single & as a mnemonic prefix and swallows it, and MSAA
+    strips it too - so a drop called "Q&A Bumper" was read out as "QA Bumper".
+    "R&B", "Rock & Roll" and "Q&A" are ordinary names for a soundboard, and the
+    name is the whole label, which is the whole thing a screen reader reads.
+
+    Escaping happens here, at the wx boundary, and nowhere else. slot.py keeps
+    returning the real text, so search labels, announcements and the tests are
+    all unaffected.
+    """
+    return label.replace("&", "&&")
+
+
 class SoundButton(wx.Button):
-    """One slot. Its label is the whole story, which is what a screen reader
-    reads when you land on it."""
+    """One slot, drawn rather than left to the native button.
+
+    A native wx.Button centres its label and hard-clips the overflow at BOTH
+    ends with no ellipsis, and the label here is a sentence: number, name,
+    hotkey, global hotkey, loop, duration. Measured on the shipped demo pack at
+    the default window size, 19 of 40 pads were losing text - the slot number
+    off the left and the duration off the right, so "13. playful quirky, key
+    Alt+Ctrl+Shift+3, loops, 30 sec" showed as "playful quirky, key
+    Alt+Ctrl+Shift+3, loops, 30".
+
+    So the face is painted in three zones that each get their own space, and
+    the state is shown as colour and a bar rather than as one more clause in
+    the sentence. For a live soundboard "which pads are firing right now" is
+    the question the screen has to answer, and before this it was answerable
+    only by reading the word "playing" out of the middle of a line that was
+    often clipped away.
+
+    The window label is still the full unclipped string, so the accessible name
+    is byte-identical to what it was and a screen reader loses nothing. Colour
+    is never the only cue: every state painted here is also a word in that
+    label.
+    """
 
     def __init__(self, parent, slot, frame):
-        super().__init__(parent, label=slot.button_label())
+        super().__init__(parent, label=_escaped(slot.button_label()),
+                         style=wx.BORDER_NONE)
         self.slot = slot
         self.frame = frame
-        self._last_label = self.GetLabel()
+        self._last_label = slot.button_label()
+        self._playing = False
+        self._hover = False
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_BUTTON, self._on_activate)
         self.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
+        self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
+        self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
+        self.Bind(wx.EVT_SET_FOCUS, self._on_focus)
+        self.Bind(wx.EVT_KILL_FOCUS, self._on_focus)
+        self._update_tooltip()
+
+    def _set_hover(self, value):
+        self._hover = value
+        self.Refresh()
+
+    def _on_focus(self, event):
+        # A label deferred while focused (see refresh) is applied on the way
+        # out, so the accessible name never goes stale.
+        if not self.HasFocus():
+            wx.CallAfter(self.refresh, self._playing)
+        self.Refresh()
+        event.Skip()
+
+    def _update_tooltip(self):
+        """The full label plus the file, for the mouse.
+
+        There was not one tooltip on any of the eighty pads, so a mouse user
+        had no way to recover text the button had clipped.
+        """
+        tip = self.slot.button_label(self._playing)
+        if self.slot.filepath:
+            tip += "\n" + self.slot.filepath
+        elif not self.slot.is_assigned:
+            tip += "\nClick to choose a sound for this slot."
+        self.SetToolTip(tip)
 
     def refresh(self, playing=False):
         label = self.slot.button_label(playing)
-        if label != self._last_label:
+        changed = playing != self._playing
+        self._playing = playing
+        # Compared unescaped, set escaped. Comparing the escaped form against
+        # slot.button_label() would differ on every ampersand and rewrite the
+        # label forever.
+        #
+        # The label is NOT rewritten while this button has focus. On MSW a
+        # button's accessible Name is its label, so changing it under a screen
+        # reader restarts the announcement - which happens exactly when a sound
+        # starts, on air, on the control the user is standing on. CLAUDE.md
+        # forbids it. The paint below still shows the new state immediately.
+        if label != self._last_label and not self.HasFocus():
             self._last_label = label
-            self.SetLabel(label)
+            self.SetLabel(_escaped(label))
+            self._update_tooltip()
+        if changed:
+            self.Refresh()
 
     def _on_activate(self, _event):
         self.frame.trigger(self.slot.index)
 
-    def _on_context_menu(self, _event):
-        self.frame.show_slot_menu(self.slot, self)
+    def _on_context_menu(self, event):
+        # Use where the event says, not where the mouse happens to be. With no
+        # position PopupMenu falls back to the cursor, so pressing the
+        # Applications key on a focused pad opened its menu wherever the
+        # pointer had been left - possibly on another monitor.
+        position = event.GetPosition()
+        if position == wx.DefaultPosition or tuple(position) == (-1, -1):
+            size = self.GetSize()
+            position = self.ClientToScreen(wx.Point(size.x // 2, size.y // 2))
+        self.frame.show_slot_menu(self.slot, self, self.ScreenToClient(position))
+
+    # ------------------------------------------------------------- painting --
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        width, height = self.GetClientSize()
+        slot = self.slot
+        pad = self.FromDIP(8)
+
+        face, edge, ink, sub, accent = _pad_colours(slot, self._playing,
+                                                    self._hover)
+        dc.SetBackground(wx.Brush(self.GetParent().GetBackgroundColour()))
+        dc.Clear()
+
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetAntialiasMode(wx.ANTIALIAS_DEFAULT)
+        radius = self.FromDIP(5)
+        gc.SetBrush(gc.CreateBrush(wx.Brush(face)))
+        if not slot.is_assigned:
+            # A dashed outline and no fill, so an empty slot is obviously
+            # empty. Before this, empty, loaded and broken pads were three
+            # identical white cards.
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(edge).Width(1)
+                                   .Style(wx.PENSTYLE_SHORT_DASH)))
+        else:
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(edge).Width(
+                2 if (self.HasFocus() or self._playing) else 1)))
+        gc.DrawRoundedRectangle(0.5, 0.5, width - 1, height - 1, radius)
+
+        if accent is not None:
+            # The state bar. Colour, but never the only cue - the same state is
+            # a word inside this button's label, which is what is read aloud.
+            gc.SetPen(wx.TRANSPARENT_PEN)
+            gc.SetBrush(gc.CreateBrush(wx.Brush(accent)))
+            gc.DrawRoundedRectangle(1, 1, self.FromDIP(4), height - 2,
+                                    self.FromDIP(2))
+
+        base = self.GetFont()
+        name_font = base.Scaled(1.25).Bold()
+        small = base.Scaled(0.88)
+        left = pad + (self.FromDIP(4) if accent is not None else 0)
+        avail = max(self.FromDIP(20), width - left - pad)
+
+        # Zone one: number and name, the thing you are actually hunting for.
+        dc.SetFont(name_font)
+        dc.SetTextForeground(ink)
+        title = "%d. %s" % (slot.number, slot.display_name)
+        dc.DrawText(wx.Control.Ellipsize(title, dc, wx.ELLIPSIZE_END, avail),
+                    left, pad)
+        title_height = dc.GetCharHeight()
+
+        # Zone two: the keys, right where a performer looks for them.
+        dc.SetFont(small)
+        dc.SetTextForeground(sub)
+        keys = []
+        if slot.hotkey_label:
+            keys.append(slot.hotkey_label)
+        if slot.global_hotkey:
+            keys.append("global " + slot.global_hotkey)
+        if keys:
+            text = "   ".join(keys)
+            dc.DrawText(wx.Control.Ellipsize(text, dc, wx.ELLIPSIZE_END, avail),
+                        left, pad + title_height + self.FromDIP(4))
+
+        # Zone three: state, along the bottom.
+        words = slot._state_words(self._playing)
+        if words:
+            text = ", ".join(words)
+            dc.SetTextForeground(accent if accent is not None else sub)
+            dc.DrawText(wx.Control.Ellipsize(text, dc, wx.ELLIPSIZE_END, avail),
+                        left, height - dc.GetCharHeight() - pad)
+
+
+def _pad_colours(slot, playing, hover):
+    """(face, edge, ink, sub, accent) for one pad.
+
+    In high contrast, and under a dark system theme, everything comes from the
+    system palette and the accent bar is dropped. This app has never hardcoded
+    a colour, which is exactly why high contrast works today; it is not going
+    to start by breaking the one mode where getting it wrong is unreadable.
+    """
+    sys_get = wx.SystemSettings.GetColour
+    window = sys_get(wx.SYS_COLOUR_WINDOW)
+    text = sys_get(wx.SYS_COLOUR_WINDOWTEXT)
+    grey = sys_get(wx.SYS_COLOUR_GRAYTEXT)
+    face3d = sys_get(wx.SYS_COLOUR_BTNFACE)
+    dark = (window.Red() + window.Green() + window.Blue()) < 384
+
+    if dark or _high_contrast():
+        accent = sys_get(wx.SYS_COLOUR_HOTLIGHT) if playing else None
+        if slot.is_missing:
+            accent = sys_get(wx.SYS_COLOUR_HIGHLIGHT)
+        return (face3d if hover else window), text, text, grey, accent
+
+    if slot.is_missing:
+        return (wx.Colour("#fdf3f2"), wx.Colour("#c4a3a0"),
+                wx.Colour("#8a1c1c"), wx.Colour("#8a1c1c"), wx.Colour("#a8201c"))
+    if not slot.is_assigned:
+        return window, wx.Colour("#b4b4b4"), grey, grey, None
+    if playing:
+        colour = wx.Colour("#1c7a3e") if slot.loop else wx.Colour("#a8201c")
+        tint = wx.Colour("#eef7f1") if slot.loop else wx.Colour("#fdf0ef")
+        return tint, colour, text, wx.Colour("#4a4a4a"), colour
+    return ((wx.Colour("#f5f5f3") if hover else window),
+            wx.Colour("#c8c8c4"), text, wx.Colour("#5a5a5a"), None)
+
+
+def _high_contrast():
+    """Ask Windows directly; wx has no wrapper for it."""
+    try:
+        class HC(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwFlags", ctypes.c_uint),
+                        ("lpszDefaultScheme", ctypes.c_void_p)]
+        hc = HC()
+        hc.cbSize = ctypes.sizeof(HC)
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            0x0042, ctypes.sizeof(HC), ctypes.byref(hc), 0)
+        return bool(ok) and bool(hc.dwFlags & 0x01)
+    except Exception:
+        return False
 
 
 class BankPage(wx.Panel):
@@ -92,8 +313,8 @@ class BankPage(wx.Panel):
         self.bank = bank
         outer = wx.BoxSizer(wx.VERTICAL)
 
-        hint = wx.StaticText(self, label=C.BANK_HINTS[bank])
-        outer.Add(hint, 0, wx.ALL, 8)
+        self.hint = wx.StaticText(self, label=C.BANK_HINTS[bank])
+        outer.Add(self.hint, 0, wx.ALL, 8)
 
         grid = wx.GridSizer(rows=5, cols=4, gap=wx.Size(6, 6))
         self.buttons = []
@@ -104,21 +325,46 @@ class BankPage(wx.Panel):
         outer.Add(grid, 1, wx.EXPAND | wx.ALL, 8)
         self.SetSizer(outer)
 
+        # wx.StaticText never wraps unless told to. Bank 3's hint needs about
+        # 1400 px and does not get it even maximised, so the end of the
+        # sentence was simply cut off.
+        self.Bind(wx.EVT_SIZE, self._on_size)
+
+    def _on_size(self, event):
+        width = self.GetClientSize().width - self.FromDIP(20)
+        if width > self.FromDIP(120):
+            # Reset before wrapping: Wrap() inserts newlines into the label, so
+            # wrapping an already-wrapped label keeps every old break.
+            self.hint.SetLabel(C.BANK_HINTS[self.bank])
+            self.hint.Wrap(width)
+            self.Layout()
+        event.Skip()
+
 
 class DropDeckFrame(wx.Frame):
     def __init__(self, parent=None):
-        super().__init__(parent, title=C.APP_NAME, size=(1000, 700))
+        super().__init__(parent, title=C.APP_NAME)
+        self.SetIcons(appicon.bundle())
 
         self.speaker = Speaker()
+        # Set on close. The cache warmer decodes audio on a daemon thread, and
+        # a daemon thread killed part way through a C call at interpreter
+        # shutdown segfaults - which it did, intermittently, about one run in
+        # three. It checks this between files instead.
+        self._closing = threading.Event()
+        self._warm_thread = None
         self._context_slot = None
         self._loaded_demo = False
         self.board = self._load_startup_board()
-        self.mixer = Mixer(device=self._resolve_device(), open_stream=True,
-                           samplerate=None)
+        self.mixer = MixerGroup(bank_devices=self._resolve_bank_devices(),
+                                open_stream=True)
         self.mixer.set_sfx_gain(self.board.sfx_volume)
         self.mixer.set_bed_gain(self.board.bed_volume)
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
+        # set_device clears the decode cache, so the whole board just went
+        # cold. Warm it again rather than making the next key pay for it.
+        self.warm_cache()
 
         self._build_menu()
         self._build_ui()
@@ -132,9 +378,74 @@ class DropDeckFrame(wx.Frame):
         self._save_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, lambda _e: self._save(quiet=True), self._save_timer)
 
+        # System-wide hotkeys. Off until the user turns them on, because while
+        # they are on this app owns those combinations across the whole machine.
+        self.hotkeys = globalhotkeys.GlobalHotkeys(
+            on_fire=self.trigger, on_problem=self._on_hotkey_problem)
+        self._sync_global_hotkeys()
+        if self.board.global_hotkeys_on:
+            self.hotkeys.start()
+        self.global_item.Check(self.hotkeys.enabled)
+
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        self._size_window()
+        # Deferred: this ran before the window was shown, so a screen reader's
+        # own announcement of the new window arrived on top of it and the
+        # important lines - files missing, audio did not start - were the ones
+        # that got cut.
+        wx.CallLater(500, self._announce_startup)
+        self._start_update_check()
+        self.warm_cache()
+
+    def warm_cache(self):
+        """Decode every short sound in the background, so no key is the first.
+
+        Measured before this existed: the first press of a bed cost 87.5 ms on
+        the UI thread and the first press of an effect 7.6 ms, against 0.6 ms
+        once warm. That is a frozen message pump sitting exactly between the
+        keypress and the sound - and between the keypress and the
+        announcement. Mixer.set_device clears the cache, so the whole board
+        goes cold again after any audio-device change; this is called there too.
+        """
+        import threading
+
+        paths = [s.filepath for s in self.board.slots
+                 if s.filepath and not s.is_missing
+                 and (s.duration or 0) <= C.PRELOAD_SECONDS]
+        if not paths:
+            return
+
+        def work():
+            for path in paths:
+                if self._closing.is_set():
+                    return
+                try:
+                    self.mixer._cached(path)
+                except Exception:
+                    pass          # a bad file is the trigger path's problem
+
+        self._warm_thread = threading.Thread(target=work, daemon=True,
+                                             name="dropdeck-warm")
+        self._warm_thread.start()
+
+    def _size_window(self):
+        """Size in DIP, then clamp to the screen.
+
+        The old fixed 1000x700 was in physical pixels. That was harmless while
+        the app was DPI-unaware and Windows scaled the whole window; once it
+        started drawing its own pixels, the fonts grew and the window did not,
+        and button labels lost their first characters - "3. audience laugh"
+        came out as "audience laugh". Sizing in DIP scales the window with the
+        text it has to hold.
+        """
+        size = self.FromDIP(wx.Size(1040, 720))
+        index = wx.Display.GetFromWindow(self)
+        client = wx.Display(index if index != wx.NOT_FOUND else 0).GetClientArea()
+        size.width = min(size.width, client.width - self.FromDIP(20))
+        size.height = min(size.height, client.height - self.FromDIP(20))
+        self.SetSize(size)
+        self.SetMinSize(self.FromDIP(wx.Size(820, 560)))
         self.Centre()
-        self._announce_startup()
 
     # ------------------------------------------------------------- start up --
     def _load_startup_board(self):
@@ -164,13 +475,25 @@ class DropDeckFrame(wx.Frame):
     def _resolve_device(self):
         """Turn the remembered device name back into an index, if it is still
         there. Names survive replugging; indices do not."""
-        if not self.board.device_name:
-            return None
-        for dev in output_devices():
-            if (dev["name"] == self.board.device_name
-                    and dev["hostapi"] == self.board.device_hostapi):
-                return dev["index"]
-        return None
+        return resolve_device({"name": self.board.device_name,
+                               "hostapi": self.board.device_hostapi})
+
+    def _resolve_bank_devices(self):
+        """Every bank's output, as live indices.
+
+        A bank with no entry, or one whose device is not plugged in today,
+        resolves to None and plays through the main output. That is a
+        deliberate silent fallback HERE - the group reports a real problem
+        separately when a stream refuses to open, which is the case worth
+        telling somebody about.
+        """
+        main = self._resolve_device()
+        devices = {bank: main for bank in range(1, C.BANK_COUNT + 1)}
+        for bank, spec in (self.board.bank_devices or {}).items():
+            index = resolve_device(spec)
+            if index is not None:
+                devices[bank] = index
+        return devices
 
     def _announce_startup(self):
         bits = [f"{C.APP_NAME} ready"]
@@ -187,6 +510,21 @@ class DropDeckFrame(wx.Frame):
         self.announce(". ".join(bits))
 
     # ------------------------------------------------------------------ ui ---
+    def _tab_title(self, bank):
+        """Nothing on the tab strip said which banks hold anything."""
+        n = sum(1 for slot in self.board.bank_slots(bank) if slot.is_assigned)
+        return "%d. %s (%d)" % (bank, C.BANK_TITLES[bank], n)
+
+    def _on_bank_changed(self, event):
+        bank = event.GetSelection() + 1
+        if bank in C.BANK_TITLES:
+            self.announce("%s. %s" % (C.BANK_TITLES[bank], C.BANK_HINTS[bank]))
+        event.Skip()
+
+    def _refresh_tab_titles(self):
+        for bank in range(1, C.BANK_COUNT + 1):
+            self.notebook.SetPageText(bank - 1, self._tab_title(bank))
+
     def _build_ui(self):
         panel = wx.Panel(self)
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -196,18 +534,28 @@ class DropDeckFrame(wx.Frame):
         self.pages = {}
         for bank in range(1, C.BANK_COUNT + 1):
             page = BankPage(self.notebook, self, bank)
-            self.notebook.AddPage(page, f"{bank}. {C.BANK_TITLES[bank]}")
+            self.notebook.AddPage(page, self._tab_title(bank))
             self.pages[bank] = page
+        # Say which bank you landed in. The tab is a sibling of the page in the
+        # accessibility tree, not an ancestor of the buttons, so a screen
+        # reader announces the button and never the bank - and the button label
+        # deliberately leaves the bank out because "the tab already said it".
+        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_bank_changed)
         outer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 6)
 
         stop = wx.Button(panel, ID_STOP_ALL, "Stop everything  (Escape)")
+        stop.SetFont(stop.GetFont().Bold())
+        stop.SetMinSize(wx.Size(-1, self.FromDIP(38)))
+        stop.SetToolTip("Stop every sound and bed, with a short fade (Escape)")
         stop.Bind(wx.EVT_BUTTON, lambda _e: self.stop_all())
         outer.Add(stop, 0, wx.EXPAND | wx.ALL, 6)
 
         panel.SetSizer(outer)
 
         self.status = self.CreateStatusBar(2)
-        self.status.SetStatusWidths([-3, -2])
+        # The announcement needs the room; the volume readout is short and
+        # fixed. This was the other way round, so every message was cut.
+        self.status.SetStatusWidths([-2, -5])
         self._update_status()
 
     def _build_menu(self):
@@ -237,6 +585,9 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_RENAME, "Re&name\tF4", "Rename the sound you are on")
         sounds.Append(ID_TRIM, "&Level for this sound...", "Trim one slot on its own")
         sounds.Append(ID_HOTKEY, "Assign a &hotkey...", "Bank four only")
+        sounds.Append(ID_GLOBAL_HOTKEY, "Assign a &global hotkey...",
+                      "A key that fires this sound even when another window "
+                      "has focus")
         sounds.Append(ID_LOOP, "Toggle &looping", "Bank three only")
         sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDel")
         sounds.AppendSeparator()
@@ -244,10 +595,19 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_WHATS_PLAYING, "&What is playing\tCtrl+L")
         sounds.Append(ID_DUCK, "&Ducking on or off\tCtrl+D")
         sounds.Append(ID_STOP_ALL, "Stop &everything\tEscape")
+        sounds.AppendSeparator()
+        # A check item, so the menu itself says whether global hotkeys are
+        # armed. While they are on, this app owns those combinations across the
+        # whole machine, so "is it on right now" has to be answerable without
+        # pressing anything.
+        self.global_item = sounds.AppendCheckItem(
+            ID_GLOBAL_TOGGLE, "&Global hotkeys\tCtrl+G",
+            "Let assigned hotkeys fire this board from any program")
         bar.Append(sounds, "&Sounds")
 
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
+        help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
         help_menu.Append(wx.ID_ABOUT, "&About")
         bar.Append(help_menu, "&Help")
 
@@ -260,6 +620,9 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_import, id=ID_IMPORT)
         self.Bind(wx.EVT_MENU, self._on_load_demo, id=ID_DEMO)
         self.Bind(wx.EVT_MENU, self._on_relink, id=ID_RELINK)
+        self.Bind(wx.EVT_MENU, self._on_assign_global_hotkey, id=ID_GLOBAL_HOTKEY)
+        self.Bind(wx.EVT_MENU, self._on_global_toggle, id=ID_GLOBAL_TOGGLE)
+        self.Bind(wx.EVT_MENU, self._on_check_updates, id=ID_CHECK_UPDATES)
         self.Bind(wx.EVT_MENU, self._on_settings, id=ID_SETTINGS)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("assign"), id=ID_ASSIGN)
@@ -287,6 +650,8 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F3, ID_VOL_SFX_UP),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F5, ID_VOL_BED_DOWN),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F6, ID_VOL_BED_UP),
+            # Ctrl+G is a new key, not one taken from the frozen map.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("G"), ID_GLOBAL_TOGGLE),
         ]
         for modifiers, key_code, index in fixed_accelerators():
             entries.append(wx.AcceleratorEntry(modifiers or wx.ACCEL_NORMAL,
@@ -304,9 +669,184 @@ class DropDeckFrame(wx.Frame):
     def _on_slot_hotkey(self, event):
         self.trigger(event.GetId() - ID_SLOT_BASE)
 
+    # ------------------------------------------------------ global hotkeys --
+    #
+    # These fire while another program has focus. They are a second, separate
+    # key per slot that the user assigns on purpose - the frozen in-app map is
+    # untouched, and nothing here can register a bare key, because a bare
+    # system-wide hotkey would take that key away from every other program on
+    # the machine.
+
+    def _sync_global_hotkeys(self):
+        self.hotkeys.set_bindings({s.index: s.global_hotkey
+                                   for s in self.board.slots if s.global_hotkey})
+
+    def _on_hotkey_problem(self, message):
+        """A hotkey Windows would not give us. Say so rather than swallow it.
+
+        A hotkey that silently does nothing is worse than one that says it is
+        taken: the user presses it on air and gets nothing, with no clue why.
+        """
+        self.announce(message)
+        wx.MessageBox(message, "Global hotkeys", wx.OK | wx.ICON_INFORMATION, self)
+
+    def _on_global_toggle(self, _event=None):
+        on = self.hotkeys.toggle()
+        self.board.global_hotkeys_on = on
+        self.global_item.Check(on)
+        self._touch()
+        if on:
+            count = self.hotkeys.count()
+            self.announce(
+                "Global hotkeys on. %d %s active."
+                % (count, "hotkey" if count == 1 else "hotkeys") if count
+                else "Global hotkeys on. None assigned yet. Use Sounds, "
+                     "assign a global hotkey.")
+        else:
+            self.announce("Global hotkeys off. Other programs have those keys "
+                          "back.")
+
+    def _on_assign_global_hotkey(self, _event=None):
+        slot = self._focused_slot()
+        if slot is None:
+            return
+        dialog = AssignHotkeyDialog(self, slot, global_mode=True)
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            text = dialog.hotkey_text()
+            if text and globalhotkeys.parse(text) is None:
+                self._on_hotkey_problem(globalhotkeys.describe(text))
+                return
+            slot.global_hotkey = text or None
+            self._sync_global_hotkeys()
+            self._sync_button(slot)
+            self._touch()
+            self.announce("Global hotkey %s for %s."
+                          % (text, slot.display_name) if text
+                          else "Global hotkey removed from %s." % slot.display_name)
+        finally:
+            dialog.Destroy()
+
+    # ------------------------------------------------------------- updates --
+    def _start_update_check(self):
+        """Look for a new version in the background, throttled to once a day.
+
+        On a worker thread: a slow or unreachable server must never freeze a
+        window someone is about to press a key on. Silent unless something is
+        actually there.
+        """
+        import threading
+
+        def work():
+            from . import appupdate
+            try:
+                available, info, _message = appupdate.auto_check(
+                    os.path.dirname(default_board_path()))
+            except Exception:
+                return
+            if available and info:
+                wx.CallAfter(self._offer_update, info)
+
+        threading.Thread(target=work, daemon=True, name="dropdeck-update").start()
+
+    def _on_check_updates(self, _event=None):
+        """Same check, but say something either way because the user asked."""
+        import threading
+        self.announce("Checking for a new version.")
+
+        def work():
+            from . import appupdate
+            try:
+                available, info, message = appupdate.auto_check(
+                    os.path.dirname(default_board_path()), force=True)
+            except Exception as exc:
+                available, info, message = False, None, "Could not check. %s" % exc
+            wx.CallAfter(self._update_check_done, available, info, message)
+
+        threading.Thread(target=work, daemon=True, name="dropdeck-update").start()
+
+    def _update_check_done(self, available, info, message):
+        if available and info:
+            self._offer_update(info)
+        else:
+            self.announce(message or "You have the newest version.")
+
+    def _offer_update(self, info):
+        """Ask before downloading, always.
+
+        An app that replaces its own executable without asking is
+        indistinguishable from malware, and an installer appearing unannounced
+        while the app vanishes underneath it is worse than no update at all for
+        someone listening rather than looking. Doubly so on a live show.
+        """
+        from . import appupdate
+        version = info.get("version", "a new version")
+        notes = (info.get("notes") or "").strip()
+        text = "Version %s of %s is available. You have %s." % (
+            version, C.APP_NAME, C.APP_VERSION)
+        if notes:
+            text += "\n\n" + notes
+        text += "\n\nDownload and install it now?"
+        if wx.MessageBox(text, "Update available",
+                         wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+            self.announce("Update skipped. Help, check for updates when you "
+                          "are ready.")
+            return
+        # On a worker thread. This is an HTTPS download of a 40 MB installer;
+        # inline it froze the window with only a busy cursor for company.
+        import threading
+        self.announce("Downloading. This may take a moment.")
+        wx.BeginBusyCursor()
+
+        def work():
+            try:
+                got = appupdate.download(info)
+            except Exception as exc:
+                got = (None, "Download failed. %s" % exc)
+            wx.CallAfter(self._download_done, *got)
+
+        threading.Thread(target=work, daemon=True, name="dropdeck-dl").start()
+
+    def _download_done(self, path, message):
+        from . import appupdate
+        wx.EndBusyCursor()
+        if not path:
+            self.announce(message)
+            wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
+            return
+        # Stop the audio device first. The installer replaces the executable
+        # underneath a stream that is still running otherwise.
+        try:
+            self.mixer.close()
+        except Exception:
+            pass
+        ok, message = appupdate.run_installer(path)
+        self.announce(message)
+        if not ok:
+            wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
+
     # -------------------------------------------------------------- speaking --
+    def announce_playback(self, text):
+        """A confirmation for something the user can already hear.
+
+        Speech here is optional, because the sound itself is the feedback.
+        The status bar is written either way, so the information is still
+        on screen and still reachable - only the interruption is optional.
+
+        Failures never come through here. "File missing" and "could not
+        play" are exactly the cases you cannot hear, so they always speak.
+        """
+        if getattr(self.board, "announce_playback", True):
+            self.speaker.say(text)
+        self.status.SetStatusText(text, 1)
+
     def announce(self, text):
         self.speaker.say(text)
+        # A status bar cannot show a sentence and these are sentences, so the
+        # field was reweighted to take most of the bar. No tooltip is set here:
+        # wxSTB_SHOW_TIPS is on by default and shows the full text on hover
+        # whenever a field is truncated, and setting one manually asserts.
         self.status.SetStatusText(text, 1)
 
     def _update_status(self):
@@ -333,7 +873,7 @@ class DropDeckFrame(wx.Frame):
         if slot.is_bed:
             if self.mixer.is_playing(index):
                 self.mixer.stop_slot(index)
-                self.announce(f"Stopped bed, {slot.display_name}")
+                self.announce_playback(f"Stopped bed, {slot.display_name}")
                 self._sync_button(slot, playing=False)
                 return
             voice = self.mixer.play(index, slot.filepath, is_bed=True,
@@ -343,7 +883,7 @@ class DropDeckFrame(wx.Frame):
                 self.announce(f"Could not play {slot.display_name}")
                 return
             tail = " looping" if slot.loop else ""
-            self.announce(f"Playing bed, {slot.display_name}{tail}")
+            self.announce_playback(f"Playing bed, {slot.display_name}{tail}")
             self._sync_button(slot, playing=True)
             return
 
@@ -354,7 +894,8 @@ class DropDeckFrame(wx.Frame):
             self.announce(f"Could not play {slot.display_name}")
             return
         length = format_duration(slot.duration)
-        self.announce(f"{slot.display_name}{', ' + length if length else ''}")
+        self.announce_playback(
+            f"{slot.display_name}{', ' + length if length else ''}")
 
     def stop_all(self):
         count = self.mixer.stop_all()
@@ -525,7 +1066,7 @@ class DropDeckFrame(wx.Frame):
                 taken[(slot.key_code, slot.modifiers or 0)] = slot.display_name
         return taken
 
-    def show_slot_menu(self, slot, button):
+    def show_slot_menu(self, slot, button, position=None):
         menu = wx.Menu()
         playing = self.mixer.is_playing(slot.index)
 
@@ -538,7 +1079,8 @@ class DropDeckFrame(wx.Frame):
             menu.Append(ID_RENAME, "Re&name...\tF4")
             menu.Append(ID_TRIM, f"&Level... (now {slot.trim_db:+.0f} decibels)")
         if slot.is_bed:
-            menu.Append(ID_LOOP, f"Looping is {'on' if slot.loop else 'off'}")
+            item = menu.AppendCheckItem(ID_LOOP, "&Loop this bed")
+            item.Check(bool(slot.loop))
         if slot.bank == C.BANK_MISC:
             menu.Append(ID_HOTKEY,
                         f"&Hotkey... (now {slot.custom_hotkey or 'none'})")
@@ -548,7 +1090,10 @@ class DropDeckFrame(wx.Frame):
 
         self._context_slot = slot
         try:
-            button.PopupMenu(menu)
+            # A position, so the Applications key opens the menu on the pad it
+            # belongs to. With none, wx falls back to the mouse pointer, which
+            # for a keyboard user is wherever it was last left.
+            button.PopupMenu(menu, position or wx.DefaultPosition)
         finally:
             self._context_slot = None
         menu.Destroy()
@@ -675,16 +1220,34 @@ class DropDeckFrame(wx.Frame):
                 return
             folder = dialog.GetPath()
 
+        import threading
+        self.announce("Looking through %s. This may take a moment." % folder)
         wx.BeginBusyCursor()
-        try:
-            repaired = self.board.relink(folder)
-        finally:
-            wx.EndBusyCursor()
 
+        result = {}
+
+        def work():
+            try:
+                result["repaired"] = self.board.relink(folder)
+            except Exception as exc:
+                result["error"] = exc
+            wx.CallAfter(done)
+
+        def done():
+            wx.EndBusyCursor()
+            if "error" in result:
+                self.announce("Could not search that folder. %s" % result["error"])
+                return
+            self._relink_finished(result.get("repaired") or [],
+                                  len(missing))
+
+        threading.Thread(target=work, daemon=True, name="dropdeck-relink").start()
+
+    def _relink_finished(self, repaired, asked):
         for slot in repaired:
             self._sync_button(slot)
         still = len(self.board.missing_slots)
-        self.announce(f"Relinked {len(repaired)} of {len(missing)}. "
+        self.announce(f"Relinked {len(repaired)} of {asked}. "
                       f"{still} still missing" if still
                       else f"Relinked all {len(repaired)}")
         if repaired:
@@ -695,28 +1258,57 @@ class DropDeckFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             index, name, hostapi = dialog.chosen_device
+            bank_devices = dialog.chosen_bank_devices
             self.board.ducking = dialog.duck_on.GetValue()
             self.board.duck_db = float(dialog.duck_db.GetValue())
+            self.board.announce_playback = dialog.announce_playback.GetValue()
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
-        if (name, hostapi) != (self.board.device_name, self.board.device_hostapi):
-            self.board.device_name = name
-            self.board.device_hostapi = hostapi
-            if self.mixer.set_device(index):
-                self.announce(f"Now playing through {describe_device(index)}")
-            else:
-                self.announce(f"That device would not open. {self.mixer.last_error}")
-                wx.MessageBox(f"That output could not be opened.\n\n"
-                              f"{self.mixer.last_error}\n\nFalling back to the "
-                              "system default.", "Device not available",
+
+        routing_changed = (bank_devices != (self.board.bank_devices or {}))
+        device_changed = ((name, hostapi)
+                          != (self.board.device_name, self.board.device_hostapi))
+
+        self.board.device_name = name
+        self.board.device_hostapi = hostapi
+        self.board.bank_devices = bank_devices
+
+        if device_changed or routing_changed:
+            # Re-routing stops everything and clears every decode cache, because
+            # cached audio was resampled for the old device's rate. Warm it again
+            # rather than making the next key press pay for it.
+            self.mixer.set_bank_devices(self._resolve_bank_devices())
+            self.warm_cache()
+
+            if self.mixer.problems:
+                # A bank that fell back to the default output has to say so.
+                # Silently playing out of the wrong card is the failure mode
+                # this whole feature exists to avoid.
+                detail = "\n\n".join(self.mixer.problems)
+                self.announce(self.mixer.problems[0])
+                wx.MessageBox(detail, "Output not available",
                               wx.OK | wx.ICON_WARNING, self)
-                self.board.device_name = self.board.device_hostapi = None
-                self.mixer.set_device(None)
+                self.board.bank_devices = {
+                    bank: spec for bank, spec in self.board.bank_devices.items()
+                    if resolve_device(spec) is not None}
+            else:
+                self.announce(self._routing_summary())
         else:
+            self.warm_cache()
             self.announce("Audio settings saved")
         self._update_status()
         self._touch()
+
+    def _routing_summary(self):
+        """What the outputs are now, in one spoken sentence."""
+        extra = self.board.bank_devices or {}
+        if not extra:
+            return f"Everything playing through {describe_device(self.mixer.device)}"
+        parts = [f"{C.BANK_TITLES[bank]} through {spec['name']}"
+                 for bank, spec in sorted(extra.items())]
+        return (f"Main output {describe_device(self.mixer.device)}. "
+                + ". ".join(parts))
 
     # --------------------------------------------------------------- search --
     def _on_search(self, _event):
@@ -741,9 +1333,24 @@ class DropDeckFrame(wx.Frame):
         dialog = wx.Dialog(self, title="Keyboard shortcuts",
                            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         outer = wx.BoxSizer(wx.VERTICAL)
+        # A real label in front of the field. On MSW the accessible name comes
+        # from the preceding static, not from SetName, so this dialog's only
+        # control had no name at all.
+        outer.Add(wx.StaticText(dialog, label="&Shortcuts"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
         text = wx.TextCtrl(dialog, value=C.KEYBOARD_HELP,
                            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
-        text.SetName("Keyboard shortcuts")
+        # The columns in KEYBOARD_HELP are aligned with spaces. In the default
+        # proportional font the second column started at a different place on
+        # nearly every row, which is what made this the most "unstyled dump"
+        # screen in the app.
+        mono = wx.Font(wx.FontInfo(text.GetFont().GetPointSize())
+                       .Family(wx.FONTFAMILY_TELETYPE))
+        for face in ("Cascadia Mono", "Consolas", "Courier New"):
+            if face in set(wx.FontEnumerator.GetFacenames()):
+                mono.SetFaceName(face)
+                break
+        text.SetFont(mono)
         outer.Add(text, 1, wx.EXPAND | wx.ALL, 10)
         outer.Add(dialog.CreateStdDialogButtonSizer(wx.OK), 0,
                   wx.ALL | wx.ALIGN_RIGHT, 10)
@@ -785,9 +1392,33 @@ class DropDeckFrame(wx.Frame):
             self._button_for(slot).refresh(index in now)
         self._playing = now
 
+    def stop_background_work(self):
+        """Bring the worker threads to a halt and wait for them.
+
+        Called from both the close handler and Destroy, because Destroy does
+        NOT raise EVT_CLOSE - so a frame torn down programmatically (the tests
+        do exactly this) would otherwise close the mixer while the cache warmer
+        was still inside libsndfile, and the process would segfault on the way
+        out. It did, about one run in three.
+        """
+        self._closing.set()
+        if self._warm_thread is not None:
+            self._warm_thread.join(timeout=3.0)
+            self._warm_thread = None
+
+    def Destroy(self):
+        self.stop_background_work()
+        return super().Destroy()
+
     def _on_close(self, event):
         self._refresh_timer.Stop()
         self._save_timer.Stop()
+        self.stop_background_work()
+        # Give every global combination back to the rest of the system.
+        try:
+            self.hotkeys.stop()
+        except Exception:
+            pass
         try:
             self.board.save()
         except Exception:

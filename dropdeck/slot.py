@@ -46,6 +46,10 @@ class Slot:
     custom_hotkey: str | None = None
     key_code: int | None = None
     modifiers: int | None = None
+    #: A system-wide hotkey, which fires this slot while another window has
+    #: focus. Separate from custom_hotkey, which only works inside the app.
+    #: Always needs a modifier - see globalhotkeys.parse.
+    global_hotkey: str | None = None
     loop: bool = field(default=False)
     #: Per-slot trim in decibels, so one loud sound can be tamed on its own.
     trim_db: float = 0.0
@@ -119,6 +123,8 @@ class Slot:
         parts = [f"{self.number}. {self.display_name}"]
         if self.hotkey_label:
             parts.append(f"key {self.hotkey_label}")
+        if self.global_hotkey:
+            parts.append(f"global {self.global_hotkey}")
         parts.extend(self._state_words(playing))
         return ", ".join(parts)
 
@@ -127,6 +133,8 @@ class Slot:
         parts = [self.display_name, f"{self.bank_short} {self.number}"]
         if self.hotkey_label:
             parts.append(f"key {self.hotkey_label}")
+        if self.global_hotkey:
+            parts.append(f"global {self.global_hotkey}")
         parts.extend(self._state_words(playing))
         return ", ".join(parts)
 
@@ -137,6 +145,7 @@ class Slot:
             "name": self.name,
             "duration": self.duration,
             "custom_hotkey": self.custom_hotkey,
+            "global_hotkey": self.global_hotkey,
             "key_code": self.key_code,
             "modifiers": self.modifiers,
             "loop": bool(self.loop),
@@ -152,6 +161,7 @@ class Slot:
             name=data.get("name") or None,
             duration=data.get("duration"),
             custom_hotkey=data.get("custom_hotkey") or None,
+            global_hotkey=data.get("global_hotkey") or None,
             key_code=data.get("key_code"),
             modifiers=data.get("modifiers"),
             loop=bool(data.get("loop", bank_for_index(index) == C.LOOPING_BANK)),

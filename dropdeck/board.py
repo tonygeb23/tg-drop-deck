@@ -56,11 +56,24 @@ class Board:
         self.bed_volume = C.DEFAULT_BED_VOLUME
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
+        #: Whether system-wide hotkeys are armed. Off by default: while they
+        #: are on this app owns those combinations across the whole machine,
+        #: so it has to be something the user turned on deliberately.
+        self.global_hotkeys_on = False
         self.last_sound_dir = ""
         #: Devices are remembered by name, because indices move around when
         #: something is plugged in or unplugged.
         self.device_name = None
         self.device_hostapi = None
+        #: bank number -> {"name", "hostapi"}, or absent for the default
+        #: output. Stored by name for the same reason as the main device:
+        #: indices move when hardware is plugged in or unplugged.
+        self.bank_devices = {}
+        #: Whether the screen reader speaks when a slot starts or stops.
+        #: On by default so nobody's setup changes under them. Off is for
+        #: people who can hear the sound and do not need to be told about
+        #: it - errors are always spoken either way.
+        self.announce_playback = True
         self.path = None
         self.dirty = False
 
@@ -138,8 +151,11 @@ class Board:
             "bed_volume": self.bed_volume,
             "ducking": self.ducking,
             "duck_db": self.duck_db,
+            "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
+            "bank_devices": {str(k): v for k, v in self.bank_devices.items()},
+            "announce_playback": bool(self.announce_playback),
             "last_sound_dir": self.last_sound_dir,
             "slots": [s.to_dict() for s in self.slots],
         }
@@ -167,9 +183,25 @@ class Board:
         board.bed_volume = float(data.get("bed_volume", C.DEFAULT_BED_VOLUME))
         board.ducking = bool(data.get("ducking", True))
         board.duck_db = float(data.get("duck_db", C.DEFAULT_DUCK_DB))
+        board.global_hotkeys_on = bool(data.get("global_hotkeys_on", False))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.device_name = data.get("device_name")
         board.device_hostapi = data.get("device_hostapi")
+        board.announce_playback = bool(data.get("announce_playback", True))
+
+        # Keys arrive as strings out of JSON and are used as ints everywhere
+        # else. Anything unparseable is dropped rather than crashing a load,
+        # because a board that will not open is worse than one output going
+        # to the wrong card.
+        raw_devices = data.get("bank_devices") or {}
+        for key, spec in raw_devices.items():
+            try:
+                bank = int(key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(spec, dict) and spec.get("name"):
+                board.bank_devices[bank] = {"name": spec.get("name"),
+                                           "hostapi": spec.get("hostapi")}
 
         raw = data.get("slots") or []
         # A board may store paths relative to itself, which is how the shipped

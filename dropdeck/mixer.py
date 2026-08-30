@@ -63,10 +63,42 @@ def describe_device(device):
         return "unknown device"
 
 
+class DuckBus:
+    """Which outputs currently have something loud on them.
+
+    Ducking used to be a private matter inside one mixer, because there was only
+    ever one. Once banks can go to different sound cards, the beds may be on a
+    different device from the drop that is supposed to duck them - and a mixer
+    looking only at its own voices would quietly stop ducking at all.
+
+    So every mixer publishes whether it has a non-bed voice running, and every
+    mixer asks the bus rather than itself. With a single output this is exactly
+    the old behaviour.
+    """
+
+    def __init__(self):
+        self._loud = {}
+        self._lock = threading.Lock()
+
+    def publish(self, key, loud):
+        with self._lock:
+            self._loud[key] = bool(loud)
+
+    def forget(self, key):
+        with self._lock:
+            self._loud.pop(key, None)
+
+    @property
+    def loud(self):
+        with self._lock:
+            return any(self._loud.values())
+
+
 class Mixer:
     """Sums every playing voice into one output stream."""
 
-    def __init__(self, device=None, open_stream=True, samplerate=None):
+    def __init__(self, device=None, open_stream=True, samplerate=None,
+                 duck_bus=None, key=None):
         self._lock = threading.Lock()
         self._voices = []
         self._cache = OrderedDict()
@@ -76,6 +108,12 @@ class Mixer:
         self.samplerate = samplerate or self._device_rate(device)
         self.stream = None
         self.last_error = None
+
+        # With no bus supplied a mixer gets a private one, so a lone Mixer
+        # behaves exactly as it always did and every existing test still
+        # constructs one the same way.
+        self.duck_bus = duck_bus if duck_bus is not None else DuckBus()
+        self.key = key if key is not None else id(self)
 
         self.sfx_gain = C.DEFAULT_SFX_VOLUME
         self.bed_gain = C.DEFAULT_BED_VOLUME
@@ -141,6 +179,7 @@ class Mixer:
     def close(self):
         self.stop_all(fade_out=0.0)
         self.stop_stream()
+        self.duck_bus.forget(self.key)
 
     # ---------------------------------------------------------------- cache --
     def _clear_cache(self):
@@ -260,12 +299,16 @@ class Mixer:
 
     def _duck_ramp(self, frames, voices):
         """Where the beds should sit this block, given what else is playing."""
+        # Published every block whether or not THIS mixer is ducking, because
+        # another output may be ducking and needs to know about our drops.
+        self.duck_bus.publish(
+            self.key,
+            any((not v.is_bed) and (not v.finished) and (not v.releasing)
+                for v in voices))
+
         target = 1.0
-        if self.ducking:
-            loud = any((not v.is_bed) and (not v.finished) and (not v.releasing)
-                       for v in voices)
-            if loud:
-                target = db_to_gain(self.duck_db)
+        if self.ducking and self.duck_bus.loud:
+            target = db_to_gain(self.duck_db)
         if abs(self._duck - target) < 1e-6:
             self._duck = target
             return target
@@ -289,6 +332,7 @@ class Mixer:
                 mix += voice.render(frames, duck)
         else:
             self._duck = 1.0
+            self.duck_bus.publish(self.key, False)
 
         peak = float(np.abs(mix).max()) if frames else 0.0
         self.peak = peak
@@ -303,3 +347,219 @@ class Mixer:
         if status:
             self.underruns += 1
         outdata[:] = self.render(frames)
+
+
+def resolve_device(spec):
+    """Turn a saved {name, hostapi} into a live device index, or None.
+
+    Devices are remembered by name because indices move the moment something is
+    plugged in or unplugged. Returns None for "system default", and also None
+    when a remembered device is simply not here any more - the caller is
+    expected to notice that and say so rather than fail quietly.
+    """
+    if not spec:
+        return None
+    name = spec.get("name")
+    hostapi = spec.get("hostapi")
+    if not name:
+        return None
+    for dev in output_devices():
+        if dev["name"] == name and (not hostapi or dev["hostapi"] == hostapi):
+            return dev["index"]
+    return None
+
+
+def device_spec(index):
+    """The inverse: a live index turned into a {name, hostapi} worth saving."""
+    if index is None:
+        return None
+    for dev in output_devices():
+        if dev["index"] == index:
+            return {"name": dev["name"], "hostapi": dev["hostapi"]}
+    return None
+
+
+class MixerGroup:
+    """One mixer per distinct output, and the routing that decides which.
+
+    This exists so a bank can be sent to its own sound card - beds to one
+    channel of a physical desk, drops to another - which is what a broadcaster
+    needs in order to ride the balance by hand instead of relying on automatic
+    ducking. The request came from a user who was explicit that he was not
+    asking for better ducking; he was asking to be able to stop relying on it.
+
+    Two things it deliberately does NOT do:
+
+    - It does not make a mixer per bank. Banks sharing a device share a mixer,
+      so the ordinary case of everything on the default output is still one
+      stream and one callback, exactly as before.
+    - It does not make ducking a per-device affair. Every mixer shares one
+      DuckBus, so a drop on one card still ducks a bed on another. Routing the
+      beds elsewhere must not silently turn ducking off.
+
+    The public surface matches Mixer's, so the frame holds one of these and
+    mostly does not have to care which it has.
+    """
+
+    def __init__(self, bank_devices=None, open_stream=True):
+        #: bank number -> device index, or None for the system default.
+        self.bank_devices = dict(bank_devices or {})
+        self.open_stream = open_stream
+        self.duck_bus = DuckBus()
+        self._mixers = {}
+        self.problems = []
+        self._build()
+
+    # ------------------------------------------------------------- plumbing --
+    def _build(self):
+        for mixer in self._mixers.values():
+            mixer.close()
+        self._mixers = {}
+        self.problems = []
+
+        wanted = {self.bank_devices.get(bank) for bank in range(1, C.BANK_COUNT + 1)}
+        for device in sorted(wanted, key=lambda d: (d is not None, d)):
+            mixer = Mixer(device=device, open_stream=self.open_stream,
+                          duck_bus=self.duck_bus, key=device)
+            # A remembered device that is gone, or held exclusively by something
+            # else, must not leave that bank silent with no explanation. Fall
+            # back to the default output and record why, so the frame can say so.
+            if self.open_stream and mixer.stream is None and device is not None:
+                self.problems.append(
+                    "%s could not be opened, so those sounds are going to the "
+                    "default output instead" % describe_device(device))
+                mixer.close()
+                for bank, dev in list(self.bank_devices.items()):
+                    if dev == device:
+                        self.bank_devices[bank] = None
+                if None in self._mixers:
+                    continue
+                device = None
+                mixer = Mixer(device=None, open_stream=self.open_stream,
+                              duck_bus=self.duck_bus, key=None)
+            self._mixers.setdefault(device, mixer)
+
+        if not self._mixers:
+            self._mixers[None] = Mixer(device=None, open_stream=self.open_stream,
+                                       duck_bus=self.duck_bus, key=None)
+
+    @property
+    def mixers(self):
+        return list(self._mixers.values())
+
+    def for_bank(self, bank):
+        return self._mixers.get(self.bank_devices.get(bank)) or self.primary
+
+    def for_slot(self, slot_index):
+        return self.for_bank(slot_index // C.SLOTS_PER_BANK + 1)
+
+    @property
+    def primary(self):
+        """Whatever bank 1 plays through; the fallback for everything else."""
+        return (self._mixers.get(self.bank_devices.get(C.BANK_SFX))
+                or next(iter(self._mixers.values())))
+
+    def set_bank_devices(self, bank_devices):
+        """Re-route. Everything playing stops, because a voice belongs to a stream."""
+        previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db)
+        self.stop_all(fade_out=0.0)
+        self.bank_devices = dict(bank_devices or {})
+        self._build()
+        self.set_sfx_gain(previous[0])
+        self.set_bed_gain(previous[1])
+        self.ducking = previous[2]
+        self.duck_db = previous[3]
+        return not self.problems
+
+    def distinct_device_count(self):
+        return len(self._mixers)
+
+    def close(self):
+        for mixer in self._mixers.values():
+            mixer.close()
+        self._mixers = {}
+
+    # ------------------------------------------------------------ transport --
+    def play(self, slot_index, path, **kwargs):
+        return self.for_slot(slot_index).play(slot_index, path, **kwargs)
+
+    def stop_slot(self, slot_index, fade_out=None):
+        return self.for_slot(slot_index).stop_slot(slot_index, fade_out=fade_out)
+
+    def stop_all(self, fade_out=None):
+        return sum(m.stop_all(fade_out=fade_out) for m in self._mixers.values())
+
+    def is_playing(self, slot_index):
+        return self.for_slot(slot_index).is_playing(slot_index)
+
+    def playing_slots(self):
+        found = set()
+        for mixer in self._mixers.values():
+            found.update(mixer.playing_slots())
+        return sorted(found)
+
+    def voice_count(self):
+        return sum(m.voice_count() for m in self._mixers.values())
+
+    # --------------------------------------------------------------- levels --
+    @property
+    def sfx_gain(self):
+        return self.primary.sfx_gain
+
+    @property
+    def bed_gain(self):
+        return self.primary.bed_gain
+
+    def set_sfx_gain(self, gain):
+        for mixer in self._mixers.values():
+            mixer.set_sfx_gain(gain)
+
+    def set_bed_gain(self, gain):
+        for mixer in self._mixers.values():
+            mixer.set_bed_gain(gain)
+
+    @property
+    def ducking(self):
+        return self.primary.ducking
+
+    @ducking.setter
+    def ducking(self, value):
+        for mixer in self._mixers.values():
+            mixer.ducking = bool(value)
+
+    @property
+    def duck_db(self):
+        return self.primary.duck_db
+
+    @duck_db.setter
+    def duck_db(self, value):
+        for mixer in self._mixers.values():
+            mixer.duck_db = value
+
+    @property
+    def device(self):
+        """Bank 1's output, for the places that still ask about "the" device."""
+        return self.bank_devices.get(C.BANK_SFX)
+
+    @property
+    def last_error(self):
+        for mixer in self._mixers.values():
+            if mixer.last_error:
+                return mixer.last_error
+        return None
+
+    @property
+    def underruns(self):
+        return sum(m.underruns for m in self._mixers.values())
+
+    @property
+    def peak(self):
+        return max((m.peak for m in self._mixers.values()), default=0.0)
+
+    @property
+    def samplerate(self):
+        return self.primary.samplerate
+
+    def render(self, frames):
+        """Test hook: one block of the primary output."""
+        return self.primary.render(frames)

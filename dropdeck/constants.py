@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.2"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -128,9 +128,18 @@ GLOBAL
   Ctrl+E                    Search every bank by name
   Ctrl+D                    Ducking on or off
   Ctrl+L                    What is playing right now
+  Ctrl+G                    Global hotkeys on or off
   Escape                    Stop everything, with a short fade
   F1                        This help
   Ctrl+Tab                  Next bank
+
+GLOBAL HOTKEYS - firing a sound from another program
+  Sounds menu, Assign a global hotkey, on any slot in any bank.
+  A global hotkey works while your DAW, browser or call software has focus,
+  which is the whole point of a soundboard on a live show.
+  It needs at least one modifier such as Ctrl or Alt. A key on its own would
+  be taken away from every other program on the machine, so it is refused.
+  Ctrl+G arms and disarms the whole set, and disarming hands the keys back.
 
 FILE
   Ctrl+S                    Save the current board

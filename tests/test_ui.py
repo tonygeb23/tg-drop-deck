@@ -79,9 +79,14 @@ def main():
 
     check("four banks", frame.notebook.GetPageCount() == 4)
     titles = [frame.notebook.GetPageText(i) for i in range(4)]
+    # The tab now carries how many slots in that bank hold a sound - nothing
+    # on the strip said which banks had anything in them.
     check("banks are named in order",
-          titles == ["1. Sound Effects", "2. Dialog Drops",
-                     "3. Music Beds", "4. Miscellaneous"], str(titles))
+          [t.split(" (")[0] for t in titles] ==
+          ["1. Sound Effects", "2. Dialog Drops",
+           "3. Music Beds", "4. Miscellaneous"], str(titles))
+    check("each tab shows how many sounds it holds",
+          all(t.endswith(")") and " (" in t for t in titles), str(titles))
 
     buttons = [b for bank in frame.pages.values() for b in bank.buttons]
     check("eighty buttons", len(buttons) == C.TOTAL_SLOTS, f"{len(buttons)}")

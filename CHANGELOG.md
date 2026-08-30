@@ -1,5 +1,102 @@
 # Changelog
 
+## 2.1.2 — 30 August 2026
+
+Both of these came from Brian Hartgen, who wrote in after using the app.
+
+### Send a bank to its own output
+
+**Audio settings** now has an output for each of the four banks. Leave them on
+the main output and nothing changes; set Music Beds to one sound card and
+Dialog Drops to another and you can bring each up on its own channel of a
+physical mixer.
+
+That is for people who would rather set the balance themselves than let the app
+duck automatically. Ducking is still there, still on by default, and **it still
+works across outputs** — a drop on one card ducks a bed on another, because
+turning ducking off by accident is not an acceptable side effect of routing.
+
+Banks sharing an output share one audio stream, so the ordinary case of
+everything on one card costs nothing.
+
+If a remembered device is not there when you start — unplugged, or being held
+by another program — that bank falls back to the main output and **says so**
+rather than going quietly silent.
+
+### Turn off the announcement when a sound starts
+
+**Audio settings**, *Say the name when a sound starts or stops*. Turn it off if
+you set the board up yourself, know where everything is, and can hear the sound
+perfectly well without being told about it.
+
+What it does not silence: anything you cannot hear. A missing file, a sound
+that would not play, and stopping everything all still speak. The status bar
+keeps showing the name either way — only the interruption is optional.
+
+## 2.1.1 — 29 August 2026
+
+**One copy at a time.** Opening Drop Deck when it is already running now brings
+the copy you have back to the front instead of starting a second one.
+
+Two soundboards open at once is not only clutter. They fight over the same
+board file, and both hold the audio device, so the second can look perfectly
+fine and make no sound at all.
+
+A second launch reopens the first rather than just refusing, which matters if
+you are not watching the screen: a launch that silently does nothing looks
+exactly like the program failing to start.
+
+## 2.1.0 — 29 August 2026
+
+### Global hotkeys
+
+Assign a key to any sound and it fires **while another program has focus**.
+That is the point of a soundboard on a live show: you are in the DAW, the
+browser or a call, and alt-tabbing to the board first is the whole problem.
+
+Sounds menu, **Assign a global hotkey**, on any slot in any bank. **Ctrl+G**
+arms and disarms the whole set, and disarming hands the combinations back to
+the rest of the system.
+
+Two things it deliberately will not do:
+
+- **It never registers a bare key.** A system-wide hotkey with no modifier
+  takes that key away from every other program on the machine, including the
+  one you are typing into. Anything without Ctrl, Alt, Shift or Win is refused,
+  and the refusal says why.
+- **It never touches the map you already know.** The digits, the Shift and Ctrl
+  layers, F2/F3 and F5/F6 are exactly as they were. A global hotkey is a
+  second, separate key you assign on purpose. Ctrl+G is a new key, not a
+  borrowed one.
+
+A hotkey another program already owns is reported rather than swallowed — one
+that silently does nothing is worse than one that says it is taken, because you
+find out on air.
+
+### It updates itself
+
+2.0.0 shipped as a zip with no channel that could carry a new version, so this
+release had to be a manual download. From here the app checks once a day in the
+background, tells you when there is something new, and **always asks before it
+downloads or installs anything**. The manifest is signed and the installer is
+checked against a hash in that signed manifest before it runs.
+
+This is now standard across every TG Studios program.
+
+### Also
+
+- **An installer**, per-user and with no administrator prompt, which is what
+  the updater can actually run. The zip is still there for anyone who would
+  rather unpack a folder.
+- **A real app icon** in the title bar, the taskbar, the installer and
+  Add/Remove Programs, instead of the Windows default.
+- **No longer blurry.** The app now tells Windows it is DPI aware, so at 125%,
+  150% or 200% it draws its own pixels instead of being scaled up from a
+  smaller bitmap. That display scale is itself an accessibility setting, so the
+  people it was worst for were the people most likely to need it.
+- Builds now happen entirely outside Dropbox. `--clean` was failing on files
+  Dropbox still had open.
+
 ## 2.0.0 — 26 August 2026
 
 First release under the TG Drop Deck name. A rebuild of The Tony Gebhard Show
