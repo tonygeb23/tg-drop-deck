@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.1 — 30 August 2026
+
+**Checking for updates now answers you in a window.** Before, the "you are up
+to date" reply was spoken and nothing else — so if you had turned the app's
+speech down, choosing Check for updates appeared to do nothing at all.
+
+The answer sits in a read-only box you can arrow back through rather than a
+message you hear once, it names the program so you know which one replied, and
+release notes for a new version can be read properly before you decide.
+
 ## 2.2.0 — 30 August 2026
 
 All of this came from David Goldfield and Brian Hartgen, who wrote in the same

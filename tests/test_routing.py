@@ -20,6 +20,13 @@ import soundfile as sf
 import wx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# APPDATA is redirected BEFORE the app is imported, so nothing here can read or
+# write the real saved board. board.config_dir() reads the variable every call,
+# and a real DropDeckFrame both loads the board and autosaves it. A test run on
+# 2026-08-30 left the live board set to silent speech by exactly this route.
+import tempfile as _tempfile
+os.environ["APPDATA"] = _tempfile.mkdtemp(prefix="dropdeck-test-appdata-")
+
 
 from dropdeck import constants as C
 from dropdeck.board import Board

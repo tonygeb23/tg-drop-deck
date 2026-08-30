@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 

@@ -60,6 +60,10 @@ NOTES = {
               "properties for a sound. Alt on its own now works as a global "
               "hotkey. And Audio settings can turn down how much the app "
               "speaks, all the way to nothing."),
+    "2.2.1": ("Checking for updates now opens a window with the answer in a "
+              "read-only box you can read back through, instead of only "
+              "speaking it once. It says which program is answering, and it "
+              "answers whether or not there is an update."),
 }
 
 

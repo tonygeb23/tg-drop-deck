@@ -17,6 +17,7 @@ from . import appicon
 from . import constants as C
 from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
+from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, SearchDialog, SettingsDialog,
                       SlotPropertiesDialog, TrimDialog, audio_file_dialog,
                       key_label)
@@ -804,10 +805,21 @@ class DropDeckFrame(wx.Frame):
         threading.Thread(target=work, daemon=True, name="dropdeck-update").start()
 
     def _update_check_done(self, available, info, message):
+        """The user asked a question, so answer it in a window either way.
+
+        This used to only speak when there was no update, which meant anybody
+        who had turned the app's speech down got silence in reply to choosing
+        Check for updates - indistinguishable from the feature being broken.
+        """
         if available and info:
             self._offer_update(info)
-        else:
-            self.announce_help(message or "You have the newest version.")
+            return
+        problem = ""
+        if message and "newest" not in message.lower():
+            problem = message          # a real failure, not "you are current"
+        self.announce_help(message or "You have the newest version.")
+        updatedialog.ask_about_update(self, C.APP_NAME, C.APP_VERSION,
+                                      problem=problem)
 
     def _offer_update(self, info):
         """Ask before downloading, always.
@@ -820,13 +832,9 @@ class DropDeckFrame(wx.Frame):
         from . import appupdate
         version = info.get("version", "a new version")
         notes = (info.get("notes") or "").strip()
-        text = "Version %s of %s is available. You have %s." % (
-            version, C.APP_NAME, C.APP_VERSION)
-        if notes:
-            text += "\n\n" + notes
-        text += "\n\nDownload and install it now?"
-        if wx.MessageBox(text, "Update available",
-                         wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+        choice = updatedialog.ask_about_update(
+            self, C.APP_NAME, C.APP_VERSION, new_version=version, notes=notes)
+        if choice != updatedialog.UPDATE:
             self.announce_help("Update skipped. Help, check for updates when you "
                           "are ready.")
             return
@@ -863,7 +871,6 @@ class DropDeckFrame(wx.Frame):
         if not ok:
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
 
-    # -------------------------------------------------------------- speaking --
     # -------------------------------------------------------------- speaking --
     #
     # Three channels, because "how much should this app say" has three honest
