@@ -55,6 +55,11 @@ NOTES = {
               "still works across outputs. There is also a new setting to stop "
               "the screen reader naming a sound when it starts, in Audio "
               "settings."),
+    "2.2.0": ("F2 now renames a sound, and the volume keys moved to F3 and F4. "
+              "Ctrl+F searches, and Ctrl+E still does too. Alt+Enter opens "
+              "properties for a sound. Alt on its own now works as a global "
+              "hotkey. And Audio settings can turn down how much the app "
+              "speaks, all the way to nothing."),
 }
 
 

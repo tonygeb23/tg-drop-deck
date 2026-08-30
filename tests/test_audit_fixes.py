@@ -148,11 +148,19 @@ check("tab titles carry a count",
       frame2.notebook.GetPageText(0).endswith(")"),
       frame2.notebook.GetPageText(0))
 
-print("\nCtrl+G took a new key, not one from the frozen map")
+print("\nThe documented keyboard map")
 entries = C.KEYBOARD_HELP
 check("Ctrl+G is documented", "Ctrl+G" in entries)
-for reserved in ("Ctrl+E", "Ctrl+D", "Ctrl+L", "F2", "F3", "F5", "F6"):
+# 2.2.0 rotated three of these on purpose, after David Goldfield pointed out
+# that F2 renames in every other Windows program. F5 and F6 did not move, and
+# neither did any of the digit combinations - those are the muscle memory.
+for reserved in ("Ctrl+D", "Ctrl+L", "F5", "F6", "Shift+1 to 0",
+                 "Alt+Ctrl+1 to 0"):
     check("%s still means what it always did" % reserved, reserved in entries)
+check("F2 renames now", "F2                        Rename" in entries)
+check("F3 and F4 are the sound volume", "F3 / F4" in entries)
+check("Ctrl+F searches", "Ctrl+F" in entries)
+check("Ctrl+E is still documented as working", "Ctrl+E" in entries)
 
 try:
     frame2.mixer.close()

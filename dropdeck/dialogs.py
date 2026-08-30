@@ -12,6 +12,7 @@ import wx
 
 from . import constants as C
 from .mixer import describe_device, output_devices
+from .slot import format_duration
 
 #: wx accelerator flags, which is also how custom hotkeys are stored on disk.
 MOD_ALT = wx.ACCEL_ALT
@@ -62,21 +63,28 @@ class AssignHotkeyDialog(wx.Dialog):
     RESERVED = {wx.WXK_TAB, wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER,
                 wx.WXK_ESCAPE}
 
-    def __init__(self, parent, slot, taken=None, global_mode=False):
+    def __init__(self, parent, slot, taken=None, global_mode=False, initial=None):
         title = ("Assign global hotkey for %s" if global_mode
                  else "Assign hotkey for %s") % slot.display_name
         super().__init__(parent, title=title)
         self.global_mode = global_mode
         self._taken = taken or {}
+        # `initial` overrides what the slot says, so the properties dialog can
+        # open this twice and have the second visit remember the first. In
+        # global mode it is the hotkey text; otherwise (key_code, modifiers).
+        #
         # In global mode this is a *second*, separate key from the in-app one,
         # so it starts from the slot's global hotkey rather than its bank key.
         if global_mode:
             self._key_code, self._modifiers = None, 0
-            current = slot.global_hotkey or "None"
+            current = (slot.global_hotkey if initial is None else initial) or "None"
         else:
-            self._key_code = slot.key_code
-            self._modifiers = slot.modifiers or 0
-            current = key_label(slot.key_code, slot.modifiers or 0) or "None"
+            if initial is None:
+                self._key_code = slot.key_code
+                self._modifiers = slot.modifiers or 0
+            else:
+                self._key_code, self._modifiers = initial
+            current = key_label(self._key_code, self._modifiers or 0) or "None"
 
         outer = wx.BoxSizer(wx.VERTICAL)
         if global_mode:
@@ -87,11 +95,13 @@ class AssignHotkeyDialog(wx.Dialog):
                 "has focus, so it needs at least one modifier such as Ctrl or "
                 "Alt. A key on its own would be taken away from everything "
                 "else you are running.\n"
+                "Alt counts as a modifier, so Alt plus a letter is fine. "
                 "Press Delete to clear it. Tab reaches the buttons.")
         else:
             explain = ("Press the key combination you want, then choose OK.\n"
                        f"Current hotkey: {current}\n"
-                       "Press Delete to clear it. Tab reaches the buttons.")
+                       "Alt combinations are captured here, so use Tab to "
+                       "reach the buttons. Press Delete to clear it.")
         outer.Add(wx.StaticText(self, label=explain), 0, wx.ALL, 10)
 
         # A real label in front of the readout. wx.SetName is not what MSAA
@@ -154,12 +164,24 @@ class AssignHotkeyDialog(wx.Dialog):
         if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and not modifiers:
             self.EndModal(wx.ID_OK)
             return
-        if code == wx.WXK_TAB or (event.AltDown() and not event.ControlDown()
-                                  and 32 < code < 127):
+        # Tab still reaches every button and Delete still clears, which is why
+        # Alt no longer has to be handed to the buttons' mnemonics. It used to
+        # be, and that made Alt+A - a perfectly good global hotkey - the one
+        # combination this dialog could not capture. Alt is a modifier here.
+        if code == wx.WXK_TAB:
             event.Skip()
             return
         if code in (wx.WXK_DELETE, wx.WXK_BACK) and not modifiers:
             self._on_clear(None)
+            return
+        # Alt+F4 closes a window in every Windows program. Taking it system-wide
+        # would remove that from all of them, this app included.
+        if (code == wx.WXK_F4 and event.AltDown()
+                and not (event.ControlDown() or event.ShiftDown())):
+            self.warning.SetLabel(
+                "Alt+F4 closes a window in every program. Pick another "
+                "combination, or press Escape to leave this one alone.")
+            self._say(self.warning.GetLabel())
             return
         if code in self.RESERVED and not modifiers:
             self.warning.SetLabel(
@@ -330,6 +352,140 @@ class TrimDialog(wx.Dialog):
         return float(self.slider.GetValue())
 
 
+class SlotPropertiesDialog(wx.Dialog):
+    """Everything about one sound in one place, on Alt+Enter.
+
+    Name, level, looping and both hotkeys. Before this they were four menu
+    items and four separate dialogs, so "what is this pad actually set to"
+    took four trips and never showed you two answers at once.
+
+    Nothing is written to the slot here. The frame applies `result`, which is
+    what makes Cancel genuinely leave the board alone.
+    """
+
+    def __init__(self, parent, slot, taken=None):
+        super().__init__(parent, title="Properties for %s" % slot.display_name)
+        self.slot = slot
+        self._taken = taken or {}
+        # The nested hotkey dialog speaks through its parent, and its parent
+        # is this dialog rather than the frame. Without this it is silent
+        # about the only thing it has to tell you - the key you just pressed.
+        self.speaker = getattr(parent, "speaker", None)
+
+        self._key_code = slot.key_code
+        self._modifiers = slot.modifiers or 0
+        self._global_hotkey = slot.global_hotkey or ""
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        def caption(text):
+            # A real static in front of every control. wx.SetName is not what
+            # MSAA reads - the preceding static is.
+            outer.Add(wx.StaticText(self, label=text), 0,
+                      wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        where = "%s, button %d." % (slot.bank_title, slot.number)
+        if slot.hotkey_label:
+            where += " Plays on %s." % slot.hotkey_label
+        outer.Add(wx.StaticText(self, label=where), 0, wx.ALL, 10)
+
+        caption("&Name")
+        self.name_field = wx.TextCtrl(self, value=slot.display_name)
+        outer.Add(self.name_field, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        caption("&Level in decibels")
+        self.level = wx.Slider(self, value=int(round(slot.trim_db)),
+                               minValue=-24, maxValue=12, style=wx.SL_HORIZONTAL)
+        self.level.SetName("Level in decibels")
+        outer.Add(self.level, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self.loop_box = None
+        if slot.is_bed:
+            self.loop_box = wx.CheckBox(self, label="Loop this &bed")
+            self.loop_box.SetValue(bool(slot.loop))
+            outer.Add(self.loop_box, 0, wx.ALL, 10)
+
+        self.hotkey_readout = None
+        if slot.bank == C.BANK_MISC:
+            caption("Hotke&y, inside this app")
+            self.hotkey_readout = self._readout(
+                outer, key_label(self._key_code, self._modifiers) or "None")
+            self._button(outer, "C&hoose a hotkey...", self._on_change_hotkey)
+
+        caption("&Global hotkey, which works from any program")
+        self.global_readout = self._readout(outer, self._global_hotkey or "None")
+        self._button(outer, "Cho&ose a global hotkey...", self._on_change_global)
+
+        caption("&File")
+        self.file_readout = self._readout(outer, self._file_text())
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+        self.name_field.SetFocus()
+        self.name_field.SelectAll()
+
+    # ------------------------------------------------------------ building --
+    def _readout(self, sizer, value):
+        """A read-only field, so a screen reader can read a value it cannot
+        otherwise reach and a mouse user can see one that would not fit."""
+        ctrl = wx.TextCtrl(self, value=value, style=wx.TE_READONLY)
+        sizer.Add(ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        return ctrl
+
+    def _button(self, sizer, label, handler):
+        button = wx.Button(self, label=label)
+        button.Bind(wx.EVT_BUTTON, handler)
+        sizer.Add(button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        return button
+
+    def _file_text(self):
+        if not self.slot.filepath:
+            return "No sound assigned yet."
+        text = self.slot.filepath
+        if self.slot.is_missing:
+            return text + "   (missing)"
+        duration = format_duration(self.slot.duration)
+        return text + ("   (%s)" % duration if duration else "")
+
+    def _say(self, text):
+        if self.speaker is not None:
+            self.speaker.say(text)
+
+    # ------------------------------------------------------------- hotkeys --
+    def _on_change_hotkey(self, _event):
+        with AssignHotkeyDialog(self, self.slot, self._taken,
+                                initial=(self._key_code, self._modifiers)) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            self._key_code, self._modifiers, label = dialog.result
+        self.hotkey_readout.SetValue(label or "None")
+        self._say("Hotkey %s" % (label or "cleared"))
+
+    def _on_change_global(self, _event):
+        with AssignHotkeyDialog(self, self.slot, global_mode=True,
+                                initial=self._global_hotkey) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            self._global_hotkey = dialog.hotkey_text()
+        self.global_readout.SetValue(self._global_hotkey or "None")
+        self._say("Global hotkey %s" % (self._global_hotkey or "cleared"))
+
+    # -------------------------------------------------------------- result --
+    @property
+    def result(self):
+        """What the user chose, for the frame to apply."""
+        return {
+            "name": self.name_field.GetValue().strip(),
+            "trim_db": float(self.level.GetValue()),
+            "loop": None if self.loop_box is None else bool(self.loop_box.GetValue()),
+            "key_code": self._key_code,
+            "modifiers": self._modifiers,
+            "custom_hotkey": key_label(self._key_code, self._modifiers) or None,
+            "global_hotkey": self._global_hotkey or None,
+        }
+
+
 class SettingsDialog(wx.Dialog):
     """Where the sound comes out, and how hard the beds duck."""
 
@@ -383,14 +539,34 @@ class SettingsDialog(wx.Dialog):
             bank_grid.Add(choice, 1, wx.EXPAND)
         outer.Add(bank_grid, 0, wx.EXPAND | wx.ALL, 10)
 
+        # How much the app says out loud. A screen reader is already reading
+        # every control; this is only about what the app adds on top, which
+        # for someone who knows the board is mostly repetition.
+        outer.Add(wx.StaticText(self, label="Spo&ken feedback from the app"),
+                  0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.speech_choice = wx.Choice(self, choices=list(C.SPEECH_LABELS))
+        self.speech_choice.SetName("Spoken feedback from the app")
+        level = getattr(board, "speech_level", C.DEFAULT_SPEECH_LEVEL)
+        self.speech_choice.SetSelection(
+            C.SPEECH_LEVELS.index(level) if level in C.SPEECH_LEVELS else 0)
+        self.speech_choice.SetToolTip(
+            "Everything is the default. The middle setting drops confirmations "
+            "and the bank hints and keeps anything you could not otherwise "
+            "know. Nothing silences the app completely - the status bar and "
+            "your screen reader still have all of it.")
+        self.speech_choice.Bind(wx.EVT_CHOICE, self._on_speech_level)
+        outer.Add(self.speech_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
         # Speech about playback.
         self.announce_playback = wx.CheckBox(
             self, label="&Say the name when a sound starts or stops")
         self.announce_playback.SetValue(bool(getattr(board, "announce_playback", True)))
         self.announce_playback.SetToolTip(
             "Turn this off if you can hear the sound and do not need to be told "
-            "about it. Problems, such as a missing file, are always announced.")
+            "about it. Problems, such as a missing file, are always announced "
+            "unless you have chosen Nothing above.")
         outer.Add(self.announce_playback, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self._on_speech_level(None)
 
         self.duck_on = wx.CheckBox(self, label="&Duck the music beds under sounds and drops")
         self.duck_on.SetValue(bool(board.ducking))
@@ -416,6 +592,21 @@ class SettingsDialog(wx.Dialog):
                   0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizerAndFit(outer)
         self.device.SetFocus()
+
+    def _on_speech_level(self, _event):
+        """The checkbox only means anything at the chattiest level.
+
+        Below it the app is not naming sounds whatever the box says, and a
+        live control that does nothing is worse than one plainly greyed out.
+        """
+        self.announce_playback.Enable(self.speech_level == C.SPEECH_ALL)
+
+    @property
+    def speech_level(self):
+        index = self.speech_choice.GetSelection()
+        if index < 0:
+            return C.DEFAULT_SPEECH_LEVEL
+        return C.SPEECH_LEVELS[index]
 
     def _status_text(self):
         # A MixerGroup has no single stream, so ask it how many outputs are

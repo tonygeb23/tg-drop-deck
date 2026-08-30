@@ -30,7 +30,7 @@ Two volumes, because a bed and a drop should never fight over one fader.
 
 | Keys | What moves |
 |---|---|
-| `F2` / `F3` | Sound volume — banks 1, 2 and 4 |
+| `F3` / `F4` | Sound volume — banks 1, 2 and 4 |
 | `F5` / `F6` | Bed volume — bank 3 |
 
 And the rest:
@@ -38,10 +38,11 @@ And the rest:
 | Keys | |
 |---|---|
 | `Escape` | Stop everything, with a short fade |
-| `Ctrl+E` | Search every bank by name |
+| `Ctrl+F` | Search every bank by name — `Ctrl+E` still works |
 | `Ctrl+L` | What is playing right now |
 | `Ctrl+D` | Ducking on or off |
-| `F4` | Rename the sound you are on |
+| `F2` | Rename the sound you are on |
+| `Alt+Enter` | Properties: name, level and both hotkeys, in one place |
 | `Del` | Clear the slot you are on |
 | `F1` | Every shortcut, in a window you can read |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |

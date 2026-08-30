@@ -18,7 +18,8 @@ from . import constants as C
 from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
 from .dialogs import (AssignHotkeyDialog, SearchDialog, SettingsDialog,
-                      TrimDialog, audio_file_dialog, key_label)
+                      SlotPropertiesDialog, TrimDialog, audio_file_dialog,
+                      key_label)
 from .engine import probe
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
@@ -50,6 +51,7 @@ ID_DEMO = wx.ID_HIGHEST + 20
 ID_GLOBAL_HOTKEY = wx.ID_HIGHEST + 21
 ID_GLOBAL_TOGGLE = wx.ID_HIGHEST + 22
 ID_CHECK_UPDATES = wx.ID_HIGHEST + 23
+ID_PROPERTIES = wx.ID_HIGHEST + 24
 
 #: Which slot each fixed hotkey fires, as (modifiers, key_code, slot_index).
 def fixed_accelerators():
@@ -355,6 +357,8 @@ class DropDeckFrame(wx.Frame):
         self._warm_thread = None
         self._context_slot = None
         self._loaded_demo = False
+        #: Banks whose hint has been spoken this session. See _on_bank_changed.
+        self._hinted_banks = set()
         self.board = self._load_startup_board()
         self.mixer = MixerGroup(bank_devices=self._resolve_bank_devices(),
                                 open_stream=True)
@@ -507,7 +511,11 @@ class DropDeckFrame(wx.Frame):
             bits.append(f"{missing} files missing. Use File, relink missing sounds")
         if self.mixer.stream is None:
             bits.append(f"Audio could not start. {self.mixer.last_error or ''}")
-        self.announce(". ".join(bits))
+        # "40 sounds loaded" is a pleasantry. "3 files missing" and "audio
+        # could not start" are not, so the same line changes channel when it
+        # is carrying one of them.
+        wrong = bool(missing) or self.mixer.stream is None
+        (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     # ------------------------------------------------------------------ ui ---
     def _tab_title(self, bank):
@@ -517,8 +525,15 @@ class DropDeckFrame(wx.Frame):
 
     def _on_bank_changed(self, event):
         bank = event.GetSelection() + 1
-        if bank in C.BANK_TITLES:
-            self.announce("%s. %s" % (C.BANK_TITLES[bank], C.BANK_HINTS[bank]))
+        # Once per bank per session, then never again. A screen reader already
+        # says "Dialog Drops, tab selected", so twenty words of help on top of
+        # that is two announcements for one keystroke - which is exactly what
+        # Brian Hartgen wrote in about. The hint is still printed on the page
+        # and still in F1, so nothing has been taken away.
+        if bank in C.BANK_TITLES and bank not in self._hinted_banks:
+            self._hinted_banks.add(bank)
+            self.announce_help("%s. %s"
+                               % (C.BANK_TITLES[bank], C.BANK_HINTS[bank]))
         event.Skip()
 
     def _refresh_tab_titles(self):
@@ -582,16 +597,18 @@ class DropDeckFrame(wx.Frame):
 
         sounds = wx.Menu()
         sounds.Append(ID_ASSIGN, "&Assign a sound file...", "Put a sound in this slot")
-        sounds.Append(ID_RENAME, "Re&name\tF4", "Rename the sound you are on")
+        sounds.Append(ID_RENAME, "Re&name\tF2", "Rename the sound you are on")
         sounds.Append(ID_TRIM, "&Level for this sound...", "Trim one slot on its own")
         sounds.Append(ID_HOTKEY, "Assign a &hotkey...", "Bank four only")
         sounds.Append(ID_GLOBAL_HOTKEY, "Assign a &global hotkey...",
                       "A key that fires this sound even when another window "
                       "has focus")
         sounds.Append(ID_LOOP, "Toggle &looping", "Bank three only")
+        sounds.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter",
+                      "Name, level and both hotkeys for this sound, in one place")
         sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDel")
         sounds.AppendSeparator()
-        sounds.Append(ID_SEARCH, "&Search sounds...\tCtrl+E", "Find a sound by name")
+        sounds.Append(ID_SEARCH, "&Search sounds...\tCtrl+F", "Find a sound by name")
         sounds.Append(ID_WHATS_PLAYING, "&What is playing\tCtrl+L")
         sounds.Append(ID_DUCK, "&Ducking on or off\tCtrl+D")
         sounds.Append(ID_STOP_ALL, "Stop &everything\tEscape")
@@ -631,6 +648,8 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("hotkey"), id=ID_HOTKEY)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("loop"), id=ID_LOOP)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("clear"), id=ID_CLEAR_FOCUSED)
+        self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("properties"),
+                  id=ID_PROPERTIES)
         self.Bind(wx.EVT_MENU, self._on_search, id=ID_SEARCH)
         self.Bind(wx.EVT_MENU, self._on_whats_playing, id=ID_WHATS_PLAYING)
         self.Bind(wx.EVT_MENU, self._on_toggle_duck, id=ID_DUCK)
@@ -646,12 +665,25 @@ class DropDeckFrame(wx.Frame):
     def _build_accelerators(self):
         """The whole keyboard map, rebuilt whenever a custom hotkey changes."""
         entries = [
-            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F2, ID_VOL_SFX_DOWN),
-            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F3, ID_VOL_SFX_UP),
+            # F2 renames, because that is what F2 does everywhere else in
+            # Windows. The volume keys moved down one to make room: F3 and F4
+            # for sounds, F5 and F6 for beds, which is the pairing people
+            # expect once F2 is out of the way.
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F2, ID_RENAME),
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F3, ID_VOL_SFX_DOWN),
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F4, ID_VOL_SFX_UP),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F5, ID_VOL_BED_DOWN),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F6, ID_VOL_BED_UP),
             # Ctrl+G is a new key, not one taken from the frozen map.
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("G"), ID_GLOBAL_TOGGLE),
+            # Ctrl+F is the standard find key and is what the menu advertises.
+            # Ctrl+E was it for two releases, so it still works and always
+            # will - taking a key back off someone who learned it is not a fix.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("F"), ID_SEARCH),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("E"), ID_SEARCH),
+            # Alt+Enter opens properties, the same as it does in Explorer.
+            wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_RETURN, ID_PROPERTIES),
+            wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_NUMPAD_ENTER, ID_PROPERTIES),
         ]
         for modifiers, key_code, index in fixed_accelerators():
             entries.append(wx.AcceleratorEntry(modifiers or wx.ACCEL_NORMAL,
@@ -665,6 +697,10 @@ class DropDeckFrame(wx.Frame):
 
         self.Bind(wx.EVT_MENU, self._on_slot_hotkey,
                   id=ID_SLOT_BASE, id2=ID_SLOT_BASE + C.TOTAL_SLOTS)
+        # Returned so a test can read the whole map back. wx gives no way to
+        # inspect an accelerator table once it is set, and the map is the one
+        # thing in this app people have in their fingers.
+        return entries
 
     def _on_slot_hotkey(self, event):
         self.trigger(event.GetId() - ID_SLOT_BASE)
@@ -722,9 +758,10 @@ class DropDeckFrame(wx.Frame):
             self._sync_global_hotkeys()
             self._sync_button(slot)
             self._touch()
-            self.announce("Global hotkey %s for %s."
-                          % (text, slot.display_name) if text
-                          else "Global hotkey removed from %s." % slot.display_name)
+            self.announce_help("Global hotkey %s for %s."
+                               % (text, slot.display_name) if text
+                               else "Global hotkey removed from %s."
+                               % slot.display_name)
         finally:
             dialog.Destroy()
 
@@ -753,7 +790,7 @@ class DropDeckFrame(wx.Frame):
     def _on_check_updates(self, _event=None):
         """Same check, but say something either way because the user asked."""
         import threading
-        self.announce("Checking for a new version.")
+        self.announce_help("Checking for a new version.")
 
         def work():
             from . import appupdate
@@ -770,7 +807,7 @@ class DropDeckFrame(wx.Frame):
         if available and info:
             self._offer_update(info)
         else:
-            self.announce(message or "You have the newest version.")
+            self.announce_help(message or "You have the newest version.")
 
     def _offer_update(self, info):
         """Ask before downloading, always.
@@ -790,13 +827,13 @@ class DropDeckFrame(wx.Frame):
         text += "\n\nDownload and install it now?"
         if wx.MessageBox(text, "Update available",
                          wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
-            self.announce("Update skipped. Help, check for updates when you "
+            self.announce_help("Update skipped. Help, check for updates when you "
                           "are ready.")
             return
         # On a worker thread. This is an HTTPS download of a 40 MB installer;
         # inline it froze the window with only a busy cursor for company.
         import threading
-        self.announce("Downloading. This may take a moment.")
+        self.announce_help("Downloading. This may take a moment.")
         wx.BeginBusyCursor()
 
         def work():
@@ -827,6 +864,35 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
 
     # -------------------------------------------------------------- speaking --
+    # -------------------------------------------------------------- speaking --
+    #
+    # Three channels, because "how much should this app say" has three honest
+    # answers and a screen reader is already doing most of the work.
+    #
+    #   announce()          what you cannot otherwise know - a file that is
+    #                       missing, a key Windows would not give us, a number
+    #                       you just asked for. Silent only at "none".
+    #   announce_help()     confirmations of something you just did, and hints
+    #                       you have already read. Silent below "all".
+    #   announce_playback() the name of a sound you can hear starting anyway.
+    #
+    # All three write the status bar at every level, so nothing this app has
+    # to say is ever only spoken.
+
+    def _speech_level(self):
+        return getattr(self.board, "speech_level", C.DEFAULT_SPEECH_LEVEL)
+
+    def announce_help(self, text):
+        """A confirmation, or a hint. Off for anyone who has done their homework.
+
+        Brian Hartgen's point, and it is a fair one: pressing Escape and being
+        told everything stopped is the app talking over a screen reader that
+        was about to say something useful.
+        """
+        if self._speech_level() == C.SPEECH_ALL:
+            self.speaker.say(text)
+        self.status.SetStatusText(text, 1)
+
     def announce_playback(self, text):
         """A confirmation for something the user can already hear.
 
@@ -837,12 +903,14 @@ class DropDeckFrame(wx.Frame):
         Failures never come through here. "File missing" and "could not
         play" are exactly the cases you cannot hear, so they always speak.
         """
-        if getattr(self.board, "announce_playback", True):
+        if (self._speech_level() == C.SPEECH_ALL
+                and getattr(self.board, "announce_playback", True)):
             self.speaker.say(text)
         self.status.SetStatusText(text, 1)
 
     def announce(self, text):
-        self.speaker.say(text)
+        if self._speech_level() != C.SPEECH_NONE:
+            self.speaker.say(text)
         # A status bar cannot show a sentence and these are sentences, so the
         # field was reweighted to take most of the bar. No tooltip is set here:
         # wxSTB_SHOW_TIPS is on by default and shows the full text on hover
@@ -851,7 +919,7 @@ class DropDeckFrame(wx.Frame):
 
     def _update_status(self):
         self.status.SetStatusText(
-            f"Sound {percent(self.mixer.sfx_gain)} (F2, F3)   "
+            f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)   "
             f"Beds {percent(self.mixer.bed_gain)} (F5, F6)   "
             f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)", 0)
 
@@ -899,7 +967,7 @@ class DropDeckFrame(wx.Frame):
 
     def stop_all(self):
         count = self.mixer.stop_all()
-        self.announce("Everything stopped" if count else "Nothing was playing")
+        self.announce_help("Everything stopped" if count else "Nothing was playing")
 
     # -------------------------------------------------------------- volumes --
     def _nudge(self, which, direction):
@@ -959,13 +1027,14 @@ class DropDeckFrame(wx.Frame):
             return
         {"assign": self.assign_sound, "rename": self.rename_slot,
          "trim": self.trim_slot, "hotkey": self.assign_hotkey,
-         "loop": self.toggle_loop, "clear": self.clear_slot}[action](slot)
+         "loop": self.toggle_loop, "clear": self.clear_slot,
+         "properties": self.slot_properties}[action](slot)
 
     def assign_sound(self, slot):
         path = audio_file_dialog(self, self.board.last_sound_dir,
                                  f"Choose a sound for {slot.bank_short} {slot.number}")
         if not path:
-            self.announce("Nothing chosen")
+            self.announce_help("Nothing chosen")
             return
         self._apply_file(slot, path)
 
@@ -983,7 +1052,8 @@ class DropDeckFrame(wx.Frame):
             slot.name = os.path.splitext(os.path.basename(path))[0]
         self.board.last_sound_dir = os.path.dirname(path)
         self._sync_button(slot)
-        self.announce(f"{slot.display_name} assigned to {slot.bank_short} {slot.number}")
+        self.announce_help(f"{slot.display_name} assigned to "
+                           f"{slot.bank_short} {slot.number}")
         self._touch()
 
     def rename_slot(self, slot):
@@ -999,7 +1069,7 @@ class DropDeckFrame(wx.Frame):
             return
         slot.name = name
         self._sync_button(slot)
-        self.announce(f"Renamed to {name}")
+        self.announce_help(f"Renamed to {name}")
         self._touch()
 
     def trim_slot(self, slot):
@@ -1011,7 +1081,62 @@ class DropDeckFrame(wx.Frame):
                 return
             slot.trim_db = dialog.trim_db
         self._sync_button(slot)
-        self.announce(f"{slot.display_name} level {slot.trim_db:+.0f} decibels")
+        self.announce_help(f"{slot.display_name} level {slot.trim_db:+.0f} decibels")
+        self._touch()
+
+    def slot_properties(self, slot):
+        """Name, level, looping and both hotkeys, in one dialog.
+
+        Every one of these has its own menu item too. This exists because
+        answering "what is this pad actually set to" meant opening four
+        dialogs in turn, and because Alt+Enter is where a Windows user looks.
+
+        The dialog writes nothing. Everything is applied here, which is what
+        makes its Cancel button mean what it says.
+        """
+        taken = self._hotkey_map(exclude=slot.index)
+        with SlotPropertiesDialog(self, slot, taken) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Properties closed, nothing changed")
+                return
+            chosen = dialog.result
+
+        changes = []
+        name = chosen["name"]
+        if name and name != slot.display_name:
+            slot.name = name
+            changes.append("named %s" % name)
+        if chosen["trim_db"] != slot.trim_db:
+            slot.trim_db = chosen["trim_db"]
+            changes.append("level %+.0f decibels" % slot.trim_db)
+        if chosen["loop"] is not None and chosen["loop"] != slot.loop:
+            slot.loop = chosen["loop"]
+            changes.append("loop %s" % ("on" if slot.loop else "off"))
+
+        # Only bank four has a hotkey of its own. The other three are fixed by
+        # the bank and the dialog does not offer to change them.
+        if (slot.bank == C.BANK_MISC
+                and chosen["custom_hotkey"] != slot.custom_hotkey):
+            slot.key_code = chosen["key_code"]
+            slot.modifiers = chosen["modifiers"]
+            slot.custom_hotkey = chosen["custom_hotkey"]
+            self._build_accelerators()
+            changes.append("hotkey %s" % (slot.custom_hotkey or "cleared"))
+
+        if chosen["global_hotkey"] != slot.global_hotkey:
+            text = chosen["global_hotkey"]
+            if text and globalhotkeys.parse(text) is None:
+                self._on_hotkey_problem(globalhotkeys.describe(text))
+            else:
+                slot.global_hotkey = text
+                self._sync_global_hotkeys()
+                changes.append("global hotkey %s" % (text or "cleared"))
+
+        if not changes:
+            self.announce_help("Nothing changed")
+            return
+        self._sync_button(slot)
+        self.announce_help("%s. %s" % (slot.display_name, ", ".join(changes)))
         self._touch()
 
     def toggle_loop(self, slot):
@@ -1020,7 +1145,8 @@ class DropDeckFrame(wx.Frame):
             return
         slot.loop = not slot.loop
         self._sync_button(slot)
-        self.announce(f"Loop {'on' if slot.loop else 'off'} for {slot.display_name}")
+        self.announce_help(f"Loop {'on' if slot.loop else 'off'} "
+                           f"for {slot.display_name}")
         self._touch()
 
     def clear_slot(self, slot):
@@ -1034,7 +1160,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.stop_slot(slot.index, fade_out=0.05)
         slot.clear()
         self._sync_button(slot, playing=False)
-        self.announce(f"{name} cleared")
+        self.announce_help(f"{name} cleared")
         self._touch()
 
     def assign_hotkey(self, slot):
@@ -1052,7 +1178,7 @@ class DropDeckFrame(wx.Frame):
         slot.custom_hotkey = label
         self._build_accelerators()
         self._sync_button(slot)
-        self.announce(f"Hotkey {label or 'cleared'} for {slot.display_name}")
+        self.announce_help(f"Hotkey {label or 'cleared'} for {slot.display_name}")
         self._touch()
 
     def _hotkey_map(self, exclude=None):
@@ -1076,7 +1202,7 @@ class DropDeckFrame(wx.Frame):
         menu.Append(ID_ASSIGN, "Re&assign sound file..." if slot.is_assigned
                     else "&Assign sound file...")
         if slot.is_assigned:
-            menu.Append(ID_RENAME, "Re&name...\tF4")
+            menu.Append(ID_RENAME, "Re&name...\tF2")
             menu.Append(ID_TRIM, f"&Level... (now {slot.trim_db:+.0f} decibels)")
         if slot.is_bed:
             item = menu.AppendCheckItem(ID_LOOP, "&Loop this bed")
@@ -1085,7 +1211,13 @@ class DropDeckFrame(wx.Frame):
             menu.Append(ID_HOTKEY,
                         f"&Hotkey... (now {slot.custom_hotkey or 'none'})")
         if slot.is_assigned:
+            # The global hotkey lived only in the Sounds menu, which meant the
+            # menu people actually open did not offer the feature at all. It
+            # reads out its current value, like the two items above it.
+            menu.Append(ID_GLOBAL_HOTKEY,
+                        f"&Global hotkey... (now {slot.global_hotkey or 'none'})")
             menu.AppendSeparator()
+            menu.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter")
             menu.Append(ID_CLEAR_FOCUSED, "&Clear slot")
 
         self._context_slot = slot
@@ -1112,7 +1244,7 @@ class DropDeckFrame(wx.Frame):
                           "Save failed", wx.OK | wx.ICON_ERROR, self)
             return
         if not quiet:
-            self.announce(f"Saved to {os.path.basename(saved)}")
+            self.announce_help(f"Saved to {os.path.basename(saved)}")
 
     def _on_save_as(self, _event):
         with wx.FileDialog(self, "Save board as", wildcard="Boards (*.json)|*.json",
@@ -1133,7 +1265,7 @@ class DropDeckFrame(wx.Frame):
         fresh.device_name = self.board.device_name
         fresh.device_hostapi = self.board.device_hostapi
         self._adopt(fresh)
-        self.announce("New board, eighty empty slots")
+        self.announce_help("New board, eighty empty slots")
         self._touch()
 
     def _on_load_demo(self, _event):
@@ -1210,7 +1342,7 @@ class DropDeckFrame(wx.Frame):
     def _on_relink(self, _event):
         missing = self.board.missing_slots
         if not missing:
-            self.announce("Nothing is missing")
+            self.announce_help("Nothing is missing")
             wx.MessageBox("Every sound on this board was found.", "Nothing to relink",
                           wx.OK | wx.ICON_INFORMATION, self)
             return
@@ -1221,7 +1353,7 @@ class DropDeckFrame(wx.Frame):
             folder = dialog.GetPath()
 
         import threading
-        self.announce("Looking through %s. This may take a moment." % folder)
+        self.announce_help("Looking through %s. This may take a moment." % folder)
         wx.BeginBusyCursor()
 
         result = {}
@@ -1262,6 +1394,7 @@ class DropDeckFrame(wx.Frame):
             self.board.ducking = dialog.duck_on.GetValue()
             self.board.duck_db = float(dialog.duck_db.GetValue())
             self.board.announce_playback = dialog.announce_playback.GetValue()
+            self.board.speech_level = dialog.speech_level
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
@@ -1293,10 +1426,10 @@ class DropDeckFrame(wx.Frame):
                     bank: spec for bank, spec in self.board.bank_devices.items()
                     if resolve_device(spec) is not None}
             else:
-                self.announce(self._routing_summary())
+                self.announce_help(self._routing_summary())
         else:
             self.warm_cache()
-            self.announce("Audio settings saved")
+            self.announce_help("Audio settings saved")
         self._update_status()
         self._touch()
 

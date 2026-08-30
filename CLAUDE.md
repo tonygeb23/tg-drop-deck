@@ -20,11 +20,19 @@ Inherited from the other TG Studios apps, and not negotiable here either:
 
 And specific to this one:
 
-- **The keyboard map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
-  `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty; `F2`/`F3` for
-  sounds and `F5`/`F6` for beds. It is muscle memory built over years. A new
-  feature gets a new key; it never takes one of these. Global hotkeys in 2.1.0
-  took `Ctrl+G` and nothing else.
+- **The digit map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
+  `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty. It is muscle
+  memory built over years. A new feature gets a new key; it never takes one
+  of these. Global hotkeys in 2.1.0 took `Ctrl+G` and nothing else.
+- **The function key row moved once, in 2.2.0, and Tony signed it off.**
+  `F2` renames, `F3`/`F4` are the sound volume, `F5`/`F6` are still the beds.
+  It was `F2`/`F3` volume and `F4` rename, inherited from Soundboard 1.2,
+  until David Goldfield pointed out that `F2` renames in every other Windows
+  program. Do not "restore" it: `tests/test_feedback_2_2.py` asserts the new
+  layout, and the digit map above was not touched.
+- **`Ctrl+F` searches, and `Ctrl+E` still does too.** `Ctrl+E` was the search
+  key for two releases. A key someone has already learned does not get taken
+  away to tidy up; both are registered and both are documented.
 - **A global hotkey always needs a modifier.** `globalhotkeys.parse` refuses a
   bare key and there is a test for it. RegisterHotKey on a bare key takes that
   key away from every other program on the machine, including whatever the user
@@ -38,9 +46,21 @@ And specific to this one:
   several `Mixer`s. Banks sharing a device share a mixer - the common case
   of one output is still one stream. Ducking is shared through a `DuckBus`
   precisely so routing the beds elsewhere does not silently disable it.
-- **Speech about playback is optional; speech about failure is not.**
-  `announce_playback()` is gated by a setting and always writes the status
-  bar; `announce()` always speaks. A missing file must never be silent.
+- **Three speech channels, and the user picks how many of them talk.**
+  `board.speech_level` is `all`, `essential` or `none` - see
+  `constants.SPEECH_LEVELS`.
+  - `announce()` is what you cannot otherwise know: a missing file, a key
+    Windows refused, a number you asked for. Silent only at `none`.
+  - `announce_help()` is a confirmation of something you just did, or a hint
+    you have read before. Silent below `all`.
+  - `announce_playback()` is the name of a sound you can hear anyway.
+  **All three write the status bar at every level**, so nothing this app has
+  to say is ever only spoken. `none` is opt-in and is labelled as silencing
+  everything; that is Brian Hartgen's request and it was deliberate.
+- **The bank hint is spoken once per bank per session.** A screen reader
+  already announces the tab, so speaking twenty words of help on top of that
+  every time was two announcements for one keystroke. `_hinted_banks` on the
+  frame is what makes it once.
 
 ## Layout
 

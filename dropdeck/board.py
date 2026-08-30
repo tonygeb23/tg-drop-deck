@@ -74,6 +74,10 @@ class Board:
         #: people who can hear the sound and do not need to be told about
         #: it - errors are always spoken either way.
         self.announce_playback = True
+        #: How much the app says out loud - see constants.SPEECH_LEVELS. This
+        #: supersedes announce_playback, which is still written to the file so
+        #: an older build opening a newer board keeps behaving sensibly.
+        self.speech_level = C.DEFAULT_SPEECH_LEVEL
         self.path = None
         self.dirty = False
 
@@ -156,6 +160,7 @@ class Board:
             "device_hostapi": self.device_hostapi,
             "bank_devices": {str(k): v for k, v in self.bank_devices.items()},
             "announce_playback": bool(self.announce_playback),
+            "speech_level": self.speech_level,
             "last_sound_dir": self.last_sound_dir,
             "slots": [s.to_dict() for s in self.slots],
         }
@@ -188,6 +193,14 @@ class Board:
         board.device_name = data.get("device_name")
         board.device_hostapi = data.get("device_hostapi")
         board.announce_playback = bool(data.get("announce_playback", True))
+        # A board written before 2.2.0 has no speech_level. Someone who had
+        # already turned playback speech off was asking for a quieter app, so
+        # they are carried straight to the level that means exactly that.
+        level = data.get("speech_level")
+        if level not in C.SPEECH_LEVELS:
+            level = (C.SPEECH_ALL if board.announce_playback
+                     else C.SPEECH_ESSENTIAL)
+        board.speech_level = level
 
         # Keys arrive as strings out of JSON and are used as ints everywhere
         # else. Anything unparseable is dropped rather than crashing a load,

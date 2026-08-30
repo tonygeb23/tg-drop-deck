@@ -1,5 +1,67 @@
 # Changelog
 
+## 2.2.0 — 30 August 2026
+
+All of this came from David Goldfield and Brian Hartgen, who wrote in the same
+morning after using 2.1.2.
+
+### The function key row makes sense now
+
+**F2 renames**, because that is what F2 does in every other Windows program.
+The volume keys moved down one to make room:
+
+| Key | What it does |
+|---|---|
+| `F2` | Rename the sound you are on |
+| `F3` / `F4` | Sound volume down / up — banks 1, 2 and 4 |
+| `F5` / `F6` | Bed volume down / up — bank 3 |
+
+None of the number keys moved. `1`–`0` with Shift, Ctrl, Ctrl+Shift and
+Alt+Ctrl are exactly where they have always been.
+
+### Ctrl+F finds things
+
+`Ctrl+F` is the key everyone reaches for, so that is what the menu says now.
+**`Ctrl+E` still works** and always will — a key you have already learned does
+not get taken away to tidy up a menu.
+
+### Alt on its own is a modifier
+
+Assigning `Alt+A` as a global hotkey was impossible: the dialog handed Alt plus
+a letter to its own buttons instead of capturing it. It captures it now. Tab
+still reaches every button and Delete still clears the key, so nothing became
+unreachable.
+
+`Alt+F4` is the one combination it will not take. That closes a window in every
+Windows program, and a system-wide hotkey would take it away from all of them.
+
+### Properties, on Alt+Enter
+
+One dialog with everything about a sound in it: its name, its level in
+decibels, whether a bed loops, its hotkey inside the app, and its global
+hotkey. Cancel really does leave the board alone.
+
+**The right-click menu now offers the global hotkey too**, and reads out what
+it is currently set to. Before, that lived only in the Sounds menu — so the
+menu people actually open did not offer the feature at all.
+
+### The app talks less, if you want it to
+
+**Audio settings** has a *Spoken feedback from the app* setting with three
+levels:
+
+- **Everything** — the default. Nothing changes.
+- **Only what I cannot hear or read for myself** — no confirmations, no bank
+  hints, no sound names. A missing file, a hotkey Windows refused, and the
+  volume readouts still speak.
+- **Nothing** — the app never speaks. Your screen reader carries on reading
+  every control, and the status bar still shows all of it.
+
+**The bank hint is now spoken once per bank, per session, instead of on every
+tab change.** Your screen reader already says "Dialog Drops, tab selected";
+twenty more words of help on top of that was two announcements for one
+keystroke. The hint is still printed on the page and still in F1.
+
 ## 2.1.2 — 30 August 2026
 
 Both of these came from Brian Hartgen, who wrote in after using the app.

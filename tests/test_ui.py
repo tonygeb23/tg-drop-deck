@@ -159,7 +159,7 @@ def main():
     print("Volume, both masters, independently")
     before_sfx, before_bed = frame.mixer.sfx_gain, frame.mixer.bed_gain
     frame._nudge("sfx", -1)
-    check("F2 lowers the sound volume",
+    check("F3 lowers the sound volume",
           abs(frame.mixer.sfx_gain - (before_sfx - C.VOLUME_STEP)) < 1e-6)
     check("lowering the sound volume leaves the beds alone",
           frame.mixer.bed_gain == before_bed)
@@ -224,7 +224,8 @@ def main():
 
     print("Help text covers the keys it promises")
     for phrase in ("Shift+1 to 0", "Ctrl+Shift+1 to 0", "Alt+Ctrl+1 to 0",
-                   "F2 / F3", "F5 / F6", "Escape", "Ctrl+E", "Ctrl+Tab"):
+                   "F3 / F4", "F5 / F6", "Escape", "Ctrl+F", "Ctrl+E",
+                   "Alt+Enter", "Ctrl+Tab"):
         check(f"help mentions {phrase}", phrase in C.KEYBOARD_HELP)
 
     print("Saving")
