@@ -27,6 +27,7 @@ crossfade something you can measure rather than something you have to listen to.
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass, field
 
 from . import constants as C
@@ -283,6 +284,42 @@ class Playlist:
             if rest[0].is_drop:
                 continue          # there is already one here
             rebuilt.append(Track(**template.to_dict()))
+            inserted += 1
+        self.tracks = rebuilt
+        return inserted
+
+    def insert_drops_every(self, library, every):
+        """A drop after every ``every`` songs, a different one each time.
+
+        The library version of insert_drop_every. Same placement rules; the
+        difference is that each gap gets its own pick, so a countdown does not
+        play the same ident five times.
+        """
+        if every < 1 or not len(library):
+            return 0
+        original = list(self.tracks)
+        rebuilt = []
+        songs = 0
+        inserted = 0
+        for index, track in enumerate(original):
+            rebuilt.append(track)
+            if track.is_drop:
+                continue
+            songs += 1
+            if songs % every:
+                continue
+            rest = original[index + 1:]
+            if not rest or all(t.is_drop for t in rest):
+                continue
+            if rest[0].is_drop:
+                continue
+            path = library.pick()
+            if path is None:
+                break
+            drop = self._make(path, kind=C.TRACK_DROP)
+            if drop is None:
+                continue
+            rebuilt.append(drop)
             inserted += 1
         self.tracks = rebuilt
         return inserted
@@ -578,3 +615,111 @@ class PlaylistPlayer:
         if following is None:
             return False
         return self._hand_over(following)
+
+
+class DropLibrary:
+    """The drops you use over and over, kept in one place.
+
+    Building a running order means reaching for a station ident every few
+    songs, and picking the same file out of the same folder every time is the
+    part that wears thin. So the drops go in here once and `Alt+D` takes one at
+    random - never the same one twice running, for the same reason a folder
+    slot does not repeat itself: two identical idents in a row is what makes
+    random sound broken.
+
+    It travels with the board, because a board is a show and a show has its own
+    idents. Opening somebody else's board brings theirs.
+    """
+
+    def __init__(self):
+        self.paths: list = []
+        self._last = None
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __iter__(self):
+        return iter(self.paths)
+
+    def __getitem__(self, index):
+        return self.paths[index]
+
+    @property
+    def missing(self):
+        return [p for p in self.paths if not os.path.exists(p)]
+
+    @property
+    def available(self):
+        """The ones still on disk. A pick never offers a file that has gone."""
+        return [p for p in self.paths if os.path.exists(p)]
+
+    def add(self, paths):
+        """Put files in. Returns what was actually added.
+
+        Folders are expanded and anything already in the library is skipped,
+        so adding the same folder twice does not double every ident in it.
+        """
+        added = []
+        for path in Playlist.playable(paths):
+            full = os.path.normpath(os.path.abspath(path))
+            if any(os.path.normcase(full) == os.path.normcase(p)
+                   for p in self.paths):
+                continue
+            self.paths.append(full)
+            added.append(full)
+        return added
+
+    def remove(self, index):
+        if 0 <= index < len(self.paths):
+            return self.paths.pop(index)
+        return None
+
+    def clear(self):
+        count = len(self.paths)
+        self.paths = []
+        self._last = None
+        return count
+
+    def pick(self):
+        """One drop, at random, never the same one twice running."""
+        choices = self.available
+        if not choices:
+            return None
+        if len(choices) > 1 and self._last in choices:
+            choices = [p for p in choices if p != self._last]
+        self._last = random.choice(choices)
+        return self._last
+
+    def label(self, index):
+        """One row, for the library list."""
+        path = self.paths[index]
+        name = os.path.splitext(os.path.basename(path))[0]
+        if not os.path.exists(path):
+            return "%d. %s, file missing" % (index + 1, name)
+        return "%d. %s" % (index + 1, name)
+
+    def relink(self, index):
+        """Repair moved drops out of the same walk everything else uses."""
+        repaired = []
+        for position, path in enumerate(self.paths):
+            if os.path.exists(path):
+                continue
+            found = index.get(os.path.basename(path).lower())
+            if found:
+                self.paths[position] = found
+                repaired.append(found)
+        return repaired
+
+    def to_dict(self):
+        return {"paths": list(self.paths)}
+
+    @classmethod
+    def from_dict(cls, data, base_dir=None):
+        library = cls()
+        for path in (data or {}).get("paths") or []:
+            if not isinstance(path, str) or not path.strip():
+                continue
+            if base_dir and not os.path.isabs(path):
+                path = os.path.normpath(os.path.join(base_dir, path))
+            library.paths.append(path)
+        return library

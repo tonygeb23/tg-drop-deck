@@ -226,6 +226,8 @@ VOLUME — three independent masters, plus the microphone's own gain
 
 THE TWO VIEWS - soundboard and playlist
   Ctrl+Shift+S              Go to the soundboard
+                            (Save the board to a new file moved to F12 in
+                            2.5.0 so this key could be free)
   Ctrl+Shift+P              Go to the playlist
   Ctrl+Alt+Tab              Swap between them
                             Windows uses Ctrl+Alt+Tab for its own task
@@ -244,7 +246,9 @@ THE PLAYLIST - a running order that cues itself
   Applications key          Everything above, in a menu, plus Segue to this
                             now - which crosses to it at the crossfade
                             length instead of waiting for the cue
-  Ctrl+Shift+D              Put a drop in front of the item you are on
+  Ctrl+Shift+D              Choose a file and put it in as a drop
+  Alt+D                     Put a RANDOM drop in, from your drops library,
+                            never the same one twice running
   Crossfade box             In the playlist view, under the running order.
                             Arrow keys change it and every cue moves with it.
                             The Playlist menu takes you straight to it.
@@ -254,6 +258,13 @@ THE PLAYLIST - a running order that cues itself
   Playlist menu             Add files, drops every so many songs, crossfade
                             length, tick or untick everything, next,
                             previous, stop, clear
+
+YOUR DROPS LIBRARY
+  Playlist menu, Drops library. Put the idents and stingers you use over and
+  over in there once, and Alt+D drops one in wherever you are in the running
+  order without you having to go and find a file. Insert a drop every so many
+  songs can use it too, and then every gap gets a different one.
+  The library travels with the board, because a board is a show.
 
   Each song hands over to the next before it ends. The overlap is the
   crossfade, three seconds unless you change it, and that handover point is
@@ -304,9 +315,21 @@ GLOBAL HOTKEYS - firing a sound from another program
   away from every other program on the machine, so it is refused.
   Ctrl+G arms and disarms the whole set, and disarming hands the keys back.
 
+TELLING US SOMETHING
+  Help, Submit feedback. Pick what kind of thing it is, write a sentence, and
+  it goes straight to the person who wrote the app. It shows you exactly what
+  will be sent before it sends it: your message, the version, and your audio
+  and speech settings. Never a file name, a sound name, a bank name or
+  anything from your running order.
+  If you are offline it is saved and goes out next time. Nothing is lost.
+
+  Help, Donate, opens the TG Studios donate page. The app mentions it about
+  once a week at the very most, never in your first week, and there is a
+  "do not ask me again" on that window.
+
 FILE
   Ctrl+S                    Save the current board
-  Ctrl+Shift+S              Save the board to a new file
+  F12                       Save the board to a new file
   Ctrl+O                    Open a board
   Ctrl+P                    Audio output device and ducking settings
 

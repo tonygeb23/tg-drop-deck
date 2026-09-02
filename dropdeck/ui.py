@@ -13,12 +13,16 @@ import threading
 
 import wx
 
+import webbrowser
+
 from . import appicon
 from . import constants as C
+from . import feedback
 from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (AssignHotkeyDialog, MicSettingsDialog, SearchDialog,
+from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
+                      FeedbackDialog, MicSettingsDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
@@ -26,9 +30,9 @@ from .engine import probe
 from .micinput import MicInput, describe_input, resolve_input
 from .playlist import PlaylistPlayer
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
-                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE,
-                    ID_PL_ROW_SEGUE, ID_PL_ROW_STOP, ID_PL_ROW_TICK,
-                    ID_PL_ROW_UP)
+                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
+                    ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE, ID_PL_ROW_STOP,
+                    ID_PL_ROW_TICK, ID_PL_ROW_TO_LIBRARY, ID_PL_ROW_UP)
 from .playlistview import PlaylistPanel
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
@@ -83,6 +87,10 @@ ID_PL_CHECK_ALL = wx.ID_HIGHEST + 43
 ID_PL_UNCHECK_ALL = wx.ID_HIGHEST + 44
 ID_MIC_TOGGLE = wx.ID_HIGHEST + 45
 ID_MIC_SETTINGS = wx.ID_HIGHEST + 46
+ID_PL_DROP_RANDOM = wx.ID_HIGHEST + 47
+ID_PL_LIBRARY = wx.ID_HIGHEST + 48
+ID_FEEDBACK = wx.ID_HIGHEST + 49
+ID_DONATE = wx.ID_HIGHEST + 50
 
 #: The two things this window can be showing.
 VIEW_BOARD, VIEW_PLAYLIST = 0, 1
@@ -486,6 +494,11 @@ class DropDeckFrame(wx.Frame):
         # important lines - files missing, audio did not start - were the ones
         # that got cut.
         wx.CallLater(500, self._announce_startup)
+        # Anything queued from last time goes out on its own, and the word
+        # about donating comes well after the app has said hello - the first
+        # thing it says to somebody is about their board, never about money.
+        feedback.flush_in_background()
+        wx.CallLater(4000, self._maybe_ask_about_donating)
         self._start_update_check()
         self.warm_cache()
 
@@ -708,7 +721,11 @@ class DropDeckFrame(wx.Frame):
         file_menu = wx.Menu()
         file_menu.Append(wx.ID_NEW, "&New board\tCtrl+N", "Start with eighty empty slots")
         file_menu.Append(wx.ID_SAVE, "&Save board\tCtrl+S", "Save this board")
-        file_menu.Append(ID_SAVE_AS, "Save board &as...\tCtrl+Shift+S",
+        # F12, not Ctrl+Shift+S. 2.5.0 gave Ctrl+Shift+S to the soundboard
+        # view, and a frame accelerator beats a menu one - so Save board as
+        # quietly stopped working and nothing said a word about it. F12 is
+        # what Save As is on in Word and Excel, so it is not an invention.
+        file_menu.Append(ID_SAVE_AS, "Save board &as...\tF12",
                          "Save this board to a file of its own")
         file_menu.Append(wx.ID_OPEN, "&Open board...\tCtrl+O", "Open a saved board")
         file_menu.Append(ID_IMPORT, "&Import an old soundboard bank...",
@@ -732,7 +749,7 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_GLOBAL_HOTKEY, "Assign a &global hotkey...",
                       "A key that fires this sound even when another window "
                       "has focus")
-        sounds.Append(ID_LOOP, "Toggle &looping", "Bank three only")
+        sounds.Append(ID_LOOP, "Toggle loo&ping", "Bank three only")
         sounds.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter",
                       "Name, level and both hotkeys for this sound, in one place")
         sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDel")
@@ -747,7 +764,7 @@ class DropDeckFrame(wx.Frame):
         # whole machine, so "is it on right now" has to be answerable without
         # pressing anything.
         self.global_item = sounds.AppendCheckItem(
-            ID_GLOBAL_TOGGLE, "&Global hotkeys\tCtrl+G",
+            ID_GLOBAL_TOGGLE, "Glo&bal hotkeys\tCtrl+G",
             "Let assigned hotkeys fire this board from any program")
         sounds.Insert(1, ID_ASSIGN_FOLDER, "Assign a &folder...",
                       "Play a different sound from this folder every press")
@@ -773,14 +790,19 @@ class DropDeckFrame(wx.Frame):
                   "Windows may take this key for its own task switcher; the "
                   "two above always work")
         pl.AppendSeparator()
-        pl.Append(ID_PL_PASTE, "&Paste songs from the clipboard\tCtrl+V",
+        pl.Append(ID_PL_PASTE, "Paste son&gs from the clipboard\tCtrl+V",
                   "Copy files in File Explorer, then paste them in here")
         pl.Append(ID_PL_ADD, "&Add songs to the end...")
-        pl.Append(ID_PL_DROP, "&Insert a drop here...\tCtrl+Shift+D",
-                  "Put a drop in front of the item you are on")
+        pl.Append(ID_PL_DROP_RANDOM, "Insert a &random drop\tAlt+D",
+                  "One from your drops library, never the same one twice "
+                  "running")
+        pl.Append(ID_PL_DROP, "Insert a drop from a f&ile...\tCtrl+Shift+D",
+                  "Put a particular file in front of the item you are on")
+        pl.Append(ID_PL_LIBRARY, "Drops li&brary...",
+                  "The idents and stingers Alt+D reaches for")
         pl.Append(ID_PL_DROP_EVERY, "Insert a drop &every so many songs...")
         pl.AppendSeparator()
-        pl.Append(ID_PL_CHECK_ALL, "&Tick every track",
+        pl.Append(ID_PL_CHECK_ALL, "Tic&k every track",
                   "Everything in the running order will play")
         pl.Append(ID_PL_UNCHECK_ALL, "&Untick every track",
                   "Nothing plays until you tick it again. Space toggles one")
@@ -792,7 +814,7 @@ class DropDeckFrame(wx.Frame):
         pl.AppendSeparator()
         pl.Append(ID_PL_CROSSFADE, "&Crossfade between tracks",
                   "Go to the crossfade box in the playlist view")
-        pl.Append(ID_PL_CLEAR, "Clear the &running order")
+        pl.Append(ID_PL_CLEAR, "Clear the running or&der")
         pl.AppendSeparator()
         self.mic_item = pl.AppendCheckItem(
             ID_MIC_TOGGLE, "&Microphone on\tCtrl+M",
@@ -805,6 +827,14 @@ class DropDeckFrame(wx.Frame):
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
         help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
+        help_menu.AppendSeparator()
+        help_menu.Append(ID_FEEDBACK, "&Submit feedback...",
+                         "Tell us what happened, or what would make this "
+                         "better")
+        help_menu.Append(ID_DONATE, "&Donate...",
+                         "Drop Deck is free. Donations go into development, "
+                         "server costs and new products")
+        help_menu.AppendSeparator()
         help_menu.Append(wx.ID_ABOUT, "&About")
         bar.Append(help_menu, "&Help")
 
@@ -834,6 +864,13 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_playlist_paste, id=ID_PL_PASTE)
         self.Bind(wx.EVT_MENU, lambda _e: self.add_playlist_files(), id=ID_PL_ADD)
         self.Bind(wx.EVT_MENU, lambda _e: self.insert_playlist_drop(), id=ID_PL_DROP)
+        self.Bind(wx.EVT_MENU, lambda _e: self.insert_random_drop(),
+                  id=ID_PL_DROP_RANDOM)
+        self.Bind(wx.EVT_MENU, lambda _e: self.insert_random_drop(),
+                  id=ID_PL_ROW_RANDOM)
+        self.Bind(wx.EVT_MENU, self._on_drops_library, id=ID_PL_LIBRARY)
+        self.Bind(wx.EVT_MENU, lambda _e: self.add_selected_to_library(),
+                  id=ID_PL_ROW_TO_LIBRARY)
         self.Bind(wx.EVT_MENU, self._on_drop_every, id=ID_PL_DROP_EVERY)
         self.Bind(wx.EVT_MENU, self._on_playlist_play, id=ID_PL_PLAY)
         self.Bind(wx.EVT_MENU, lambda _e: self.playlist_next(), id=ID_PL_NEXT)
@@ -891,6 +928,8 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_all(), id=ID_STOP_ALL)
         self.Bind(wx.EVT_MENU, self._on_shortcuts, id=ID_SHORTCUTS)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, self._on_feedback, id=ID_FEEDBACK)
+        self.Bind(wx.EVT_MENU, self._on_donate, id=ID_DONATE)
 
         self.Bind(wx.EVT_MENU, lambda _e: self._nudge("sfx", -1), id=ID_VOL_SFX_DOWN)
         self.Bind(wx.EVT_MENU, lambda _e: self._nudge("sfx", +1), id=ID_VOL_SFX_UP)
@@ -918,6 +957,10 @@ class DropDeckFrame(wx.Frame):
                                 ID_VIEW_PLAYLIST),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"),
                                 ID_VIEW_BOARD),
+            # Save board as. It has to be in the table rather than left to the
+            # menu, so that this file is the one place the keyboard map lives
+            # and a clash like the one above shows up in the menu sweep.
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F12, ID_SAVE_AS),
             # Asked for, and bound. Windows reserves Ctrl+Alt+Tab for its own
             # persistent task switcher and usually takes it before any
             # application sees it, which is why the menu says so and why the
@@ -932,6 +975,9 @@ class DropDeckFrame(wx.Frame):
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
                                 ID_PL_DROP),
+            # Alt+D drops a random one in from the library. A new key; nothing
+            # on the frozen digit map moved for it.
+            wx.AcceleratorEntry(wx.ACCEL_ALT, ord("D"), ID_PL_DROP_RANDOM),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, wx.WXK_RETURN,
                                 ID_PL_PLAY),
             # Ctrl+F2 renames the bank, next to the F2 that renames a sound.
@@ -1709,6 +1755,69 @@ class DropDeckFrame(wx.Frame):
         self.playlist_changed()
         return track
 
+    def insert_random_drop(self, _event=None):
+        """Alt+D. A drop from the library, wherever you are in the order.
+
+        The point of the library: building a show means reaching for an ident
+        every few songs, and going and finding the file every single time is
+        the part that wears thin. Never the same one twice running, for the
+        same reason a folder slot does not repeat itself.
+        """
+        library = self.board.drops
+        if not len(library):
+            self.announce(
+                "Your drops library is empty. Playlist menu, Drops library, "
+                "puts some in - then Alt+D reaches for them")
+            return None
+        path = library.pick()
+        if path is None:
+            self.announce("Every drop in the library is missing. "
+                          "Use File, relink missing sounds")
+            return None
+        at = self.playlist_panel.selection()
+        track = self.board.playlist.insert_drop(path, at=at)
+        if track is None:
+            self.announce("That drop could not be read")
+            return None
+        landed = at if at is not None else len(self.board.playlist) - 1
+        if self.player.index >= landed:
+            self.player.index += 1
+        self.show_view(VIEW_PLAYLIST)
+        self.playlist_panel.refresh(keep=landed)
+        self.playlist_panel.focus_list()
+        self.announce_help("%s put in at %d" % (track.display_name, landed + 1))
+        self.playlist_changed(relabel=False)
+        return track
+
+    def add_selected_to_library(self):
+        """Put the drop you are on into the library, so Alt+D can find it."""
+        index = self.playlist_panel.selection()
+        if index is None:
+            self.announce("There is nothing in the running order yet")
+            return
+        track = self.board.playlist[index]
+        added = self.board.drops.add([track.filepath])
+        if not added:
+            self.announce("%s is already in your drops library"
+                          % track.display_name)
+            return
+        self.announce_help(
+            "%s added to your drops library, which now holds %d"
+            % (track.display_name, len(self.board.drops)))
+        self._touch()
+
+    def _on_drops_library(self, _event=None):
+        before = len(self.board.drops)
+        with DropsLibraryDialog(self, self.board.drops) as dialog:
+            dialog.ShowModal()
+        count = len(self.board.drops)
+        self.announce(
+            "Drops library, %d drop%s. Alt+D puts one in at random"
+            % (count, "" if count == 1 else "s") if count
+            else "Drops library is empty")
+        if count != before:
+            self._touch()
+
     def _on_drop_every(self, _event=None):
         """The same drop after every so many songs, in one go."""
         if not len(self.board.playlist):
@@ -1850,6 +1959,79 @@ class DropDeckFrame(wx.Frame):
                                    else "The playlist was not playing")
         self._update_status()
         return stopped
+
+    # ====================================================================
+    # Feedback, and the occasional word about donating
+    # ====================================================================
+
+    def _on_feedback(self, _event=None):
+        """Say what happened, from inside the app, at the moment it happened.
+
+        Queued to disk before it is sent, so a report survives no network, a
+        server restart, or the app being closed on the way out of a venue.
+        """
+        with FeedbackDialog(self, self) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Feedback closed, nothing sent")
+                return None
+            kind, text = dialog.feedback_type, dialog.text
+        if not text:
+            self.announce("There was nothing written to send")
+            return None
+        delivered, queued = feedback.submit(kind, text, self)
+        if delivered:
+            message = ("Thank you. That has been sent."
+                       if not queued else
+                       "Thank you. That has been sent, and %d earlier one%s "
+                       "went with it." % (queued, "" if queued == 1 else "s"))
+        else:
+            # NOT an error. It is on disk and it will go on its own.
+            message = ("Thank you. That is saved and will be sent the next "
+                       "time this machine is online. Nothing has been lost.")
+        self.announce(message)
+        wx.MessageBox(message, "Feedback", wx.OK | wx.ICON_INFORMATION, self)
+        return delivered
+
+    def _on_donate(self, _event=None):
+        """Help, Donate. The same window the weekly one uses, on demand."""
+        return self._show_donate(mark=False)
+
+    def _show_donate(self, mark=True):
+        with DonateDialog(self) as dialog:
+            answer = dialog.ShowModal()
+            never = dialog.never_again
+        if never:
+            feedback.mark_never(True)
+        if answer == wx.ID_OK:
+            feedback.mark_donated()
+            if webbrowser.open(feedback.DONATE_URL):
+                self.announce("Opening the donate page in your browser. "
+                              "Thank you")
+            else:
+                self.announce("Could not open a browser. The page is %s"
+                              % feedback.DONATE_URL)
+            return True
+        if mark:
+            feedback.mark_asked()
+        self.announce_help(
+            "No problem. Help, Donate, is there if you change your mind"
+            if not never else
+            "Right you are, that will not come up again")
+        return False
+
+    def _maybe_ask_about_donating(self):
+        """Once a week at the very most, and never in the first week.
+
+        Deferred behind the startup announcement on purpose: the first thing
+        the app says to somebody must be about their board, never about money.
+        """
+        try:
+            if not feedback.should_ask_about_donating():
+                return False
+        except Exception:                       # pragma: no cover
+            return False
+        self._show_donate(mark=True)
+        return True
 
     # ====================================================================
     # The microphone

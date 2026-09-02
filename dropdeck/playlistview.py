@@ -23,9 +23,9 @@ import wx
 
 from . import constants as C
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
-                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE,
-                    ID_PL_ROW_SEGUE, ID_PL_ROW_STOP, ID_PL_ROW_TICK,
-                    ID_PL_ROW_UP)
+                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
+                    ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE, ID_PL_ROW_STOP,
+                    ID_PL_ROW_TICK, ID_PL_ROW_TO_LIBRARY, ID_PL_ROW_UP)
 from .slot import format_duration
 
 #: What the list shows when there is nothing in it. A row, not an empty
@@ -377,7 +377,12 @@ class PlaylistPanel(wx.Panel):
                         % (format_duration(
                             track.crossfade_seconds(self.playlist.crossfade))
                            or "none"))
+            menu.Append(ID_PL_ROW_RANDOM,
+                        "Insert a &random drop from the library\tAlt+D")
             menu.Append(ID_PL_ROW_DROP, "&Insert a drop before this...")
+            if track.is_drop:
+                menu.Append(ID_PL_ROW_TO_LIBRARY,
+                            "Add this drop to the &library")
             menu.AppendSeparator()
             menu.Append(ID_PL_ROW_REMOVE, "&Remove from the running order	Del")
             menu.AppendSeparator()

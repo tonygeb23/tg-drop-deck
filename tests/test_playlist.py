@@ -869,6 +869,134 @@ frame._adopt(blank)
 panel.refresh()
 
 # ---------------------------------------------------------------------------
+print("The drops library, and Alt+D")
+
+from dropdeck.playlist import DropLibrary
+
+idents = []
+for i in range(4):
+    idents.append(tone(os.path.join(tmp, "ident%d.wav" % i), 0.6, 900 + i * 90))
+
+lib = DropLibrary()
+check("a library starts empty", len(lib) == 0 and lib.pick() is None)
+added = lib.add(idents)
+check("drops go in", len(lib) == 4 and len(added) == 4, len(lib))
+check("adding the same ones again does not double them",
+      not lib.add(idents) and len(lib) == 4, len(lib))
+check("and something that is not audio does not go in at all",
+      not lib.add([os.path.join(album, "cover.jpg")]) and len(lib) == 4)
+check("a whole folder can go in at once",
+      len(DropLibrary().add([album])) == 3)
+
+picks = [lib.pick() for _ in range(40)]
+check("every pick is one of them", all(p in lib.paths for p in picks))
+check("all four come up", len(set(picks)) == 4, len(set(picks)))
+check("and never the same one twice running, which is what makes it sound "
+      "random rather than broken",
+      all(a != b for a, b in zip(picks, picks[1:])))
+
+check("a row names the drop", "ident0" in lib.label(0), lib.label(0))
+lib.paths.append(os.path.join(tmp, "gone.wav"))
+check("and says when one has gone",
+      "file missing" in lib.label(4), lib.label(4))
+check("a missing drop is never picked",
+      all(os.path.exists(lib.pick()) for _ in range(20)))
+check("the library counts what is missing", len(lib.missing) == 1)
+lib.remove(4)
+
+check("one can be taken out", lib.remove(0) is not None and len(lib) == 3)
+check("and the lot cleared", lib.clear() == 3 and len(lib) == 0)
+
+# Through the board, which is where it lives.
+frame.board.playlist.clear()
+panel.clipboard_paths = lambda: [song_a, song_b, song_c]
+panel.paste()
+panel.clipboard_paths = real
+frame.board.drops.clear()
+
+check("Alt+D with an empty library says what to do about it",
+      frame.insert_random_drop() is None
+      and "library" in frame.speaker.last_message.lower(),
+      frame.speaker.last_message)
+
+frame.board.drops.add(idents)
+panel.list.SetSelection(1)
+track = frame.insert_random_drop()
+check("Alt+D puts a drop in", track is not None and track.is_drop, track)
+check("where you were standing",
+      frame.board.playlist[1].is_drop and len(frame.board.playlist) == 4,
+      [t.kind for t in frame.board.playlist])
+check("and it came from the library",
+      track.filepath in frame.board.drops.paths, track.filepath)
+check("it says what went in and where",
+      "put in at 2" in frame.speaker.last_message, frame.speaker.last_message)
+
+names = set()
+for _ in range(8):
+    panel.list.SetSelection(0)
+    got = frame.insert_random_drop()
+    if got:
+        names.add(got.display_name)
+check("pressing it again gives you different ones", len(names) > 1, names)
+
+frame.board.playlist.clear()
+panel.refresh()
+frame.board.playlist.add([song_a, song_b, song_c, song_a])
+count = frame.board.playlist.insert_drops_every(frame.board.drops, 2)
+check("a drop every so many songs can come from the library too",
+      count == 1, count)
+check("in the right place",
+      [t.is_drop for t in frame.board.playlist]
+      == [False, False, True, False, False],
+      [t.kind for t in frame.board.playlist])
+frame.board.playlist.clear()
+frame.board.playlist.add([song_a, song_b, song_c, song_a, song_b, song_c])
+count = frame.board.playlist.insert_drops_every(frame.board.drops, 1)
+chosen = [t.display_name for t in frame.board.playlist if t.is_drop]
+check("and every gap gets its own pick, not the same ident five times",
+      count == 5 and len(set(chosen)) > 1, chosen)
+
+# Adding what you are on to the library, from the row menu.
+frame.board.drops.clear()
+frame.board.playlist.clear()
+frame.board.playlist.add([song_a])
+frame.board.playlist.insert_drop(idents[0], at=1)
+panel.refresh()
+panel.list.SetSelection(1)
+frame.add_selected_to_library()
+check("a drop in the order can be put into the library",
+      len(frame.board.drops) == 1, len(frame.board.drops))
+frame.add_selected_to_library()
+check("and adding it twice says so rather than doubling it",
+      len(frame.board.drops) == 1
+      and "already" in frame.speaker.last_message,
+      frame.speaker.last_message)
+
+# It has to survive a save, or it is only ever one session's worth.
+saved = frame.board.save(os.path.join(tmp, "library.json"))
+back = Board.load(saved)
+check("the library saves with the board", len(back.drops) == 1, len(back.drops))
+check("with the path intact", back.drops[0] == frame.board.drops[0],
+      back.drops[0])
+older = os.path.join(tmp, "nolibrary.json")
+with open(older, "w", encoding="utf-8") as handle:
+    handle.write('{"app": "TG Drop Deck", "slots": []}')
+check("a board written before the library existed opens with an empty one",
+      len(Board.load(older).drops) == 0)
+
+from dropdeck.dialogs import DropsLibraryDialog
+lib_dialog = DropsLibraryDialog(frame, frame.board.drops)
+check("the library dialog names its list for a screen reader",
+      lib_dialog.list.GetName() == "Drops", lib_dialog.list.GetName())
+check("and shows what is in it", lib_dialog.list.GetCount() == 1,
+      lib_dialog.list.GetCount())
+lib_dialog.Destroy()
+
+frame.board.drops.clear()
+frame.board.playlist.clear()
+panel.refresh()
+
+# ---------------------------------------------------------------------------
 print("Relinking, which repairs the board and the running order together")
 
 # Found in the 2.5.0 audit. Board.relink returns Slots AND playlist Tracks -

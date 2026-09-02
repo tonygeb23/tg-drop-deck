@@ -11,6 +11,7 @@ import os
 import wx
 
 from . import constants as C
+from . import feedback
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
@@ -874,6 +875,113 @@ class MicSettingsDialog(wx.Dialog):
         return bool(self.monitor.GetValue())
 
 
+class DropsLibraryDialog(wx.Dialog):
+    """The drops you use over and over, in one place.
+
+    Nothing here plays anything: it is a list you build once so that Alt+D has
+    something to reach for. The list is the whole control, the same way the
+    running order is - a plain list box, read without argument by everything.
+    """
+
+    def __init__(self, parent, library):
+        super().__init__(parent, title="Drops library",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.library = library
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label=(
+            "The idents and stingers you reach for over and over. Once they "
+            "are in here,\n"
+            "Alt+D puts one in the running order at random, wherever you are, "
+            "and never\n"
+            "the same one twice running.")), 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Drops"), 0, wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListBox(self, style=wx.LB_SINGLE)
+        self.list.SetName("Drops")
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.summary = wx.StaticText(self, label="")
+        outer.Add(self.summary, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        add = wx.Button(self, label="&Add drops...")
+        add.SetToolTip("Choose files, or a whole folder of them")
+        add.Bind(wx.EVT_BUTTON, self._on_add)
+        row.Add(add, 0, wx.RIGHT, 6)
+        self.remove = wx.Button(self, label="&Remove")
+        self.remove.SetToolTip("Take this one out of the library")
+        self.remove.Bind(wx.EVT_BUTTON, self._on_remove)
+        row.Add(self.remove, 0, wx.RIGHT, 6)
+        outer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK), 0,
+                  wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+        self.SetSize((560, 420))
+
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self._refresh()
+        self.list.SetFocus()
+
+    def _say(self, text):
+        speaker = getattr(self.GetParent(), "speaker", None)
+        if speaker is not None:
+            speaker.say(text)
+
+    def _refresh(self, keep=None):
+        previous = self.list.GetSelection() if keep is None else keep
+        self.list.Set([self.library.label(i) for i in range(len(self.library))])
+        count = len(self.library)
+        if count:
+            if previous == wx.NOT_FOUND or previous is None or previous >= count:
+                previous = count - 1
+            self.list.SetSelection(max(0, previous))
+        missing = len(self.library.missing)
+        if not count:
+            self.summary.SetLabel(
+                "Nothing in the library yet. Add some, and Alt+D will start "
+                "reaching for them.")
+        else:
+            text = "%d drop%s" % (count, "" if count == 1 else "s")
+            if missing:
+                text += ".  %d file%s missing" % (missing,
+                                                  "" if missing == 1 else "s")
+            self.summary.SetLabel(text)
+        self.remove.Enable(bool(count))
+
+    def _on_add(self, _event):
+        with wx.FileDialog(self, "Add drops to the library",
+                           wildcard=C.AUDIO_WILDCARD,
+                           style=wx.FD_OPEN | wx.FD_MULTIPLE
+                           | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            paths = dialog.GetPaths()
+        added = self.library.add(paths)
+        self._refresh(keep=len(self.library) - len(added) if added else None)
+        if not added:
+            self._say("Those are already in the library")
+        else:
+            self._say("%d added" % len(added))
+
+    def _on_remove(self, _event):
+        index = self.list.GetSelection()
+        if index == wx.NOT_FOUND:
+            return
+        gone = self.library.remove(index)
+        self._refresh(keep=min(index, len(self.library) - 1))
+        if gone:
+            self._say("Removed %s"
+                      % os.path.splitext(os.path.basename(gone))[0])
+
+    def _on_key(self, event):
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_remove(None)
+            return
+        event.Skip()
+
+
 class TrackCrossfadeDialog(wx.Dialog):
     """How long THIS track overlaps the next one.
 
@@ -961,3 +1069,141 @@ def audio_file_dialog(parent, start_dir="", title="Choose a sound"):
         if dialog.ShowModal() != wx.ID_OK:
             return None
         return dialog.GetPath()
+
+
+class FeedbackDialog(wx.Dialog):
+    """Say what happened, pick what kind of thing it is, send it.
+
+    Two controls and a read-back. The read-back is the part that matters: it
+    shows exactly what will leave the machine, because a window that says
+    "diagnostics are attached" and does not say which is asking to be trusted
+    rather than earning it.
+    """
+
+    def __init__(self, parent, frame=None):
+        super().__init__(parent, title="Submit feedback",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = frame
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label=(
+            "Tell us what happened, or what would make this better.\n"
+            "It goes straight to the person who wrote the app.")),
+            0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="What &kind of feedback"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.kind = wx.Choice(self, choices=[label for _key, label
+                                             in feedback.TYPES])
+        self.kind.SetName("What kind of feedback")
+        self.kind.SetSelection(0)
+        self.kind.Bind(wx.EVT_CHOICE, lambda _e: self._refresh())
+        outer.Add(self.kind, 0, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Your message"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.message = wx.TextCtrl(self, style=wx.TE_MULTILINE)
+        self.message.SetName("Your message")
+        self.message.Bind(wx.EVT_TEXT, lambda _e: self._refresh())
+        outer.Add(self.message, 1, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="What will be &sent"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.preview = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
+        self.preview.SetName("What will be sent")
+        outer.Add(self.preview, 1, wx.EXPAND | wx.ALL, 10)
+
+        buttons = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        self.submit = self.FindWindowById(wx.ID_OK)
+        if self.submit is not None:
+            self.submit.SetLabel("&Submit")
+            self.submit.Enable(False)
+        cancel = self.FindWindowById(wx.ID_CANCEL)
+        if cancel is not None:
+            cancel.SetLabel("Cancel")
+        outer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetSize((640, 560))
+        self._refresh()
+        self.kind.SetFocus()
+
+    @property
+    def feedback_type(self):
+        index = self.kind.GetSelection()
+        if index < 0:
+            return feedback.TYPES[0][0]
+        return feedback.TYPES[index][0]
+
+    @property
+    def text(self):
+        return self.message.GetValue().strip()
+
+    def _refresh(self):
+        """Keep the read-back honest as the message is typed."""
+        report = feedback.build(self.feedback_type, self.text, self.frame)
+        self.preview.SetValue(feedback.readable(report))
+        if self.submit is not None:
+            # Nothing to send is not a thing to send. An empty report is
+            # refused by the server anyway, and would sit in the queue for
+            # ever being retried.
+            self.submit.Enable(bool(self.text))
+
+
+class DonateDialog(wx.Dialog):
+    """The occasional word about donating. Never more than a word.
+
+    A read-only box rather than a message box, so the whole thing can be
+    arrowed back through at whatever pace suits - and so a screen reader user
+    gets the same text as everybody else rather than a sentence spoken once.
+    """
+
+    MESSAGE = (
+        "TG Drop Deck is free, and it will carry on being free.\n"
+        "\n"
+        "Donations go into development, server costs, and new products for "
+        "TG Studios users. If you enjoy using Drop Deck and you would like to "
+        "be part of the team, please consider a small contribution of "
+        "whatever size suits you.\n"
+        "\n"
+        "If you would like it to be, your name goes on a public contributors "
+        "list. And if you would rather not, you are a rockstar either way.\n"
+        "\n"
+        "This asks about once a week at most, and never in your first week. "
+        "Help, Donate, is here whenever you want it.")
+
+    def __init__(self, parent, message=None):
+        super().__init__(parent, title="Drop Deck is free",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label="&About donating"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.text = wx.TextCtrl(
+            self, value=message or self.MESSAGE,
+            style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.text.SetName("About donating")
+        outer.Add(self.text, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.never = wx.CheckBox(self, label="Do not ask me about this a&gain")
+        self.never.SetToolTip(
+            "Help, Donate, still opens the page whenever you want it.")
+        outer.Add(self.never, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        donate = wx.Button(self, wx.ID_OK, "&Donate")
+        donate.SetToolTip("Opens the TG Studios donate page in your browser")
+        donate.SetDefault()
+        row.Add(donate, 0, wx.RIGHT, 6)
+        row.Add(wx.Button(self, wx.ID_CANCEL, "&No thank you"), 0)
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetSize((560, 420))
+        self.text.SetFocus()
+        self.text.SetInsertionPoint(0)
+
+    @property
+    def never_again(self):
+        return bool(self.never.GetValue())

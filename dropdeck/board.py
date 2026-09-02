@@ -12,7 +12,7 @@ import sys
 import os
 
 from . import constants as C
-from .playlist import Playlist
+from .playlist import DropLibrary, Playlist
 from .slot import Slot
 
 FORMAT_VERSION = 2
@@ -96,6 +96,8 @@ class Board:
         self.playlist_volume = C.DEFAULT_PLAYLIST_VOLUME
         #: The running order. Saved with the board, because a board IS a show.
         self.playlist = Playlist()
+        #: The drops you reach for over and over. Alt+D takes one at random.
+        self.drops = DropLibrary()
         #: The microphone. Remembered by name, like every other device.
         #: Whether it was ON is deliberately NOT remembered: nothing opens a
         #: microphone except somebody pressing the key for it.
@@ -243,6 +245,7 @@ class Board:
         # The playlist is repaired out of the same walk. Two separate hunts
         # through a music library for the same folder is one hunt too many.
         repaired.extend(self.playlist.relink(index))
+        self.drops.relink(index)
         for slot in self.missing_slots:
             base = os.path.basename(slot.filepath.rstrip("\\/"))
             stem = os.path.splitext(base)[0]
@@ -278,6 +281,7 @@ class Board:
             "mic_output_name": self.mic_output_name,
             "mic_output_hostapi": self.mic_output_hostapi,
             "playlist": self.playlist.to_dict(),
+            "drops": self.drops.to_dict(),
             "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
@@ -366,8 +370,9 @@ class Board:
                 board.bank_devices[bank] = {"name": spec.get("name"),
                                            "hostapi": spec.get("hostapi")}
 
-        board.playlist = Playlist.from_dict(
-            data.get("playlist"), base_dir=os.path.dirname(os.path.abspath(path)))
+        base_dir = os.path.dirname(os.path.abspath(path))
+        board.playlist = Playlist.from_dict(data.get("playlist"), base_dir=base_dir)
+        board.drops = DropLibrary.from_dict(data.get("drops"), base_dir=base_dir)
 
         raw = data.get("slots") or []
         # A board may store paths relative to itself, which is how the shipped
