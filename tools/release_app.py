@@ -64,6 +64,11 @@ NOTES = {
               "read-only box you can read back through, instead of only "
               "speaking it once. It says which program is answering, and it "
               "answers whether or not there is an update."),
+    "2.3.0": ("Music beds no longer fade in. A bed starts exactly where the "
+              "file does, so one cued on its first beat gives you that beat. "
+              "Both bed fades are in Audio settings if you want the old "
+              "behaviour. And a button now tells you what you changed the "
+              "moment you change it, instead of after you tab away."),
 }
 
 

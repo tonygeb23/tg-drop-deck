@@ -106,9 +106,12 @@ FADE_OUT_SFX = 0.05
 #: and Audio settings. These two are only what a board starts life with.
 #:
 #: Brian Hartgen: a music bed that eases in cannot be used on air, because the
-#: first beat of the track is the thing you cued it for. Zero here is a
-#: supported answer and means the file plays exactly as it was recorded.
-FADE_IN_BED = 0.35
+#: first beat of the track is the thing you cued it for. So a bed now starts
+#: flat out by default and the ramp is something you ask for, which is the
+#: right way round for a soundboard - a bed is nearly always cued on its
+#: downbeat. Stopping still fades, because a bed cut dead mid-phrase is a
+#: different and much more obvious mistake.
+FADE_IN_BED = 0.0
 FADE_OUT_BED = 0.60
 #: Anything longer than this is a mix move, not a fade, and the spin controls
 #: in Audio settings stop here.
@@ -138,8 +141,8 @@ BANK 3 — Music Beds (loop by default)
   Alt+Ctrl+1 to 0           Start or stop beds 1 to 10
   Alt+Ctrl+Shift+1 to 0     Start or stop beds 11 to 20
   Right-click               Turn looping off or on for one bed
-  Beds ease in and out by default. Audio settings, Ctrl+P, sets both fades,
-  and zero means the bed starts and stops exactly where the file does.
+  A bed starts exactly where the file does and fades out when you stop it.
+  Audio settings, Ctrl+P, sets both fades in seconds.
 
 BANK 4 — Miscellaneous
   Right-click a button      Assign a sound file and your own hotkey

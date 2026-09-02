@@ -54,9 +54,9 @@ Twenty slots each.
 
 1. **Sound effects** — stings, hits, transitions. Fire and forget.
 2. **Dialog drops** — your own clips. Catchphrases, station IDs, callers.
-3. **Music beds** — loop by default, and ease in and out rather than snapping.
-   Set both fades in `Ctrl+P`, or set them to zero and a bed starts and stops
-   exactly where the file does.
+3. **Music beds** — loop by default. A bed starts exactly where the file does,
+   so one cued on its first beat gives you that beat, and fades out when you
+   stop it rather than cutting dead. Both fades are set in `Ctrl+P`.
 4. **Miscellaneous** — no fixed keys. Right-click a button to give it a hotkey
    of your own.
 

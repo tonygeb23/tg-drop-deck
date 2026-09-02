@@ -72,6 +72,13 @@ board = Board()
 check("a new board carries the shipped fades",
       (board.bed_fade_in, board.bed_fade_out) == (C.FADE_IN_BED, C.FADE_OUT_BED),
       (board.bed_fade_in, board.bed_fade_out))
+# Tony's call, 2 September: out of the box a bed starts where the file starts.
+# A soundboard bed is nearly always cued on its downbeat, so the ramp is the
+# thing you ask for rather than the thing you have to turn off.
+check("and out of the box that means no fade in at all",
+      C.FADE_IN_BED == 0.0, C.FADE_IN_BED)
+check("but stopping a bed still fades, which is a different mistake",
+      C.FADE_OUT_BED > 0.0, C.FADE_OUT_BED)
 
 # Zero is the whole point of the feature and is exactly the value a careless
 # `or` in save or load would swallow, so it is what the round trip uses.
@@ -102,13 +109,13 @@ check("a board written before this release gets the old behaviour",
 
 junk = os.path.join(tmp, "junk.json")
 with open(junk, "w", encoding="utf-8") as handle:
-    handle.write('{"app": "TG Drop Deck", "bed_fade_in": "soon",'
-                 ' "bed_fade_out": 900, "slots": []}')
+    handle.write('{"app": "TG Drop Deck", "bed_fade_in": 900,'
+                 ' "bed_fade_out": "soon", "slots": []}')
 rescued = Board.load(junk)
-check("nonsense in the file does not stop the board opening",
-      rescued.bed_fade_in == C.FADE_IN_BED, rescued.bed_fade_in)
-check("and an absurd fade is clamped rather than honoured",
-      rescued.bed_fade_out == C.MAX_BED_FADE, rescued.bed_fade_out)
+check("an absurd fade is clamped rather than honoured",
+      rescued.bed_fade_in == C.MAX_BED_FADE, rescued.bed_fade_in)
+check("and nonsense falls back instead of stopping the board opening",
+      rescued.bed_fade_out == C.FADE_OUT_BED, rescued.bed_fade_out)
 
 # ---------------------------------------------------------------------------
 print("What the mixer does with it")

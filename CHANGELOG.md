@@ -5,19 +5,21 @@
 Both of these came from Brian Hartgen, who is customising a board heavily for
 his own show.
 
-### Music beds can start exactly where the file does
+### Music beds now start exactly where the file does
 
 A bed used to ease in over about a third of a second. If you cue a bed on its
 first beat, that is the beat it eats — and there was no way to ask for anything
 else, because the fade was a fixed number in the code.
 
-**Audio settings, `Ctrl+P`, now has both bed fades in seconds.** Set the fade in
-to zero and a bed plays out as recorded, at full level on its first sample. The
-fade out is separate, so you can have an instant start and still let a bed fall
-away when you stop it. Sounds and drops are untouched — they have never faded.
+**Beds no longer fade in at all by default.** A bed is at full level on its
+first sample and plays out as recorded. Stopping one still fades, over about
+six tenths of a second, because a bed cut dead mid-phrase is a different and
+much more obvious mistake.
 
-The fades travel with the board, so a board built for one show keeps its own.
-An existing board keeps exactly what it had.
+**Audio settings, `Ctrl+P`, has both fades in seconds** if you want the old
+behaviour, or something between. They travel with the board, so a board built
+for one show keeps its own. Sounds and drops are untouched — they have never
+faded.
 
 ### A button tells you the truth the moment you change it
 
