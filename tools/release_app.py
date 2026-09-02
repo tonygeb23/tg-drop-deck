@@ -75,6 +75,13 @@ NOTES = {
               "in the Find dialog plays a match without closing it. And the "
               "announcement when the app opens works again, which includes "
               "telling you when files are missing."),
+    "2.5.0": ("A playlist view. Paste songs in, and each one hands over to "
+              "the next before it ends. Drops go between them, and a drops "
+              "library on Alt+D puts one in at random. Ctrl+Shift+P and "
+              "Ctrl+Shift+S move between the playlist and the soundboard. "
+              "Ctrl+M opens a microphone, which ducks the music while it is "
+              "on. Save board as has moved to F12. Help now has Submit "
+              "feedback and Donate."),
 }
 
 

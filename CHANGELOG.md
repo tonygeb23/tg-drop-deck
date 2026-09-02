@@ -1,5 +1,85 @@
 # Changelog
 
+## 2.5.0 — 2 September 2026
+
+The biggest release since 2.0.0, and most of it is new ground rather than
+fixes. Treat it as experimental: it has had a lot of tests and not a lot of
+shows.
+
+### A playlist, next to the soundboard
+
+`Ctrl+Shift+P` goes to it, `Ctrl+Shift+S` comes back, and `Ctrl+Alt+Tab` swaps.
+Paste songs in with **`Ctrl+V`** — as many at once as you like, straight from
+File Explorer — or drag them in.
+
+**Each song hands over to the next before it ends.** That overlap is the
+crossfade and that handover point is the song's cue. The crossfade box sits
+under the running order, and a single track can be given one of its own from
+its right-click menu.
+
+**Every track has a tick.** Unticked stays in the list, keeps its place, and is
+stepped over — "play this, this and this, not that". `Enter` plays from the one
+you are on, `Delete` takes it out, `Alt+Up` and `Alt+Down` move it, and the
+Applications key opens a menu with all of it plus **Segue to this now**, which
+crosses to a track at the crossfade length instead of waiting for the cue.
+
+The playlist has its own fader on **`F7`** and **`F8`**, and it ducks under
+sounds, drops and the microphone.
+
+### Drops, and a drops library
+
+Put a drop between two songs, or after every so many songs. Better: put the
+idents you use over and over into the **drops library**, and **`Alt+D`** drops
+one in at random wherever you are standing — never the same one twice running.
+
+### A microphone
+
+**`Ctrl+M`** opens and closes it. **`Ctrl+Shift+M`** is where you choose which
+microphone, how much gain, which output you hear yourself on, and whether you
+hear yourself at all.
+
+**While the microphone is open, the beds and the playlist duck out of the way**,
+and they come back the moment you close it. That happens because it is open,
+not because you are talking — a gate that opens on your voice clips the first
+word of every sentence.
+
+Hearing yourself is off until you turn it on: on headphones it is how you know
+you are live, on speakers it is a feedback loop. It can go to an output of its
+own, so monitoring sits in your headphones and the show does not. Nothing opens
+your microphone but you pressing `Ctrl+M`.
+
+### Telling us things
+
+**Help → Submit feedback.** Pick what kind of thing it is, write a sentence,
+send. It shows you exactly what goes with it — the version, and your audio and
+speech settings — and **never a file name, a sound name, a bank name or
+anything from your running order**. If you are offline it is saved and goes out
+next time; nothing is lost.
+
+**Help → Donate.** Drop Deck is free and it is staying free. The app mentions
+donating about once a week at the very most, never in your first week, and
+there is a "do not ask me again" on that window.
+
+### Save board as is now F12
+
+`Ctrl+Shift+S` became "go to the soundboard" in this release, and it turned out
+to beat the menu — so *Save board as* had quietly stopped working. It is
+**`F12`** now, which is what Save As is in Word and Excel. Nothing else moved.
+
+### Fixed
+
+- The relink tool crashed the moment it repaired a track in the playlist.
+- Dragging files onto the running order did nothing, because the drop target
+  was on the panel the list covers.
+- A track that would not decode was retried twenty times a second, forever, in
+  silence. It now stops and says which one it was.
+- Six pairs of menu items shared a keyboard letter, so Alt plus that letter
+  cycled instead of choosing. Two of those pairs had been there for releases.
+- Renaming a bank or a sound now hands you the old name selected, the way every
+  other Windows rename does, and applies the change before the dialog closes so
+  a screen reader cannot read you the old name on the way out. *Brian Hartgen.*
+
+
 ## 2.4.0 — 2 September 2026
 
 Three requests and one bug that had been hiding since 2.1.2.

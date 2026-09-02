@@ -65,6 +65,28 @@ else: bank 3 is still the looping bank and bank 4 still takes your own hotkeys.
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off. A bed
 toggles: the same key starts it and stops it.
 
+## A playlist, next to the soundboard
+
+`Ctrl+Shift+P` goes to it and `Ctrl+Shift+S` comes back. Paste songs in with
+`Ctrl+V` — a whole album at once if you like — and each one hands over to the
+next before it ends. That overlap is the crossfade, and it is a box under the
+running order rather than a setting you have to go looking for.
+
+Every track has a tick: unticked stays in the list and is skipped. Drops go
+between songs, one at a time or after every so many, and a **drops library** on
+`Alt+D` puts one in at random.
+
+The playlist has its own fader on `F7` and `F8`.
+
+## A microphone
+
+`Ctrl+M` opens and closes it; `Ctrl+Shift+M` sets it up. While it is open the
+beds and the playlist duck out of the way, and they come back when you close
+it. You can hear yourself through an output of its own, so monitoring sits in
+your headphones and the show does not.
+
+Nothing opens your microphone but you pressing `Ctrl+M`.
+
 ## A folder on one key
 
 **Sounds → Assign a folder** points a slot at a whole folder instead of one
