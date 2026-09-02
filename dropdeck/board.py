@@ -66,8 +66,19 @@ class Board:
     """Everything the user can save, and the rules for loading it back."""
 
     def __init__(self):
+        #: Bank number -> the name the user gave it. Absent means the shipped
+        #: name. Shared by reference with every Slot, so renaming a bank is one
+        #: assignment and eighty labels follow - see Slot.bank_names.
+        #:
+        #: David Goldfield: a board you built yourself is not "Sound Effects"
+        #: and "Dialog Drops", it is "Movie Clips" and "Sirens and Alarms".
+        #: Renaming changes the name and nothing else - bank three is still the
+        #: looping bank and bank four still takes custom hotkeys, because those
+        #: are what the keys do, not what the tab says.
+        self.bank_names = {}
         self.slots = [Slot(index=i, loop=(i // C.SLOTS_PER_BANK + 1) == C.LOOPING_BANK)
                       for i in range(C.TOTAL_SLOTS)]
+        self._adopt_slots()
         self.sfx_volume = C.DEFAULT_SFX_VOLUME
         self.bed_volume = C.DEFAULT_BED_VOLUME
         self.ducking = True
@@ -104,6 +115,43 @@ class Board:
         self.dirty = False
 
     # ------------------------------------------------------------ accessors --
+    def _adopt_slots(self):
+        """Hand every slot this board's bank names, by reference."""
+        for slot in self.slots:
+            slot.bank_names = self.bank_names
+
+    def bank_name(self, bank):
+        """What bank ``bank`` is called: the user's name, or the shipped one."""
+        return self.bank_names.get(bank) or C.BANK_TITLES[bank]
+
+    def bank_short_name(self, bank):
+        """The short form, for lists that span every bank."""
+        return self.bank_names.get(bank) or C.BANK_SHORT[bank]
+
+    def is_bank_renamed(self, bank):
+        return bool(self.bank_names.get(bank))
+
+    def rename_bank(self, bank, name):
+        """Name a bank, or reset it with an empty name. Returns the name in use.
+
+        The mapping is mutated rather than replaced, because every slot holds a
+        reference to this one dict.
+        """
+        name = (name or "").strip()
+        if name and name != C.BANK_TITLES[bank]:
+            self.bank_names[bank] = name
+        else:
+            self.bank_names.pop(bank, None)
+        self.dirty = True
+        return self.bank_name(bank)
+
+    def scan_folders(self, force=False):
+        """Count what is in every folder slot. Returns the slots that hold one."""
+        folders = [s for s in self.slots if s.is_folder]
+        for slot in folders:
+            slot.scan_folder(force=force)
+        return folders
+
     def __getitem__(self, index):
         return self.slots[index]
 
@@ -118,6 +166,10 @@ class Board:
     @property
     def missing_slots(self):
         return [s for s in self.slots if s.is_missing]
+
+    @property
+    def folder_slots(self):
+        return [s for s in self.slots if s.is_folder]
 
     def search(self, query):
         """Slots whose name or filename contains ``query``, in board order."""
@@ -148,21 +200,37 @@ class Board:
         list of slots that were repaired.
         """
         index = {}
-        walker = os.walk(folder) if recursive else [(folder, [], os.listdir(folder))]
-        for root, _dirs, files in walker:
+        # Folders are indexed separately from files. A slot that held a folder
+        # must be repaired with a folder: pointing it at a file that happens to
+        # share the name would silently turn a random-pick slot into a one-shot.
+        folders = {}
+        walker = os.walk(folder) if recursive else [
+            (folder, os.listdir(folder), os.listdir(folder))]
+        for root, dirs, files in walker:
+            for name in dirs:
+                full = os.path.join(root, name)
+                if os.path.isdir(full):
+                    folders.setdefault(name.lower(), full)
             for name in files:
-                index.setdefault(name.lower(), os.path.join(root, name))
+                full = os.path.join(root, name)
+                if not os.path.isfile(full):
+                    continue
+                index.setdefault(name.lower(), full)
                 stem, ext = os.path.splitext(name)
                 if ext.lower() in C.AUDIO_EXTENSIONS:
-                    index.setdefault(stem.lower(), os.path.join(root, name))
+                    index.setdefault(stem.lower(), full)
 
         repaired = []
         for slot in self.missing_slots:
-            base = os.path.basename(slot.filepath)
+            base = os.path.basename(slot.filepath.rstrip("\\/"))
             stem = os.path.splitext(base)[0]
-            found = index.get(base.lower()) or index.get(stem.lower())
+            if slot.folder_count is not None:
+                found = folders.get(base.lower())
+            else:
+                found = index.get(base.lower()) or index.get(stem.lower())
             if found:
                 slot.filepath = found
+                slot.scan_folder(force=True)
                 repaired.append(slot)
         if repaired:
             self.dirty = True
@@ -179,6 +247,7 @@ class Board:
             "duck_db": self.duck_db,
             "bed_fade_in": self.bed_fade_in,
             "bed_fade_out": self.bed_fade_out,
+            "bank_names": {str(k): v for k, v in self.bank_names.items()},
             "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
@@ -214,6 +283,18 @@ class Board:
         board.duck_db = float(data.get("duck_db", C.DEFAULT_DUCK_DB))
         board.bed_fade_in = _fade(data.get("bed_fade_in"), C.FADE_IN_BED)
         board.bed_fade_out = _fade(data.get("bed_fade_out"), C.FADE_OUT_BED)
+
+        # Bank names. Keys arrive as strings out of JSON and are ints
+        # everywhere else; anything unparseable or out of range is dropped
+        # rather than crashing a load, because a board that will not open is
+        # worse than a tab with its original name on it.
+        for key, value in (data.get("bank_names") or {}).items():
+            try:
+                bank = int(key)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= bank <= C.BANK_COUNT and isinstance(value, str) and value.strip():
+                board.bank_names[bank] = value.strip()[:C.MAX_BANK_NAME]
         board.global_hotkeys_on = bool(data.get("global_hotkeys_on", False))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.device_name = data.get("device_name")
@@ -252,6 +333,7 @@ class Board:
             if slot.filepath and not os.path.isabs(slot.filepath):
                 slot.filepath = os.path.normpath(os.path.join(base, slot.filepath))
             board.slots[index] = slot
+        board._adopt_slots()
         board.dirty = False
         return board
 

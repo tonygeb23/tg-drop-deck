@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -91,6 +91,11 @@ SPEECH_LABELS = (
 )
 DEFAULT_SPEECH_LEVEL = SPEECH_ALL
 
+#: A bank name has to fit a notebook tab and be worth hearing read out.
+#: Long enough for "Sirens and Alarms", short enough that a tab strip of four
+#: of them still shows which one you are on.
+MAX_BANK_NAME = 32
+
 VOLUME_STEP = 0.05
 DEFAULT_SFX_VOLUME = 0.75
 DEFAULT_BED_VOLUME = 0.50
@@ -129,6 +134,9 @@ BLOCKSIZE = 512
 # ------------------------------------------------------------------- keys ---
 KEYBOARD_HELP = f"""{APP_NAME} — keyboard shortcuts
 
+The four bank names below are what the app ships with. Rename any of them
+with Ctrl+F2 — the keys, the looping and the hotkeys are unaffected.
+
 BANK 1 — Sound Effects
   1 to 0                    Play sounds 1 to 10
   Shift+1 to 0              Play sounds 11 to 20
@@ -154,12 +162,28 @@ PER BUTTON
   Applications key          Context menu: play, rename, properties, clear
   Delete                    Clear the focused slot
 
+BANK NAMES
+  Ctrl+F2                   Rename the bank you are looking at
+  Banks menu                Rename, or put the shipped name back
+  A name is yours and saves with the board. Renaming bank 3 does not stop it
+  being the looping bank, and renaming bank 4 does not stop it taking your
+  own hotkeys — those are what the keys do, not what the tab says.
+
+A FOLDER INSTEAD OF A FILE
+  Sounds menu, or right-click a button, then Assign a folder.
+  The slot plays a different sound from that folder every time you press it,
+  never the same one twice running. Drop another file into the folder and it
+  joins in; the app rescans when the folder changes.
+  Good for the six jingles that all mean "down the chart".
+
 VOLUME — two independent masters
   F3 / F4                   Sound volume down / up (banks 1, 2 and 4)
   F5 / F6                   Bed volume down / up (bank 3)
 
 GLOBAL
   Ctrl+F                    Search every bank by name (Ctrl+E also works)
+                            Alt+P in there plays a match without closing it,
+                            so you can try each one. Enter jumps and closes.
   Ctrl+D                    Ducking on or off
   Ctrl+L                    What is playing right now
   Ctrl+G                    Global hotkeys on or off

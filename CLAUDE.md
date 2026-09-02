@@ -21,6 +21,22 @@ Inherited from the other TG Studios apps, and not negotiable here either:
 
 And specific to this one:
 
+- **The bank NAMES are the user's; the bank BEHAVIOUR is not.**
+  `board.bank_names` is a `{bank: name}` dict shared by reference with every
+  `Slot`, which is why renaming a bank is one assignment and eighty labels
+  follow. Renaming must stay purely cosmetic: bank 3 is the looping bank and
+  bank 4 takes custom hotkeys because of `C.LOOPING_BANK` and `C.BANK_MISC`,
+  never because of what the tab says. `_set_bank_name` says so out loud when
+  you rename either of them, and `tests/test_feedback_2_4.py` asserts it.
+  David Goldfield asked for this; do not let a later feature key off the name.
+- **A slot may hold a folder instead of a file**, and then plays a random one
+  of its sounds per press — Brian Hartgen's chart-countdown case. `is_folder`
+  is `os.path.isdir(filepath)`, so there is no second kind of slot to keep in
+  sync. Two rules: **the scan never happens on the trigger path** (the cache
+  warmer and the assign dialog do it; a press uses the last scan), and
+  **`pick_file` never returns the same file twice running** when there is
+  anything else to pick, because that is the difference between random and
+  broken.
 - **The digit map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
   `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty. It is muscle
   memory built over years. A new feature gets a new key; it never takes one
@@ -87,7 +103,7 @@ And specific to this one:
 ```
 dropdeck/
   constants.py   banks, hotkey labels, fades, help text — one source of truth
-  slot.py        one button's state, and how it describes itself out loud
+  slot.py        one button's state, how it describes itself, folder picking
   engine.py      voices: memory playback, disk streaming, gain envelopes
   mixer.py       output streams, per-bank routing, ducking, the two masters
   board.py       eighty slots on disk, legacy import, relinking
@@ -107,8 +123,38 @@ tools/
 why `tests/test_engine.py` can render the entire mixer and inspect the samples
 with no sound card present.
 
+## Where this is going
+
+Tony's direction, 2 September 2026, deliberately **slow and steady** — none of
+it is scheduled and none of it displaces a listener request:
+
+**Drop Deck should eventually handle live streaming**, taking influence from
+Station Playlist rather than copying it:
+
+- an **encoder**, so the board can feed a live stream directly;
+- a **microphone input**: an input device picker beside the existing output
+  one, with gain, and the fade options the beds already have;
+- which means the mixer grows a capture side. `MixerGroup` already holds
+  several output `Mixer`s and a shared `DuckBus`; an input is a new kind of
+  source into the same sum, and ducking a bed under a live mic is the same
+  mechanism as ducking it under a drop.
+
+The order to do it in is the order that keeps a working app at every step:
+input device and monitoring first, then gain and fades, then the encoder.
+Nothing here justifies breaking the frozen digit map or the "nothing between a
+keypress and a sound" rule, both of which get harder, not easier, with a live
+stream attached.
+
 ## Things that will bite
 
+- **A timer swallows whatever its callback raises.** `_announce_startup` runs
+  inside a `wx.CallLater` and asked a `MixerGroup` for a `stream` attribute it
+  has never had. From 2.1.2 to 2.3.0 that raised on every single launch, so the
+  app said nothing at startup at all — including "3 files missing" and "audio
+  could not start" — and nothing anywhere reported it. It is `is_running` now,
+  answered by both `Mixer` and `MixerGroup`, and `_announce_startup` wraps
+  `_startup_line` so a future failure lands in the status bar instead of
+  vanishing. **Anything you put in a timer callback needs the same treatment.**
 - **A wx.CallAfter with no wx.App raises**, and inside the hotkey listener
   thread that killed the thread *before it reached the message loop* — leaving
   every combination registered with Windows, firing nothing, and unavailable to

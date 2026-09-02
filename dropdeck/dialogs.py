@@ -230,18 +230,23 @@ class AssignHotkeyDialog(wx.Dialog):
 class SearchDialog(wx.Dialog):
     """Type a few letters, find the sound, jump to it or play it."""
 
-    def __init__(self, parent, board, playing=()):
+    def __init__(self, parent, board, playing=(), on_play=None):
         super().__init__(parent, title="Search sounds",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board = board
         self.playing = set(playing)
         self.chosen = None
+        #: Kept as an attribute because callers used to read it. Nothing sets
+        #: it True any more: playing happens through on_play, in place.
         self.play_now = False
+        #: Called with a slot to play it without closing this dialog.
+        self._on_play_slot = on_play
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label=(
             "Type to narrow the list. Down arrow moves into the results. "
-            "Enter jumps to the sound, Alt+P plays it.")), 0, wx.ALL, 10)
+            "Alt+P plays the one you are on and leaves this open, so you can "
+            "try each match. Enter jumps to it and closes.")), 0, wx.ALL, 10)
 
         label = wx.StaticText(self, label="&Search")
         outer.Add(label, 0, wx.LEFT | wx.RIGHT, 10)
@@ -314,15 +319,34 @@ class SearchDialog(wx.Dialog):
             return
         event.Skip()
 
-    def _on_play(self, _event):
-        self._accept(True)
-
-    def _accept(self, play_now):
+    def _selected(self):
         index = self.results.GetSelection()
         if index == wx.NOT_FOUND or not self._matches:
+            return None
+        return self._matches[index]
+
+    def _on_play(self, _event):
+        """Play the highlighted match and stay put.
+
+        The list is deliberately NOT relabelled afterwards. Its items carry the
+        word "playing", and rewriting an item under a screen reader restarts
+        the announcement on the row the user is standing on - the same trap as
+        a pad's label. You can hear the sound; that is the feedback.
+        """
+        slot = self._selected()
+        if slot is None or self._on_play_slot is None:
             return
-        self.chosen = self._matches[index]
-        self.play_now = play_now
+        self._on_play_slot(slot)
+        # Focus never left, but say so anyway: nothing visible changed, and a
+        # button that appears to do nothing is the report this came from.
+        self.results.SetFocus()
+
+    def _accept(self, play_now=False):
+        slot = self._selected()
+        if slot is None:
+            return
+        self.chosen = slot
+        self.play_now = bool(play_now)
         self.EndModal(wx.ID_OK)
 
 
@@ -445,6 +469,10 @@ class SlotPropertiesDialog(wx.Dialog):
         text = self.slot.filepath
         if self.slot.is_missing:
             return text + "   (missing)"
+        if self.slot.is_folder:
+            n = self.slot.folder_count or 0
+            return text + "   (folder, %s, one at random each press)" % (
+                "1 sound" if n == 1 else "%d sounds" % n)
         duration = format_duration(self.slot.duration)
         return text + ("   (%s)" % duration if duration else "")
 
@@ -527,7 +555,7 @@ class SettingsDialog(wx.Dialog):
         bank_grid = wx.FlexGridSizer(C.BANK_COUNT, 2, 6, 10)
         bank_grid.AddGrowableCol(1, 1)
         for bank in range(1, C.BANK_COUNT + 1):
-            title = C.BANK_TITLES[bank]
+            title = board.bank_name(bank)
             label = wx.StaticText(self, label=f"{title}")
             choice = wx.Choice(self, choices=["Main output"] + self.choices[1:])
             # Named for the screen reader, because four identical unlabelled
@@ -672,10 +700,7 @@ class SettingsDialog(wx.Dialog):
                 f"at {self.mixer.samplerate} hertz.")
 
     def _audio_running(self):
-        mixers = getattr(self.mixer, "mixers", None)
-        if mixers is None:
-            return self.mixer.stream is not None
-        return any(m.stream is not None for m in mixers)
+        return bool(getattr(self.mixer, "is_running", False))
 
     def _current_selection(self):
         if not self.board.device_name:

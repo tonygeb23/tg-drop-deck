@@ -24,7 +24,7 @@ from .dialogs import (AssignHotkeyDialog, SearchDialog, SettingsDialog,
 from .engine import probe
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
-from .slot import format_duration
+from .slot import Slot, format_duration
 from .speech import Speaker, percent
 
 ID_SLOT_BASE = wx.ID_HIGHEST + 500
@@ -53,6 +53,9 @@ ID_GLOBAL_HOTKEY = wx.ID_HIGHEST + 21
 ID_GLOBAL_TOGGLE = wx.ID_HIGHEST + 22
 ID_CHECK_UPDATES = wx.ID_HIGHEST + 23
 ID_PROPERTIES = wx.ID_HIGHEST + 24
+ID_RENAME_BANK = wx.ID_HIGHEST + 25
+ID_RESET_BANK = wx.ID_HIGHEST + 26
+ID_ASSIGN_FOLDER = wx.ID_HIGHEST + 27
 
 #: Which slot each fixed hotkey fires, as (modifiers, key_code, slot_index).
 def fixed_accelerators():
@@ -454,9 +457,17 @@ class DropDeckFrame(wx.Frame):
         """
         import threading
 
+        # Folder slots are counted here rather than on the trigger path. The
+        # scan is a listdir, which is fast, but "fast" is not the standard
+        # between a keypress and a sound.
+        folders = self.board.scan_folders()
         paths = [s.filepath for s in self.board.slots
-                 if s.filepath and not s.is_missing
+                 if s.filepath and not s.is_missing and not s.is_folder
                  and (s.duration or 0) <= C.PRELOAD_SECONDS]
+        for slot in folders:
+            paths.extend(slot.folder_files)
+        if folders:
+            wx.CallAfter(self._folders_counted, folders)
         if not paths:
             return
 
@@ -541,6 +552,16 @@ class DropDeckFrame(wx.Frame):
         return devices
 
     def _announce_startup(self):
+        # Wrapped, because this runs inside a wx.CallLater: anything raised
+        # here is swallowed by the timer and the user simply never hears the
+        # line. That is exactly how the MixerGroup.stream bug survived three
+        # releases. A failure to speak must not also be a failure to notice.
+        try:
+            self._startup_line()
+        except Exception as exc:                        # pragma: no cover
+            self.status.SetStatusText("Startup announcement failed: %s" % exc, 1)
+
+    def _startup_line(self):
         bits = [f"{C.APP_NAME} ready"]
         if self._loaded_demo:
             bits.append(f"demo pack loaded, {self.board.assigned_count} sounds "
@@ -550,19 +571,22 @@ class DropDeckFrame(wx.Frame):
         missing = len(self.board.missing_slots)
         if missing:
             bits.append(f"{missing} files missing. Use File, relink missing sounds")
-        if self.mixer.stream is None:
+        if not self.mixer.is_running:
             bits.append(f"Audio could not start. {self.mixer.last_error or ''}")
         # "40 sounds loaded" is a pleasantry. "3 files missing" and "audio
         # could not start" are not, so the same line changes channel when it
         # is carrying one of them.
-        wrong = bool(missing) or self.mixer.stream is None
+        wrong = bool(missing) or not self.mixer.is_running
         (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     # ------------------------------------------------------------------ ui ---
     def _tab_title(self, bank):
         """Nothing on the tab strip said which banks hold anything."""
         n = sum(1 for slot in self.board.bank_slots(bank) if slot.is_assigned)
-        return "%d. %s (%d)" % (bank, C.BANK_TITLES[bank], n)
+        # The number stays whatever the tab is called. It is which Ctrl+Tab
+        # position you are on and which modifier fires it, and renaming a bank
+        # does not move either of those.
+        return "%d. %s (%d)" % (bank, self.board.bank_name(bank), n)
 
     def _on_bank_changed(self, event):
         bank = event.GetSelection() + 1
@@ -573,8 +597,11 @@ class DropDeckFrame(wx.Frame):
         # and still in F1, so nothing has been taken away.
         if bank in C.BANK_TITLES and bank not in self._hinted_banks:
             self._hinted_banks.add(bank)
+            # The hint describes what the keys do, which renaming does not
+            # change, so it is the shipped text either way - said after the
+            # user's own name for the bank rather than instead of it.
             self.announce_help("%s. %s"
-                               % (C.BANK_TITLES[bank], C.BANK_HINTS[bank]))
+                               % (self.board.bank_name(bank), C.BANK_HINTS[bank]))
         event.Skip()
 
     def _refresh_tab_titles(self):
@@ -661,7 +688,19 @@ class DropDeckFrame(wx.Frame):
         self.global_item = sounds.AppendCheckItem(
             ID_GLOBAL_TOGGLE, "&Global hotkeys\tCtrl+G",
             "Let assigned hotkeys fire this board from any program")
+        sounds.Insert(1, ID_ASSIGN_FOLDER, "Assign a &folder...",
+                      "Play a different sound from this folder every press")
         bar.Append(sounds, "&Sounds")
+
+        # Banks get a menu of their own. Renaming one is not a thing you do to
+        # a sound, and burying it in the Sounds menu would put it where nobody
+        # would look for it.
+        banks = wx.Menu()
+        banks.Append(ID_RENAME_BANK, "Re&name this bank...\tCtrl+F2",
+                     "Call this bank whatever your board needs it to be called")
+        banks.Append(ID_RESET_BANK, "&Reset this bank's name",
+                     "Put the shipped name back")
+        bar.Append(banks, "&Banks")
 
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
@@ -684,6 +723,10 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_settings, id=ID_SETTINGS)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("assign"), id=ID_ASSIGN)
+        self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("folder"),
+                  id=ID_ASSIGN_FOLDER)
+        self.Bind(wx.EVT_MENU, self._on_rename_bank, id=ID_RENAME_BANK)
+        self.Bind(wx.EVT_MENU, self._on_reset_bank_name, id=ID_RESET_BANK)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("rename"), id=ID_RENAME)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("trim"), id=ID_TRIM)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("hotkey"), id=ID_HOTKEY)
@@ -715,6 +758,9 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F4, ID_VOL_SFX_UP),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F5, ID_VOL_BED_DOWN),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F6, ID_VOL_BED_UP),
+            # Ctrl+F2 renames the bank, next to the F2 that renames a sound.
+            # A new key, not one taken off the frozen digit map.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_F2, ID_RENAME_BANK),
             # Ctrl+G is a new key, not one taken from the frozen map.
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("G"), ID_GLOBAL_TOGGLE),
             # Ctrl+F is the standard find key and is what the menu advertises.
@@ -981,9 +1027,21 @@ class DropDeckFrame(wx.Frame):
             self.assign_sound(slot)
             return
         if slot.is_missing:
-            self.announce(f"{slot.display_name}, file missing. "
-                          "Use File, relink missing sounds")
+            self.announce(f"{slot.display_name}, "
+                          f"{'folder' if slot.folder_count is not None else 'file'}"
+                          " missing. Use File, relink missing sounds")
             return
+
+        # A folder slot picks one of its files. The pick uses the last scan,
+        # not a fresh listdir: nothing goes between a keypress and a sound.
+        path = slot.playable_path()
+        if path is None:
+            self.announce(f"{slot.display_name} is an empty folder. "
+                          "Put some sounds in it, or assign a file instead")
+            return
+        # A file whose duration we know is a file we can decode instantly. A
+        # folder's pick was measured by the warmer, not stored on the slot.
+        duration = None if slot.is_folder else slot.duration
 
         if slot.is_bed:
             if self.mixer.is_playing(index):
@@ -991,9 +1049,9 @@ class DropDeckFrame(wx.Frame):
                 self.announce_playback(f"Stopped bed, {slot.display_name}")
                 self._sync_button(slot, playing=False)
                 return
-            voice = self.mixer.play(index, slot.filepath, is_bed=True,
+            voice = self.mixer.play(index, path, is_bed=True,
                                    loop=slot.loop, trim_db=slot.trim_db,
-                                   name=slot.display_name, duration=slot.duration)
+                                   name=slot.display_name, duration=duration)
             if voice is None:
                 self.announce(f"Could not play {slot.display_name}")
                 return
@@ -1002,11 +1060,17 @@ class DropDeckFrame(wx.Frame):
             self._sync_button(slot, playing=True)
             return
 
-        voice = self.mixer.play(index, slot.filepath, is_bed=False, loop=False,
+        voice = self.mixer.play(index, path, is_bed=False, loop=False,
                                 trim_db=slot.trim_db, name=slot.display_name,
-                                duration=slot.duration)
+                                duration=duration)
         if voice is None:
             self.announce(f"Could not play {slot.display_name}")
+            return
+        if slot.is_folder:
+            # Which one you got. The whole feature is that you did not choose,
+            # so the app has to say what it chose for you.
+            self.announce_playback(
+                f"{slot.display_name}, {os.path.splitext(os.path.basename(path))[0]}")
             return
         length = format_duration(slot.duration)
         self.announce_playback(
@@ -1075,6 +1139,7 @@ class DropDeckFrame(wx.Frame):
         {"assign": self.assign_sound, "rename": self.rename_slot,
          "trim": self.trim_slot, "hotkey": self.assign_hotkey,
          "loop": self.toggle_loop, "clear": self.clear_slot,
+         "folder": self.assign_folder,
          "properties": self.slot_properties}[action](slot)
 
     def assign_sound(self, slot):
@@ -1084,6 +1149,60 @@ class DropDeckFrame(wx.Frame):
             self.announce_help("Nothing chosen")
             return
         self._apply_file(slot, path)
+
+    def assign_folder(self, slot):
+        """Point a slot at a folder, so every press plays a different sound.
+
+        Brian Hartgen's chart-countdown case: half a dozen "down the chart"
+        jingles, one keystroke, and you do not care which one you get.
+        """
+        start = slot.filepath if slot.is_folder else self.board.last_sound_dir
+        with wx.DirDialog(self, "Choose a folder of sounds for "
+                          f"{self.board.bank_short_name(slot.bank)} {slot.number}",
+                          defaultPath=start or "",
+                          style=wx.DD_DIR_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing chosen")
+                return
+            path = dialog.GetPath()
+        self._apply_folder(slot, path)
+
+    def _apply_folder(self, slot, path):
+        # Counted here, in a dialog, rather than on the trigger path. An empty
+        # folder is refused now instead of being a key that does nothing later.
+        probe_slot = Slot(index=slot.index, filepath=path)
+        count = probe_slot.scan_folder(force=True)
+        if not count:
+            wx.MessageBox(
+                "There are no sounds in that folder.\n\n%s\n\n"
+                "It needs at least one %s file." % (
+                    path, ", ".join(e.lstrip(".") for e in C.AUDIO_EXTENSIONS)),
+                "Nothing to play", wx.OK | wx.ICON_ERROR, self)
+            self.announce("That folder has no sounds in it")
+            return
+        was_folder = slot.is_folder
+        slot.filepath = path
+        slot.duration = None
+        slot.folder_count = count
+        slot.scan_folder(force=True)
+        if not slot.name or (not was_folder and slot.name == slot.display_name):
+            slot.name = os.path.basename(path.rstrip("\\/")) or path
+        self.board.last_sound_dir = os.path.dirname(path.rstrip("\\/")) or path
+        self._sync_button(slot)
+        self.announce_help(
+            "%s assigned to %s %d. %d sounds, one at random each press" % (
+                slot.display_name, self.board.bank_short_name(slot.bank),
+                slot.number, count))
+        self._touch()
+        self.warm_cache()
+
+    def _folders_counted(self, folders):
+        """The warmer has been round the folder slots; relabel what it changed."""
+        for slot in folders:
+            try:
+                self._sync_button(slot)
+            except Exception:
+                pass
 
     def _apply_file(self, slot, path):
         try:
@@ -1201,7 +1320,9 @@ class DropDeckFrame(wx.Frame):
             self.announce("That slot is already empty")
             return
         name = slot.display_name
-        if wx.MessageBox(f"Clear {name} from {slot.bank_short} {slot.number}?",
+        what = "folder" if slot.is_folder else "sound"
+        if wx.MessageBox(f"Clear this {what}, {name}, "
+                         f"from {slot.bank_short} {slot.number}?",
                          "Clear slot", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
             return
         self.mixer.stop_slot(slot.index, fade_out=0.05)
@@ -1228,6 +1349,62 @@ class DropDeckFrame(wx.Frame):
         self.announce_help(f"Hotkey {label or 'cleared'} for {slot.display_name}")
         self._touch()
 
+    # ----------------------------------------------------------- banks ----
+    def _current_bank(self):
+        """The bank the user is looking at, which is the one a command means."""
+        return self.notebook.GetSelection() + 1
+
+    def _on_rename_bank(self, _event=None):
+        bank = self._current_bank()
+        if not 1 <= bank <= C.BANK_COUNT:
+            return
+        current = self.board.bank_name(bank)
+        with wx.TextEntryDialog(
+                self,
+                "Name for bank %d.\n\n"
+                "This changes what the tab is called and nothing else - the "
+                "keys, the looping and the hotkeys all stay exactly as they "
+                "are. Leave it empty to go back to %s."
+                % (bank, C.BANK_TITLES[bank]),
+                "Rename bank", current) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return
+            name = dialog.GetValue().strip()[:C.MAX_BANK_NAME]
+        self._set_bank_name(bank, name)
+
+    def _on_reset_bank_name(self, _event=None):
+        bank = self._current_bank()
+        if not 1 <= bank <= C.BANK_COUNT:
+            return
+        if not self.board.is_bank_renamed(bank):
+            self.announce("Bank %d is already called %s" % (bank, C.BANK_TITLES[bank]))
+            return
+        self._set_bank_name(bank, "")
+
+    def _set_bank_name(self, bank, name):
+        """Apply a bank name and say what did and did not change.
+
+        Renaming bank three does not stop it being the looping bank, and
+        renaming bank four does not stop it taking custom hotkeys. Those are
+        what the keys do, not what the tab says - so the confirmation says so
+        rather than leaving somebody to find out.
+        """
+        applied = self.board.rename_bank(bank, name)
+        self._refresh_tab_titles()
+        # The pads name their bank in the search list, and the tab title is a
+        # different control from the pages, so both have to be brought up to
+        # date - the same "an edit must land at once" rule as a slot label.
+        for slot in self.board.bank_slots(bank):
+            self._sync_button(slot)
+        note = ""
+        if bank == C.LOOPING_BANK:
+            note = ". Still the looping bank"
+        elif bank == C.BANK_MISC:
+            note = ". Still the bank that takes your own hotkeys"
+        self.announce_help("Bank %d is now %s%s" % (bank, applied, note))
+        self._touch()
+
     def _hotkey_map(self, exclude=None):
         """Every key already spoken for, so the dialog can warn about clashes."""
         taken = {}
@@ -1248,6 +1425,9 @@ class DropDeckFrame(wx.Frame):
                         "Stop this &bed" if (slot.is_bed and playing) else "&Play")
         menu.Append(ID_ASSIGN, "Re&assign sound file..." if slot.is_assigned
                     else "&Assign sound file...")
+        menu.Append(ID_ASSIGN_FOLDER,
+                    "Assign a &folder... (now %d sounds)" % (slot.folder_count or 0)
+                    if slot.is_folder else "Assign a &folder...")
         if slot.is_assigned:
             menu.Append(ID_RENAME, "Re&name...\tF2")
             menu.Append(ID_TRIM, f"&Level... (now {slot.trim_db:+.0f} decibels)")
@@ -1492,7 +1672,7 @@ class DropDeckFrame(wx.Frame):
         extra = self.board.bank_devices or {}
         if not extra:
             return f"Everything playing through {describe_device(self.mixer.device)}"
-        parts = [f"{C.BANK_TITLES[bank]} through {spec['name']}"
+        parts = [f"{self.board.bank_name(bank)} through {spec['name']}"
                  for bank, spec in sorted(extra.items())]
         return (f"Main output {describe_device(self.mixer.device)}. "
                 + ". ".join(parts))
@@ -1502,18 +1682,21 @@ class DropDeckFrame(wx.Frame):
         if self.board.assigned_count == 0:
             self.announce("There are no sounds to search yet")
             return
-        with SearchDialog(self, self.board, self.mixer.playing_slots()) as dialog:
+        # Play now fires from inside the dialog and leaves it open, so you can
+        # work down a list of matches and sample each one. Brian Hartgen: with
+        # several hits you want to hear which is which before you commit, and
+        # being thrown out of the dialog on the first press made that four
+        # keystrokes per guess.
+        with SearchDialog(self, self.board, self.mixer.playing_slots(),
+                          on_play=lambda slot: self.trigger(slot.index)) as dialog:
             if dialog.ShowModal() != wx.ID_OK or dialog.chosen is None:
                 return
-            slot, play_now = dialog.chosen, dialog.play_now
+            slot = dialog.chosen
         self.notebook.SetSelection(slot.bank - 1)
         button = self._button_for(slot)
         button.SetFocus()
-        if play_now:
-            self.trigger(slot.index)
-        else:
-            self.announce(f"{slot.display_name}, {slot.bank_title}, "
-                          f"slot {slot.number}")
+        self.announce(f"{slot.display_name}, {slot.bank_title}, "
+                      f"slot {slot.number}")
 
     # ----------------------------------------------------------------- help --
     def _on_shortcuts(self, _event):

@@ -50,7 +50,9 @@ And the rest:
 
 ## The four banks
 
-Twenty slots each.
+Twenty slots each, and you can rename any of them — `Ctrl+F2`, or the Banks
+menu. The name saves with the board. Renaming changes the name and nothing
+else: bank 3 is still the looping bank and bank 4 still takes your own hotkeys.
 
 1. **Sound effects** — stings, hits, transitions. Fire and forget.
 2. **Dialog drops** — your own clips. Catchphrases, station IDs, callers.
@@ -62,6 +64,16 @@ Twenty slots each.
 
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off. A bed
 toggles: the same key starts it and stops it.
+
+## A folder on one key
+
+**Sounds → Assign a folder** points a slot at a whole folder instead of one
+file. Every press plays a different sound from it, never the same one twice
+running, and the app says which one it picked.
+
+That is for the six jingles that all mean "down the chart" — one key, and you
+do not care which of them goes out. Drop another file into the folder and it
+joins in.
 
 ## Ducking
 

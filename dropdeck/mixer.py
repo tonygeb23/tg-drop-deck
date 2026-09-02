@@ -165,6 +165,11 @@ class Mixer:
             self.last_error = str(exc)
             return False
 
+    @property
+    def is_running(self):
+        """Is audio actually coming out of this mixer."""
+        return self.stream is not None
+
     def stop_stream(self):
         if self.stream is not None:
             try:
@@ -482,6 +487,18 @@ class MixerGroup:
 
     def distinct_device_count(self):
         return len(self._mixers)
+
+    @property
+    def is_running(self):
+        """Is audio coming out of any of these mixers.
+
+        A group has no single ``stream`` and never did. ui.py asked for one
+        anyway, which raised inside the wx.CallLater that speaks the startup
+        line - so from 2.1.2 to 2.3.0 the app silently said nothing at startup,
+        including "3 files missing" and "audio could not start". Ask a question
+        the object can actually answer.
+        """
+        return any(m.stream is not None for m in self._mixers.values())
 
     def close(self):
         for mixer in self._mixers.values():

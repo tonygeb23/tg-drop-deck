@@ -1,5 +1,63 @@
 # Changelog
 
+## 2.4.0 — 2 September 2026
+
+Three requests and one bug that had been hiding since 2.1.2.
+
+### Call the banks whatever your board needs them to be called
+
+David Goldfield's, and it is a fair point: a board you built yourself is not
+"Sound Effects" and "Dialog Drops". It is "Movie Clips" and "Sirens and
+Alarms".
+
+**`Ctrl+F2` renames the bank you are looking at**, and there is a new **Banks**
+menu with rename and reset in it. The name saves with the board and appears on
+the tab, in the search list and on the per-bank output rows in Audio settings.
+
+**The name is all that changes.** Bank 3 is still the looping bank and bank 4
+still takes your own hotkeys — those are what the keys do, not what the tab
+says, and the app tells you so when you rename either of them. The number
+stays on the tab too, because it is which `Ctrl+Tab` position you are on.
+
+### One key, a whole folder, a different sound every press
+
+Brian Hartgen's: a chart countdown has half a dozen jingles that all mean
+"down the chart", and you do not care which one you get as long as one plays.
+
+**Sounds → Assign a folder**, or the same item in the right-click menu. The
+slot then plays a random sound from that folder every time you press it, and
+**never the same one twice running** — which is the difference between random
+and broken. It says which one it picked, so you always know what went out.
+
+Drop another file into the folder and it joins in; nothing needs re-assigning.
+A folder with nothing playable in it is refused when you assign it, rather
+than becoming a key that does nothing on air. Relink handles folders too, and
+will not quietly repair one with a file that happens to share its name.
+
+### Play in the Find dialog no longer throws you out
+
+Also Brian's. With several matches you want to hear which is which before you
+commit, and being dropped out of the dialog on the first press made that four
+keystrokes per guess.
+
+**`Alt+P` now plays the match you are on and leaves the dialog open.** Enter
+still jumps to the sound and closes. The results list is deliberately not
+relabelled while you do this — rewriting a row under a screen reader restarts
+the announcement on the row you are standing on, and you can hear the sound
+anyway.
+
+### The startup announcement works again
+
+Since 2.1.2, the line the app speaks when it opens has been raising an error
+inside its own timer and never arriving. Nothing reported it, because a timer
+swallows what its callback raises.
+
+So **"3 files missing. Use File, relink missing sounds" has not been spoken at
+startup for three releases**, and neither has "audio could not start". Both are
+back. The line is also wrapped now, so if it ever fails again it says so in the
+status bar instead of vanishing.
+
+
 ## 2.3.0 — 2 September 2026
 
 Both of these came from Brian Hartgen, who is customising a board heavily for

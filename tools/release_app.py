@@ -69,6 +69,12 @@ NOTES = {
               "Both bed fades are in Audio settings if you want the old "
               "behaviour. And a button now tells you what you changed the "
               "moment you change it, instead of after you tab away."),
+    "2.4.0": ("You can rename the banks now, with Ctrl+F2, so a board you "
+              "built is called what you call it. A slot can hold a whole "
+              "folder and play a different sound from it every press. Alt+P "
+              "in the Find dialog plays a match without closing it. And the "
+              "announcement when the app opens works again, which includes "
+              "telling you when files are missing."),
 }
 
 
