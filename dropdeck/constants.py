@@ -245,6 +245,12 @@ THE PLAYLIST - a running order that cues itself
                             now - which crosses to it at the crossfade
                             length instead of waiting for the cue
   Ctrl+Shift+D              Put a drop in front of the item you are on
+  Crossfade box             In the playlist view, under the running order.
+                            Arrow keys change it and every cue moves with it.
+                            The Playlist menu takes you straight to it.
+                            A single track can be given a crossfade of its
+                            own from its right-click menu, or handed back to
+                            the playlist's.
   Playlist menu             Add files, drops every so many songs, crossfade
                             length, tick or untick everything, next,
                             previous, stop, clear

@@ -19,14 +19,16 @@ from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, MicSettingsDialog, SearchDialog,
-                      SettingsDialog, SlotPropertiesDialog, TrimDialog,
-                      ask_text, audio_file_dialog, key_label)
+                      SettingsDialog, SlotPropertiesDialog,
+                      TrackCrossfadeDialog, TrimDialog, ask_text,
+                      audio_file_dialog, key_label)
 from .engine import probe
 from .micinput import MicInput, describe_input, resolve_input
 from .playlist import PlaylistPlayer
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
-                    ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
-                    ID_PL_ROW_STOP, ID_PL_ROW_TICK, ID_PL_ROW_UP)
+                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE,
+                    ID_PL_ROW_SEGUE, ID_PL_ROW_STOP, ID_PL_ROW_TICK,
+                    ID_PL_ROW_UP)
 from .playlistview import PlaylistPanel
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
@@ -788,7 +790,8 @@ class DropDeckFrame(wx.Frame):
         pl.Append(ID_PL_PREV, "Pre&vious track")
         pl.Append(ID_PL_STOP, "Stop the play&list")
         pl.AppendSeparator()
-        pl.Append(ID_PL_CROSSFADE, "&Crossfade length...")
+        pl.Append(ID_PL_CROSSFADE, "&Crossfade between tracks",
+                  "Go to the crossfade box in the playlist view")
         pl.Append(ID_PL_CLEAR, "Clear the &running order")
         pl.AppendSeparator()
         self.mic_item = pl.AppendCheckItem(
@@ -855,6 +858,9 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU,
                   lambda _e: self.playlist_panel.move_selected(1),
                   id=ID_PL_ROW_DOWN)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.crossfade_selected(),
+                  id=ID_PL_ROW_FADE)
         self.Bind(wx.EVT_MENU, lambda _e: self.insert_playlist_drop(),
                   id=ID_PL_ROW_DROP)
         self.Bind(wx.EVT_MENU,
@@ -1741,28 +1747,52 @@ class DropDeckFrame(wx.Frame):
         self.playlist_changed()
 
     def _on_crossfade(self, _event=None):
-        current = self.board.playlist.crossfade
-        with wx.TextEntryDialog(
-                self, "How many seconds should one song overlap the next?\n\n"
-                "Zero means each song plays right out before the next starts. "
-                "This is the cue point for every song that has not been given "
-                "one of its own.",
-                "Crossfade length", "%g" % current) as dialog:
+        """Take the user to the crossfade box rather than asking in a dialog.
+
+        The control lives in the playlist view, beside the running order it
+        applies to. One place for the value, and a menu item that says where
+        it is - a second dialog asking for the same number would be a second
+        place for it to be wrong.
+        """
+        self.show_view(VIEW_PLAYLIST)
+        self.playlist_panel.focus_crossfade()
+        self.announce(
+            "Crossfade %s. Up and down arrows change it"
+            % (format_duration(self.board.playlist.crossfade)
+               or "off, each song plays right out"))
+
+    def set_track_crossfade(self, index):
+        """Give one track a crossfade of its own, or hand it back the default.
+
+        Most tracks want the playlist's, which is why this can say "the same
+        as the rest" rather than only a number - see TrackCrossfadeDialog.
+        """
+        playlist = self.board.playlist
+        if not (0 <= index < len(playlist)):
+            return
+        track = playlist[index]
+        with TrackCrossfadeDialog(self, track, playlist.crossfade) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 self.announce_help("Nothing changed")
                 return
-            text = dialog.GetValue().strip()
-        try:
-            seconds = float(text)
-        except ValueError:
-            self.announce("That is not a number of seconds")
+            chosen = dialog.result
+        if chosen == track.crossfade:
+            self.announce_help("Nothing changed")
             return
-        seconds = max(0.0, min(C.MAX_CROSSFADE, seconds))
-        self.board.playlist.crossfade = seconds
-        self.playlist_panel.refresh()
-        self.announce_help(
-            "Crossfade %s" % (format_duration(seconds) or "off, songs play right out"))
-        self.playlist_changed()
+        track.crossfade = chosen
+        self.playlist_panel.refresh(keep=index)
+        self.playlist_panel.focus_list()
+        if chosen is None:
+            self.announce_help(
+                "%s uses the playlist's crossfade, %s"
+                % (track.display_name,
+                   format_duration(playlist.crossfade) or "which is off"))
+        else:
+            self.announce_help(
+                "%s crossfades %s into the next one"
+                % (track.display_name,
+                   format_duration(chosen) or "not at all"))
+        self.playlist_changed(relabel=False)
 
     def _on_clear_playlist(self, _event=None):
         count = len(self.board.playlist)

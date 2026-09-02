@@ -874,6 +874,64 @@ class MicSettingsDialog(wx.Dialog):
         return bool(self.monitor.GetValue())
 
 
+class TrackCrossfadeDialog(wx.Dialog):
+    """How long THIS track overlaps the next one.
+
+    Most tracks want the playlist's own crossfade, which is why the default is
+    a tick box rather than a number: "same as the rest" is a different answer
+    from "three seconds", and a board that cannot tell them apart would freeze
+    every track at whatever the playlist happened to be set to on the day.
+    """
+
+    def __init__(self, parent, track, default_seconds):
+        super().__init__(parent, title="Crossfade for one track")
+        self.track = track
+        self.default_seconds = default_seconds
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label=(
+            "How long should %s overlap the track after it?"
+            % track.display_name)), 0, wx.ALL, 10)
+
+        self.use_default = wx.CheckBox(
+            self, label="Use the &playlist's crossfade (%g seconds)"
+            % default_seconds)
+        self.use_default.SetValue(track.crossfade is None)
+        outer.Add(self.use_default, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(self, label="&Seconds for this one"), 0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        start = (track.crossfade if track.crossfade is not None
+                 else track.crossfade_seconds(default_seconds))
+        self.seconds = wx.SpinCtrlDouble(
+            self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5, initial=float(start))
+        self.seconds.SetDigits(1)
+        self.seconds.SetName("Crossfade for this track, seconds")
+        self.seconds.SetToolTip(
+            "Zero means it plays right out and the next one starts after it, "
+            "which is what a drop does unless you say otherwise.")
+        row.Add(self.seconds, 0)
+        outer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.use_default.Bind(
+            wx.EVT_CHECKBOX,
+            lambda e: (self.seconds.Enable(not e.IsChecked()), e.Skip()))
+        self.seconds.Enable(track.crossfade is not None)
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+        self.use_default.SetFocus()
+
+    @property
+    def result(self):
+        """Seconds for this track, or None meaning the playlist's own."""
+        if self.use_default.GetValue():
+            return None
+        return round(float(self.seconds.GetValue()), 2)
+
+
 def ask_text(parent, prompt, title, value=""):
     """A text prompt whose existing text is selected, ready to be typed over.
 

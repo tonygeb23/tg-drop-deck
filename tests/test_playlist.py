@@ -751,6 +751,124 @@ check("with nothing on air a segue is simply a start",
 frame.stop_playlist(quiet=True)
 
 # ---------------------------------------------------------------------------
+print("Adjusting the crossfade, where the running order is")
+
+frame.board.playlist.clear()
+panel.clipboard_paths = lambda: [song_a, song_b, song_c]
+panel.paste()
+panel.clipboard_paths = real
+frame.board.playlist.crossfade = 1.0
+panel.refresh()
+
+check("the crossfade box is in the playlist view itself",
+      panel.crossfade is not None)
+check("named for a screen reader",
+      panel.crossfade.GetName() == "Crossfade between tracks, seconds",
+      panel.crossfade.GetName())
+check("showing the playlist's current value",
+      abs(panel.crossfade.GetValue() - 1.0) < 1e-9, panel.crossfade.GetValue())
+check("it starts at zero, so no crossfade is reachable",
+      panel.crossfade.GetMin() == 0.0, panel.crossfade.GetMin())
+check("and stops somewhere sensible",
+      panel.crossfade.GetMax() == C.MAX_CROSSFADE, panel.crossfade.GetMax())
+
+panel.crossfade.SetValue(4.0)
+panel._on_crossfade(None)
+check("changing it changes the playlist", frame.board.playlist.crossfade == 4.0,
+      frame.board.playlist.crossfade)
+check("and says the new number", "Crossfade" in frame.speaker.last_message,
+      frame.speaker.last_message)
+cues = frame.board.playlist.cue_points()
+check("every cue moves with it, not just the next one",
+      abs(cues[1] - 0.0) < 6.0 and cues[2] < 4.1, cues)
+check("and the rows say so",
+      "crossfade 4 sec" in panel.list.GetString(0), panel.list.GetString(0))
+
+panel.crossfade.SetValue(0.0)
+panel._on_crossfade(None)
+check("zero means each song plays right out",
+      frame.board.playlist.crossfade == 0.0
+      and abs(frame.board.playlist.total_duration - 12.0) < 0.2,
+      frame.board.playlist.total_duration)
+check("which the app says in words rather than as a bare zero",
+      "right out" in frame.speaker.last_message, frame.speaker.last_message)
+
+panel.crossfade.SetValue(2.0)
+panel._on_crossfade(None)
+frame._on_crossfade(None)
+check("the menu item takes you to the box instead of asking twice",
+      frame.views.GetSelection() == VIEW_PLAYLIST)
+check("and reads the value out on the way",
+      "Crossfade" in frame.speaker.last_message, frame.speaker.last_message)
+
+# Loading a board has to bring its own crossfade to the control.
+other = Board()
+other.path = os.path.join(tmp, "other.json")
+other.playlist.crossfade = 6.0
+other.playlist.add([song_a, song_b])
+frame._adopt(other)
+check("opening a board brings its crossfade to the box",
+      abs(panel.crossfade.GetValue() - 6.0) < 1e-9, panel.crossfade.GetValue())
+
+# A crossfade longer than the track it is on is clamped to the track, which is
+# why 6 seconds on a 4 second song comes back as 4.
+check("a crossfade cannot outlast the track it is on",
+      other.playlist.crossfade == 6.0 and other.playlist.crossfade_for(0) == 4.0,
+      other.playlist.crossfade_for(0))
+
+# Per track.
+other.playlist.crossfade = 3.0
+panel.refresh()
+check("a track uses the playlist's crossfade unless told otherwise",
+      other.playlist[0].crossfade is None
+      and other.playlist.crossfade_for(0) == 3.0,
+      other.playlist.crossfade_for(0))
+other.playlist[0].crossfade = 0.5
+panel.refresh()
+check("a track can have one of its own",
+      other.playlist.crossfade_for(0) == 0.5, other.playlist.crossfade_for(0))
+check("without touching the rest",
+      other.playlist.crossfade == 3.0, other.playlist.crossfade)
+check("and the row says which it is using",
+      "crossfade 3 sec" not in panel.list.GetString(0), panel.list.GetString(0))
+other.playlist[0].crossfade = None
+check("handing it back is a real answer, not just zero",
+      other.playlist[0].crossfade is None
+      and other.playlist.crossfade_for(0) == 3.0,
+      other.playlist.crossfade_for(0))
+other.playlist[0].crossfade = 0.0
+check("nought for one track means that track really does not crossfade",
+      other.playlist.crossfade_for(0) == 0.0
+      and other.playlist.crossfade == 3.0)
+other.playlist[0].crossfade = None
+
+from dropdeck.dialogs import TrackCrossfadeDialog
+fade_dialog = TrackCrossfadeDialog(frame, other.playlist[0], 3.0)
+check("the per-track dialog opens on the default when there is none",
+      fade_dialog.use_default.GetValue() and fade_dialog.result is None)
+check("and its number box is greyed while the default is in use",
+      not fade_dialog.seconds.IsEnabled())
+fade_dialog.use_default.SetValue(False)
+fade_dialog.seconds.Enable(True)
+fade_dialog.seconds.SetValue(2.5)
+check("choosing a number gives that number", fade_dialog.result == 2.5,
+      fade_dialog.result)
+check("the box is named too",
+      fade_dialog.seconds.GetName() == "Crossfade for this track, seconds")
+fade_dialog.Destroy()
+
+back = Board.load(other.save(os.path.join(tmp, "fades.json")))
+check("the playlist crossfade saves with the board",
+      back.playlist.crossfade == 3.0, back.playlist.crossfade)
+other.playlist[1].crossfade = 0.0
+back = Board.load(other.save(os.path.join(tmp, "fades2.json")))
+check("and so does a track's own, including zero",
+      back.playlist[1].crossfade == 0.0, back.playlist[1].crossfade)
+
+frame._adopt(blank)
+panel.refresh()
+
+# ---------------------------------------------------------------------------
 print("Relinking, which repairs the board and the running order together")
 
 # Found in the 2.5.0 audit. Board.relink returns Slots AND playlist Tracks -

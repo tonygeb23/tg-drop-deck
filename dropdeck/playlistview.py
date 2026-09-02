@@ -23,8 +23,9 @@ import wx
 
 from . import constants as C
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
-                    ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
-                    ID_PL_ROW_STOP, ID_PL_ROW_TICK, ID_PL_ROW_UP)
+                    ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE,
+                    ID_PL_ROW_SEGUE, ID_PL_ROW_STOP, ID_PL_ROW_TICK,
+                    ID_PL_ROW_UP)
 from .slot import format_duration
 
 #: What the list shows when there is nothing in it. A row, not an empty
@@ -72,6 +73,24 @@ class PlaylistPanel(wx.Panel):
         self.list.SetName("Running order")
         outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
 
+        # The crossfade lives HERE, next to the running order it applies to,
+        # rather than only in a menu. It is the number people reach for most
+        # while building a show and the one they want to hear change.
+        fade_row = wx.BoxSizer(wx.HORIZONTAL)
+        fade_row.Add(wx.StaticText(self, label="&Crossfade, seconds"), 0,
+                     wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.crossfade = wx.SpinCtrlDouble(
+            self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5,
+            initial=float(self.playlist.crossfade))
+        self.crossfade.SetDigits(1)
+        self.crossfade.SetName("Crossfade between tracks, seconds")
+        self.crossfade.SetToolTip(
+            "How long one song overlaps the next. Zero means each one plays "
+            "right out before the next starts. A track can be given a "
+            "crossfade of its own from its right-click menu.")
+        fade_row.Add(self.crossfade, 0)
+        outer.Add(fade_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
         self.summary = wx.StaticText(self, label="")
         outer.Add(self.summary, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
@@ -97,6 +116,8 @@ class PlaylistPanel(wx.Panel):
         self.list.Bind(wx.EVT_CHECKLISTBOX, self._on_ticked)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
         self.list.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
+        self.crossfade.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_crossfade)
+        self.crossfade.Bind(wx.EVT_TEXT_ENTER, self._on_crossfade)
         # BOTH, because the list covers nearly all of the panel and a child
         # window without a drop target of its own simply refuses the drop -
         # so "drag them in" worked everywhere except the obvious place.
@@ -129,6 +150,32 @@ class PlaylistPanel(wx.Panel):
         index = self.list.GetSelection()
         return None if index == wx.NOT_FOUND else index
 
+    def focus_crossfade(self):
+        """Put the user on the crossfade box, for the menu item that says so.
+
+        No text selection: wx.SpinCtrlDouble does not offer one here, and a
+        spin control is worked with the arrow keys anyway.
+        """
+        self.crossfade.SetFocus()
+
+    def _on_crossfade(self, _event=None):
+        """The crossfade moved. Apply it, relabel the cues, say the number.
+
+        Every row carries its cue and its start time, so all of them change
+        when this does - which is exactly why the rows are rebuilt here and
+        the control is left alone.
+        """
+        seconds = round(float(self.crossfade.GetValue()), 2)
+        if seconds == self.playlist.crossfade:
+            return
+        self.playlist.crossfade = seconds
+        keep = self.list.GetSelection()
+        self.refresh(keep=keep if keep != wx.NOT_FOUND else 0)
+        self.frame.announce(
+            "Crossfade %s" % (format_duration(seconds)
+                              or "off, each song plays right out"))
+        self.frame.playlist_changed(relabel=False)
+
     def focus_list(self):
         self.list.SetFocus()
         if self.list.GetCount() and self.list.GetSelection() == wx.NOT_FOUND:
@@ -147,11 +194,16 @@ class PlaylistPanel(wx.Panel):
             # which sounds exactly like a list that failed to load.
             self.list.Set([EMPTY_ROW])
             self.list.SetSelection(0)
+            if abs(self.crossfade.GetValue() - playlist.crossfade) > 1e-9:
+                self.crossfade.SetValue(float(playlist.crossfade))
             self._update_summary()
             return
         self.list.Set(rows)
         for index, track in enumerate(playlist):
             self.list.Check(index, bool(track.enabled))
+        if abs(self.crossfade.GetValue() - playlist.crossfade) > 1e-9:
+            # Loading a board brings its own crossfade with it.
+            self.crossfade.SetValue(float(playlist.crossfade))
         if rows:
             if previous == wx.NOT_FOUND or previous is None or previous >= len(rows):
                 previous = len(rows) - 1
@@ -320,6 +372,11 @@ class PlaylistPanel(wx.Panel):
             menu.AppendSeparator()
             menu.Append(ID_PL_ROW_UP, "Move &up	Alt+Up")
             menu.Append(ID_PL_ROW_DOWN, "Move &down	Alt+Down")
+            menu.Append(ID_PL_ROW_FADE,
+                        "&Crossfade out of this one... (now %s)"
+                        % (format_duration(
+                            track.crossfade_seconds(self.playlist.crossfade))
+                           or "none"))
             menu.Append(ID_PL_ROW_DROP, "&Insert a drop before this...")
             menu.AppendSeparator()
             menu.Append(ID_PL_ROW_REMOVE, "&Remove from the running order	Del")
@@ -350,6 +407,15 @@ class PlaylistPanel(wx.Panel):
             "%s %s" % (track.display_name,
                        "will play" if track.enabled else "will be skipped"))
         self.frame.playlist_changed(relabel=False)
+
+    def crossfade_selected(self):
+        """Give one track a crossfade of its own, or put it back on the
+        playlist's."""
+        index = self.selection()
+        if index is None:
+            self.frame.announce("There is nothing in the running order yet")
+            return
+        self.frame.set_track_crossfade(index)
 
     def segue_to_selected(self):
         """Bring this track up and take the one on air down under it."""
