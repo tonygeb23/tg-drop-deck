@@ -2,6 +2,16 @@
 
 ## 2.5.1 — 2 September 2026
 
+**There is a user guide.** [tgstudios.app/drop-deck-guide](https://tgstudios.app/drop-deck-guide/),
+and in the app under **Help, User guide**. Plain English, every key explained,
+and written for somebody who has never opened the app. `F1` is still the key
+list; the guide is the why.
+
+It is on the web rather than in the app on purpose, so it can be put right the
+day somebody finds it confusing rather than at the next release.
+`tools/check_guide.py` checks it against the app it describes — every keystroke
+it names, and every number it quotes.
+
 **Save board as is Ctrl+F12**, not F12. A bare F12 is one keystroke away from
 the volume and rename row and too easy to hit by accident for something that
 opens a save dialog. Nothing else moved.

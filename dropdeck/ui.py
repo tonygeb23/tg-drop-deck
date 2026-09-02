@@ -91,6 +91,7 @@ ID_PL_DROP_RANDOM = wx.ID_HIGHEST + 47
 ID_PL_LIBRARY = wx.ID_HIGHEST + 48
 ID_FEEDBACK = wx.ID_HIGHEST + 49
 ID_DONATE = wx.ID_HIGHEST + 50
+ID_USER_GUIDE = wx.ID_HIGHEST + 51
 
 #: The two things this window can be showing.
 VIEW_BOARD, VIEW_PLAYLIST = 0, 1
@@ -826,6 +827,9 @@ class DropDeckFrame(wx.Frame):
 
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
+        help_menu.Append(ID_USER_GUIDE, "User &guide on the web...",
+                         "Opens the full guide at tgstudios.app in your "
+                         "browser")
         help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
         help_menu.AppendSeparator()
         help_menu.Append(ID_FEEDBACK, "&Submit feedback...",
@@ -928,6 +932,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_all(), id=ID_STOP_ALL)
         self.Bind(wx.EVT_MENU, self._on_shortcuts, id=ID_SHORTCUTS)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, self._on_user_guide, id=ID_USER_GUIDE)
         self.Bind(wx.EVT_MENU, self._on_feedback, id=ID_FEEDBACK)
         self.Bind(wx.EVT_MENU, self._on_donate, id=ID_DONATE)
 
@@ -1963,6 +1968,19 @@ class DropDeckFrame(wx.Frame):
     # ====================================================================
     # Feedback, and the occasional word about donating
     # ====================================================================
+
+    def _on_user_guide(self, _event=None):
+        """The full guide, on the site. F1 is the keys; this is the why.
+
+        On the web rather than in the app on purpose: it can be corrected the
+        day somebody finds it confusing, without waiting for a release, and it
+        is one page a screen reader can search.
+        """
+        if webbrowser.open(C.USER_GUIDE_URL):
+            self.announce("Opening the user guide in your browser")
+        else:
+            self.announce("Could not open a browser. The guide is at %s"
+                          % C.USER_GUIDE_URL)
 
     def _on_feedback(self, _event=None):
         """Say what happened, from inside the app, at the moment it happened.

@@ -82,10 +82,11 @@ NOTES = {
               "Ctrl+M opens a microphone, which ducks the music while it is "
               "on. Save board as has moved to F12. Help now has Submit "
               "feedback and Donate."),
-    "2.5.1": ("Save board as is Ctrl+F12 now rather than a bare F12, which was "
-              "too easy to hit by accident. The playlist crossfade box now "
-              "says what it does, and it is in Audio settings as well as under "
-              "the running order."),
+    "2.5.1": ("There is a user guide now, on the web, under Help. Save board "
+              "as is Ctrl+F12 rather than a bare F12, which was too easy to "
+              "hit by accident. And the playlist crossfade box says what it "
+              "does, and is in Audio settings as well as under the running "
+              "order."),
 }
 
 

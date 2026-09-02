@@ -10,6 +10,11 @@ APP_VERSION = "2.5.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
+#: The full guide. On the web rather than in the app so it can be put
+#: right the day somebody finds it confusing, rather than at the next
+#: release. F1 is the keys; this is the why.
+USER_GUIDE_URL = "https://tgstudios.app/drop-deck-guide/"
+
 # ----------------------------------------------------------------- banks ---
 SLOTS_PER_BANK = 20
 BANK_COUNT = 4
@@ -298,6 +303,7 @@ GLOBAL
   Ctrl+G                    Global hotkeys on or off
   Escape                    Stop everything, with a short fade
   F1                        This help
+  Help, User guide          The full guide on the web, in plain English
   Ctrl+Tab                  Next bank
 
 HOW MUCH THE APP SAYS

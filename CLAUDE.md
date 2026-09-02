@@ -144,6 +144,7 @@ dropdeck/
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
+  check_guide.py     fact-checks the published user guide against the app
 ```
 
 `engine.py` and `mixer.py` know nothing about wx. That is deliberate — it is
@@ -201,6 +202,27 @@ step: the program bus first, with a test that proves a bank on a second card
 still reaches it, then the encoder on top. Nothing here justifies breaking the
 frozen digit map or the "nothing between a keypress and a sound" rule, both of
 which get harder, not easier, with a live stream attached.
+
+## The user guide lives on the website
+
+`Websites/tgstudios.app/content/pages/drop-deck-guide.md`, published at
+tgstudios.app/drop-deck-guide, and opened from **Help, User guide** via
+`C.USER_GUIDE_URL`. On the web rather than in the app so a confusing sentence
+can be fixed the same day rather than at the next release.
+
+**Run `python tools/check_guide.py` whenever a key changes.** Documentation
+that lives in another repository is the kind that goes stale in silence, so it
+is checked rather than remembered: it pulls every backticked keystroke out of
+the guide, checks each against the accelerator table the app really builds, and
+checks the numbers the guide quotes against `constants.py`. Keys handled
+somewhere other than the table are listed in it **with the reason**, so an
+unexplained miss is a real miss.
+
+One trap, and it caught me: the guide is hard-wrapped markdown, so any quoted
+phrase longer than a few words straddles a newline. The checker normalises
+whitespace before matching. Without that it reports the guide as wrong for
+being wrapped - which is the checker being wrong, and the sort of "fix" that
+would have had me editing correct prose.
 
 ## Things that will bite
 
