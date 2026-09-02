@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -53,8 +53,8 @@ BANK_HINTS = {
     ),
     BANK_BEDS: (
         "Alt plus Ctrl plus 1 through 0 toggle beds 1 to 10. Add Shift for beds 11 to "
-        "20. Beds loop by default and fade in and out. Right-click to turn looping "
-        "off. Bed volume is F5 and F6."
+        "20. Beds loop by default. Right-click to turn looping off. Bed volume is "
+        "F5 and F6."
     ),
     BANK_MISC: (
         "Right-click any button to assign a sound file and a custom hotkey of your "
@@ -101,8 +101,19 @@ PRELOAD_SECONDS = 30.0
 
 FADE_IN_SFX = 0.0
 FADE_OUT_SFX = 0.05
+
+#: The bed fades are a setting, not a fixed value - see ``board.bed_fade_in``
+#: and Audio settings. These two are only what a board starts life with.
+#:
+#: Brian Hartgen: a music bed that eases in cannot be used on air, because the
+#: first beat of the track is the thing you cued it for. Zero here is a
+#: supported answer and means the file plays exactly as it was recorded.
 FADE_IN_BED = 0.35
 FADE_OUT_BED = 0.60
+#: Anything longer than this is a mix move, not a fade, and the spin controls
+#: in Audio settings stop here.
+MAX_BED_FADE = 5.0
+
 FADE_OUT_PANIC = 0.25
 
 #: Beds drop by this much while a sound effect or drop is playing, then come back.
@@ -127,6 +138,8 @@ BANK 3 — Music Beds (loop by default)
   Alt+Ctrl+1 to 0           Start or stop beds 1 to 10
   Alt+Ctrl+Shift+1 to 0     Start or stop beds 11 to 20
   Right-click               Turn looping off or on for one bed
+  Beds ease in and out by default. Audio settings, Ctrl+P, sets both fades,
+  and zero means the bed starts and stops exactly where the file does.
 
 BANK 4 — Miscellaneous
   Right-click a button      Assign a sound file and your own hotkey

@@ -46,7 +46,7 @@ And the rest:
 | `Del` | Clear the slot you are on |
 | `F1` | Every shortcut, in a window you can read |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |
-| `Ctrl+P` | Audio output device and ducking |
+| `Ctrl+P` | Audio output device, ducking and bed fades |
 
 ## The four banks
 
@@ -54,7 +54,9 @@ Twenty slots each.
 
 1. **Sound effects** — stings, hits, transitions. Fire and forget.
 2. **Dialog drops** — your own clips. Catchphrases, station IDs, callers.
-3. **Music beds** — loop by default, and fade in and out rather than snapping.
+3. **Music beds** — loop by default, and ease in and out rather than snapping.
+   Set both fades in `Ctrl+P`, or set them to zero and a bed starts and stops
+   exactly where the file does.
 4. **Miscellaneous** — no fixed keys. Right-click a button to give it a hotkey
    of your own.
 

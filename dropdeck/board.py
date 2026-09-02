@@ -17,6 +17,22 @@ from .slot import Slot
 FORMAT_VERSION = 2
 
 
+def _fade(value, fallback):
+    """A bed fade off disk, in seconds, or ``fallback`` if it is not a number.
+
+    Clamped rather than rejected. A hand-edited board asking for a minute-long
+    fade is a typo, and a board that will not open is worse than one that opens
+    with a sensible number in it.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if seconds != seconds:               # NaN
+        return fallback
+    return max(0.0, min(C.MAX_BED_FADE, seconds))
+
+
 def config_dir():
     """Where settings live. Alongside the other TG Studios apps."""
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -56,6 +72,12 @@ class Board:
         self.bed_volume = C.DEFAULT_BED_VOLUME
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
+        #: How long a bed takes to reach full level, and to fall away when it
+        #: is stopped. Zero means it plays exactly as recorded: a bed cued for
+        #: its downbeat cannot ease in, which is Brian Hartgen's point and is
+        #: why these are settings rather than the constants they used to be.
+        self.bed_fade_in = C.FADE_IN_BED
+        self.bed_fade_out = C.FADE_OUT_BED
         #: Whether system-wide hotkeys are armed. Off by default: while they
         #: are on this app owns those combinations across the whole machine,
         #: so it has to be something the user turned on deliberately.
@@ -155,6 +177,8 @@ class Board:
             "bed_volume": self.bed_volume,
             "ducking": self.ducking,
             "duck_db": self.duck_db,
+            "bed_fade_in": self.bed_fade_in,
+            "bed_fade_out": self.bed_fade_out,
             "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
@@ -188,6 +212,8 @@ class Board:
         board.bed_volume = float(data.get("bed_volume", C.DEFAULT_BED_VOLUME))
         board.ducking = bool(data.get("ducking", True))
         board.duck_db = float(data.get("duck_db", C.DEFAULT_DUCK_DB))
+        board.bed_fade_in = _fade(data.get("bed_fade_in"), C.FADE_IN_BED)
+        board.bed_fade_out = _fade(data.get("bed_fade_out"), C.FADE_OUT_BED)
         board.global_hotkeys_on = bool(data.get("global_hotkeys_on", False))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.device_name = data.get("device_name")

@@ -120,6 +120,12 @@ class Mixer:
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
 
+        #: Bed fades, in seconds, both settable - see board.bed_fade_in. Zero
+        #: in means the bed starts at full level on its first sample, which is
+        #: what a cued music bed has to do.
+        self.bed_fade_in = C.FADE_IN_BED
+        self.bed_fade_out = C.FADE_OUT_BED
+
         self._duck = 1.0
         self.peak = 0.0
         self.underruns = 0
@@ -211,9 +217,9 @@ class Mixer:
                 return None
 
         if fade_in is None:
-            fade_in = C.FADE_IN_BED if is_bed else C.FADE_IN_SFX
+            fade_in = self.bed_fade_in if is_bed else C.FADE_IN_SFX
         if fade_out is None:
-            fade_out = C.FADE_OUT_BED if is_bed else C.FADE_OUT_SFX
+            fade_out = self.bed_fade_out if is_bed else C.FADE_OUT_SFX
 
         base = self.bed_gain if is_bed else self.sfx_gain
         gain = base * db_to_gain(trim_db)
@@ -461,7 +467,8 @@ class MixerGroup:
 
     def set_bank_devices(self, bank_devices):
         """Re-route. Everything playing stops, because a voice belongs to a stream."""
-        previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db)
+        previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db,
+                    self.bed_fade_in, self.bed_fade_out)
         self.stop_all(fade_out=0.0)
         self.bank_devices = dict(bank_devices or {})
         self._build()
@@ -469,6 +476,8 @@ class MixerGroup:
         self.set_bed_gain(previous[1])
         self.ducking = previous[2]
         self.duck_db = previous[3]
+        self.bed_fade_in = previous[4]
+        self.bed_fade_out = previous[5]
         return not self.problems
 
     def distinct_device_count(self):
@@ -535,6 +544,24 @@ class MixerGroup:
     def duck_db(self, value):
         for mixer in self._mixers.values():
             mixer.duck_db = value
+
+    @property
+    def bed_fade_in(self):
+        return self.primary.bed_fade_in
+
+    @bed_fade_in.setter
+    def bed_fade_in(self, value):
+        for mixer in self._mixers.values():
+            mixer.bed_fade_in = float(value)
+
+    @property
+    def bed_fade_out(self):
+        return self.primary.bed_fade_out
+
+    @bed_fade_out.setter
+    def bed_fade_out(self, value):
+        for mixer in self._mixers.values():
+            mixer.bed_fade_out = float(value)
 
     @property
     def device(self):

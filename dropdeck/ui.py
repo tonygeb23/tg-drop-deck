@@ -115,6 +115,10 @@ class SoundButton(wx.Button):
         self.slot = slot
         self.frame = frame
         self._last_label = slot.button_label()
+        #: The label with the transient "playing" word left out. Comparing
+        #: against this is how refresh tells a change the user just made from
+        #: the state the mixer is reporting. See refresh.
+        self._last_content = slot.button_label(False)
         self._playing = False
         self._hover = False
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
@@ -139,6 +143,21 @@ class SoundButton(wx.Button):
         self.Refresh()
         event.Skip()
 
+    def set_slot(self, slot):
+        """Point this pad at another slot, as loading a board does.
+
+        The label is rewritten unconditionally, focus or no focus. The pad
+        under the cursor is now a different sound and saying otherwise is the
+        one thing worse than saying it twice.
+        """
+        self.slot = slot
+        self._playing = False
+        self._last_label = slot.button_label()
+        self._last_content = slot.button_label(False)
+        self.SetLabel(_escaped(self._last_label))
+        self._update_tooltip()
+        self.Refresh()
+
     def _update_tooltip(self):
         """The full label plus the file, for the mouse.
 
@@ -153,20 +172,39 @@ class SoundButton(wx.Button):
         self.SetToolTip(tip)
 
     def refresh(self, playing=False):
+        """Bring the label back in line with the slot.
+
+        There are two quite different reasons the label can be out of date and
+        they get opposite treatment.
+
+        **The mixer started or stopped this slot.** That is a value change, and
+        rewriting the accessible Name for it restarts the screen reader mid
+        sentence - on air, on the pad the user is standing on, at the exact
+        moment they pressed a key. So while this button has focus that change
+        is deferred; _on_focus applies it on the way out. The paint below still
+        shows it immediately, and announce_playback has already said it.
+
+        **The user just changed the slot** - assigned a file, renamed it,
+        turned looping off, set a hotkey. That is not a value arriving on its
+        own, it is the answer to something they did, and it has to be true the
+        moment the dialog closes. Deferring it meant the pad still read
+        "2. Empty, key Alt+Ctrl+2" after a file had been put in it, and only
+        told the truth once you tabbed away and back - Brian Hartgen's report,
+        and the reason the rest of the app looked like it was ignoring edits.
+
+        Which one it is, is decided by comparing the label with the "playing"
+        word left out. Compared unescaped, set escaped: comparing the escaped
+        form against slot.button_label() would differ on every ampersand and
+        rewrite the label forever.
+        """
         label = self.slot.button_label(playing)
+        content = self.slot.button_label(False)
         changed = playing != self._playing
+        edited = content != self._last_content
         self._playing = playing
-        # Compared unescaped, set escaped. Comparing the escaped form against
-        # slot.button_label() would differ on every ampersand and rewrite the
-        # label forever.
-        #
-        # The label is NOT rewritten while this button has focus. On MSW a
-        # button's accessible Name is its label, so changing it under a screen
-        # reader restarts the announcement - which happens exactly when a sound
-        # starts, on air, on the control the user is standing on. CLAUDE.md
-        # forbids it. The paint below still shows the new state immediately.
-        if label != self._last_label and not self.HasFocus():
+        if label != self._last_label and (edited or not self.HasFocus()):
             self._last_label = label
+            self._last_content = content
             self.SetLabel(_escaped(label))
             self._update_tooltip()
         if changed:
@@ -367,6 +405,8 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_bed_gain(self.board.bed_volume)
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
+        self.mixer.bed_fade_in = self.board.bed_fade_in
+        self.mixer.bed_fade_out = self.board.bed_fade_out
         # set_device clears the decode cache, so the whole board just went
         # cold. Warm it again rather than making the next key pay for it.
         self.warm_cache()
@@ -1320,11 +1360,12 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_bed_gain(board.bed_volume)
         self.mixer.ducking = board.ducking
         self.mixer.duck_db = board.duck_db
+        self.mixer.bed_fade_in = board.bed_fade_in
+        self.mixer.bed_fade_out = board.bed_fade_out
         for bank in range(1, C.BANK_COUNT + 1):
             for button, slot in zip(self.pages[bank].buttons,
                                     board.bank_slots(bank)):
-                button.slot = slot
-                button.refresh(False)
+                button.set_slot(slot)
         self._playing = set()
         self._build_accelerators()
         self._update_status()
@@ -1402,9 +1443,15 @@ class DropDeckFrame(wx.Frame):
             self.board.duck_db = float(dialog.duck_db.GetValue())
             self.board.announce_playback = dialog.announce_playback.GetValue()
             self.board.speech_level = dialog.speech_level
+            self.board.bed_fade_in = dialog.bed_fade_in
+            self.board.bed_fade_out = dialog.bed_fade_out
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
+        # Beds already in flight keep the fade they started with - a voice owns
+        # its envelope - so this takes effect from the next press.
+        self.mixer.bed_fade_in = self.board.bed_fade_in
+        self.mixer.bed_fade_out = self.board.bed_fade_out
 
         routing_changed = (bank_devices != (self.board.bank_devices or {}))
         device_changed = ((name, hostapi)

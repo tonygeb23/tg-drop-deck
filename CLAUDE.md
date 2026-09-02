@@ -15,7 +15,8 @@ Inherited from the other TG Studios apps, and not negotiable here either:
 
 - **wxPython only.** Never tkinter.
 - **Every user-facing change gets tested with NVDA actually running.**
-- Do not rewrite a control's accessible `Name` on value change.
+- Do not rewrite a control's accessible `Name` on **value** change. Rewriting
+  it on an **edit** is required — see the two halves of `SoundButton.refresh`.
 - Runs on the **global** Python 3.13.5, no venv — same as the other apps.
 
 And specific to this one:
@@ -37,6 +38,25 @@ And specific to this one:
   bare key and there is a test for it. RegisterHotKey on a bare key takes that
   key away from every other program on the machine, including whatever the user
   is typing into.
+- **A pad's label is rewritten the instant the user edits the slot, and never
+  while it is only the mixer talking.** `SoundButton.refresh` decides which it
+  is by comparing `slot.button_label(False)` — the label with the "playing"
+  word left out — against `_last_content`. An edit lands immediately, focus or
+  no focus, because a screen reader has to answer "did that apply?" without
+  the user tabbing away and back; that was Brian Hartgen's 2.3.0 report and it
+  made every edit in the app look ignored. A sound starting is still deferred
+  until focus leaves, because rewriting the Name under the user's fingers
+  restarts the announcement mid sentence, on air. `set_slot` is the third
+  case: a pad now pointing at a different slot is relabelled unconditionally.
+  `tests/test_feedback_2_3.py` asserts all three.
+- **The bed fades are settings, not constants.** `board.bed_fade_in` and
+  `board.bed_fade_out`, pushed onto the mixer in `__init__`, `_adopt` and
+  `_on_settings`, defaulting to `C.FADE_IN_BED` / `C.FADE_OUT_BED`. **Zero is
+  a supported value and means the bed plays exactly as recorded** — a bed cued
+  on its first beat cannot ease in. Nothing on the path may use `or` to
+  default them; `Board._fade` clamps to `0`–`C.MAX_BED_FADE` and falls back
+  only on something that is not a number. Sound effects never faded and this
+  setting does not reach them.
 - **Nothing goes between a keypress and a sound.** No confirmation, no
   animation, no lazy decode on the hot path. Short sounds are decoded into
   memory at assignment time precisely so the key is instant.
@@ -122,9 +142,10 @@ with no sound card present.
 - **A test renders far faster than real time**, so a streaming voice starves
   purely because its reader thread never gets a turn. `test_engine` waits on
   `Voice.buffered_frames`; the sound card does that pacing in the real app.
-- Duck depth, fades and the preload threshold all live in `constants.py`. The
-  tests assert against those constants, so changing one does not silently
-  invalidate a test.
+- Duck depth, the fade defaults and the preload threshold all live in
+  `constants.py`. The tests assert against those constants, so changing one
+  does not silently invalidate a test. The bed fades are only *defaults*
+  there now — the live values are on the board.
 
 ## The demo pack
 

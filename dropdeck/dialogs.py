@@ -585,6 +585,33 @@ class SettingsDialog(wx.Dialog):
             wx.EVT_CHECKBOX,
             lambda e: (self.duck_db.Enable(e.IsChecked()), e.Skip()))
 
+        # How a bed enters and leaves.
+        #
+        # Brian Hartgen, on 2.2.1: a bed that eases in cannot be used on air.
+        # He cues a bed on its first beat, and 350 ms of ramp eats exactly the
+        # thing he cued. It was a constant; it is a setting now, zero included,
+        # because "play it as it was recorded" is a legitimate answer and there
+        # was no way to ask for it.
+        outer.Add(wx.StaticText(self, label="Music bed fades, in seconds"),
+                  0, wx.LEFT | wx.TOP, 10)
+        fade_note = wx.StaticText(self, label=(
+            "Zero starts and stops a bed exactly where the file does. Sounds and\n"
+            "drops are unaffected - they have never faded."))
+        outer.Add(fade_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        fade_grid = wx.FlexGridSizer(2, 2, 6, 10)
+        self.fade_in_ctrl = self._fade_spin(
+            fade_grid, "Fade beds &in, seconds", "Bed fade in, seconds",
+            getattr(board, "bed_fade_in", C.FADE_IN_BED),
+            "How long a bed takes to reach full level. Zero means it starts at "
+            "full level on its first sample.")
+        self.fade_out_ctrl = self._fade_spin(
+            fade_grid, "Fade beds ou&t, seconds", "Bed fade out, seconds",
+            getattr(board, "bed_fade_out", C.FADE_OUT_BED),
+            "How long a bed takes to fall away when you stop it. Escape still "
+            "stops everything quickly, whatever this says.")
+        outer.Add(fade_grid, 0, wx.EXPAND | wx.ALL, 10)
+
         self.status = wx.StaticText(self, label=self._status_text())
         outer.Add(self.status, 0, wx.ALL, 10)
 
@@ -592,6 +619,30 @@ class SettingsDialog(wx.Dialog):
                   0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizerAndFit(outer)
         self.device.SetFocus()
+
+    def _fade_spin(self, grid, label, name, value, tip):
+        """One labelled fade box, in seconds.
+
+        A spin control rather than a slider because these are numbers a
+        broadcaster types - "zero" and "one" are the answers, not a position -
+        and because a screen reader reads a spin control's value back exactly.
+        """
+        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+        spin = wx.SpinCtrlDouble(self, min=0.0, max=C.MAX_BED_FADE, inc=0.05,
+                                 initial=float(value))
+        spin.SetDigits(2)
+        spin.SetName(name)
+        spin.SetToolTip(tip)
+        grid.Add(spin, 0)
+        return spin
+
+    @property
+    def bed_fade_in(self):
+        return round(float(self.fade_in_ctrl.GetValue()), 2)
+
+    @property
+    def bed_fade_out(self):
+        return round(float(self.fade_out_ctrl.GetValue()), 2)
 
     def _on_speech_level(self, _event):
         """The checkbox only means anything at the chattiest level.

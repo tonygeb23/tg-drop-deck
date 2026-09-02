@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.3.0 — 2 September 2026
+
+Both of these came from Brian Hartgen, who is customising a board heavily for
+his own show.
+
+### Music beds can start exactly where the file does
+
+A bed used to ease in over about a third of a second. If you cue a bed on its
+first beat, that is the beat it eats — and there was no way to ask for anything
+else, because the fade was a fixed number in the code.
+
+**Audio settings, `Ctrl+P`, now has both bed fades in seconds.** Set the fade in
+to zero and a bed plays out as recorded, at full level on its first sample. The
+fade out is separate, so you can have an instant start and still let a bed fall
+away when you stop it. Sounds and drops are untouched — they have never faded.
+
+The fades travel with the board, so a board built for one show keeps its own.
+An existing board keeps exactly what it had.
+
+### A button tells you the truth the moment you change it
+
+Assign a file to an empty bed and the button went on saying "2. Empty, key
+Alt+Ctrl+2" until you tabbed away and came back. Turn looping off and it still
+said "loops". Every edit in the app was like this, which made it genuinely hard
+to know whether anything had been applied.
+
+**The button is relabelled as soon as you change it** — assigning, renaming,
+looping, levels, either kind of hotkey, and opening a board.
+
+What has *not* changed is the reason the delay was there. When a sound starts
+or stops on the button you are standing on, the label still waits until you
+move off it, because rewriting it there restarts your screen reader mid
+sentence, on air. That was always the right call for the state; it was never
+right for something you had just done deliberately.
+
 ## 2.2.1 — 30 August 2026
 
 **Checking for updates now answers you in a window.** Before, the "you are up
