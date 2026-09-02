@@ -241,7 +241,7 @@ for needed in ("microphone", "playlist", "drops li", "rename this bank",
 print("The keys the menus advertise are the keys the app documents")
 
 for shortcut in ("Ctrl+M", "Ctrl+Shift+M", "Ctrl+Shift+P", "Ctrl+Shift+S",
-                 "Alt+D", "Ctrl+F2", "Ctrl+V", "F12"):
+                 "Alt+D", "Ctrl+F2", "Ctrl+V", "Ctrl+F12"):
     check("F1 help documents %s" % shortcut, shortcut in C.KEYBOARD_HELP)
 
 # ---------------------------------------------------------------------------

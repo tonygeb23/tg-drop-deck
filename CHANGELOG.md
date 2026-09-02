@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.1 — 2 September 2026
+
+**Save board as is Ctrl+F12**, not F12. A bare F12 is one keystroke away from
+the volume and rename row and too easy to hit by accident for something that
+opens a save dialog. Nothing else moved.
+
+**The crossfade box says what it does.** It sits under the running order with
+the explanation beside it: the next song starts that many seconds before the
+one playing ends, so every start time in the list moves when you change it.
+
+**And it is in Audio settings as well**, which is where somebody looking for
+"how long do songs overlap" goes first. The two boxes are two views of one
+number — set it in either and the other shows it.
+
+
 ## 2.5.0 — 2 September 2026
 
 The biggest release since 2.0.0, and most of it is new ground rather than

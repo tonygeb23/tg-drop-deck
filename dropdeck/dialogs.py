@@ -642,6 +642,34 @@ class SettingsDialog(wx.Dialog):
             "stops everything quickly, whatever this says.")
         outer.Add(fade_grid, 0, wx.EXPAND | wx.ALL, 10)
 
+        # The playlist crossfade. It also has a box under the running order,
+        # where it is used most - but somebody looking for "how long do songs
+        # overlap" looks in Audio settings, so it is in both and they are two
+        # views of one number.
+        outer.Add(wx.StaticText(self, label="Playlist crossfade"), 0,
+                  wx.LEFT | wx.TOP, 10)
+        crossfade_note = wx.StaticText(self, label=(
+            "How long one song in the playlist overlaps the next. The next\n"
+            "song starts this many seconds before the one playing ends, so\n"
+            "every start time in the running order moves when you change it.\n"
+            "Zero means each song plays right out before the next begins."))
+        outer.Add(crossfade_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        cross_row = wx.BoxSizer(wx.HORIZONTAL)
+        cross_row.Add(wx.StaticText(self, label="Cross&fade, seconds"), 0,
+                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.crossfade_ctrl = wx.SpinCtrlDouble(
+            self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5,
+            initial=float(getattr(board.playlist, "crossfade",
+                                  C.DEFAULT_CROSSFADE)))
+        self.crossfade_ctrl.SetDigits(1)
+        self.crossfade_ctrl.SetName("Playlist crossfade, seconds")
+        self.crossfade_ctrl.SetToolTip(
+            "The same box that sits under the running order. A single track "
+            "can be given a crossfade of its own from its right-click menu.")
+        cross_row.Add(self.crossfade_ctrl, 0)
+        outer.Add(cross_row, 0, wx.ALL, 10)
+
         self.status = wx.StaticText(self, label=self._status_text())
         outer.Add(self.status, 0, wx.ALL, 10)
 
@@ -649,6 +677,10 @@ class SettingsDialog(wx.Dialog):
                   0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizerAndFit(outer)
         self.device.SetFocus()
+
+    @property
+    def crossfade(self):
+        return round(float(self.crossfade_ctrl.GetValue()), 2)
 
     def _fade_spin(self, grid, label, name, value, tip):
         """One labelled fade box, in seconds.

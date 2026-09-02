@@ -798,6 +798,27 @@ panel._on_crossfade(None)
 frame._on_crossfade(None)
 check("the menu item takes you to the box instead of asking twice",
       frame.views.GetSelection() == VIEW_PLAYLIST)
+
+# 2.5.1: the same number is in Audio settings too, and the two have to agree.
+from dropdeck.dialogs import SettingsDialog as _Settings
+frame.board.playlist.crossfade = 2.0
+settings = _Settings(frame, frame.board, frame.mixer)
+check("Audio settings shows the playlist crossfade",
+      abs(settings.crossfade - 2.0) < 1e-9, settings.crossfade)
+check("named for a screen reader there too",
+      settings.crossfade_ctrl.GetName() == "Playlist crossfade, seconds",
+      settings.crossfade_ctrl.GetName())
+settings.crossfade_ctrl.SetValue(5.0)
+check("and reads back what was set", settings.crossfade == 5.0,
+      settings.crossfade)
+settings.Destroy()
+frame.board.playlist.crossfade = 5.0
+panel.refresh()
+check("the box under the running order follows Audio settings, because they "
+      "are two views of one number",
+      abs(panel.crossfade.GetValue() - 5.0) < 1e-9, panel.crossfade.GetValue())
+frame.board.playlist.crossfade = 2.0
+panel.refresh()
 check("and reads the value out on the way",
       "Crossfade" in frame.speaker.last_message, frame.speaker.last_message)
 

@@ -89,7 +89,21 @@ class PlaylistPanel(wx.Panel):
             "right out before the next starts. A track can be given a "
             "crossfade of its own from its right-click menu.")
         fade_row.Add(self.crossfade, 0)
-        outer.Add(fade_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        outer.Add(fade_row, 0, wx.LEFT | wx.RIGHT, 8)
+
+        # What the number actually does, in words, next to it. A spin box
+        # labelled "Crossfade, seconds" tells somebody the units and nothing
+        # about what happens - and this is the one number in the app that
+        # changes where every other item in the list starts.
+        outer.Add(wx.StaticText(self, label=(
+            "How long one song overlaps the next. The next song starts this "
+            "many seconds before\n"
+            "the one playing ends, so every start time in the list moves when "
+            "you change it.\n"
+            "Zero means each song plays right out first. A single track can "
+            "have its own from\n"
+            "its right-click menu, and this box is in Audio settings too.")),
+            0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.summary = wx.StaticText(self, label="")
         outer.Add(self.summary, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)

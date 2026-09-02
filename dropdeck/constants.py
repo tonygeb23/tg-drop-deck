@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -226,8 +226,7 @@ VOLUME — three independent masters, plus the microphone's own gain
 
 THE TWO VIEWS - soundboard and playlist
   Ctrl+Shift+S              Go to the soundboard
-                            (Save the board to a new file moved to F12 in
-                            2.5.0 so this key could be free)
+                            (Save the board to a new file is Ctrl+F12)
   Ctrl+Shift+P              Go to the playlist
   Ctrl+Alt+Tab              Swap between them
                             Windows uses Ctrl+Alt+Tab for its own task
@@ -249,7 +248,9 @@ THE PLAYLIST - a running order that cues itself
   Ctrl+Shift+D              Choose a file and put it in as a drop
   Alt+D                     Put a RANDOM drop in, from your drops library,
                             never the same one twice running
-  Crossfade box             In the playlist view, under the running order.
+  Crossfade box             In the playlist view, and in Audio settings.
+                            Under the running order, with what it does written
+                            beside it.
                             Arrow keys change it and every cue moves with it.
                             The Playlist menu takes you straight to it.
                             A single track can be given a crossfade of its
@@ -329,7 +330,7 @@ TELLING US SOMETHING
 
 FILE
   Ctrl+S                    Save the current board
-  F12                       Save the board to a new file
+  Ctrl+F12                  Save the board to a new file
   Ctrl+O                    Open a board
   Ctrl+P                    Audio output device and ducking settings
 

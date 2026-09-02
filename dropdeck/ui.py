@@ -725,7 +725,7 @@ class DropDeckFrame(wx.Frame):
         # view, and a frame accelerator beats a menu one - so Save board as
         # quietly stopped working and nothing said a word about it. F12 is
         # what Save As is on in Word and Excel, so it is not an invention.
-        file_menu.Append(ID_SAVE_AS, "Save board &as...\tF12",
+        file_menu.Append(ID_SAVE_AS, "Save board &as...\tCtrl+F12",
                          "Save this board to a file of its own")
         file_menu.Append(wx.ID_OPEN, "&Open board...\tCtrl+O", "Open a saved board")
         file_menu.Append(ID_IMPORT, "&Import an old soundboard bank...",
@@ -960,7 +960,7 @@ class DropDeckFrame(wx.Frame):
             # Save board as. It has to be in the table rather than left to the
             # menu, so that this file is the one place the keyboard map lives
             # and a clash like the one above shows up in the menu sweep.
-            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F12, ID_SAVE_AS),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_F12, ID_SAVE_AS),
             # Asked for, and bound. Windows reserves Ctrl+Alt+Tab for its own
             # persistent task switcher and usually takes it before any
             # application sees it, which is why the menu says so and why the
@@ -2473,6 +2473,7 @@ class DropDeckFrame(wx.Frame):
             self.board.speech_level = dialog.speech_level
             self.board.bed_fade_in = dialog.bed_fade_in
             self.board.bed_fade_out = dialog.bed_fade_out
+            self.board.playlist.crossfade = dialog.crossfade
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
@@ -2480,6 +2481,10 @@ class DropDeckFrame(wx.Frame):
         # its envelope - so this takes effect from the next press.
         self.mixer.bed_fade_in = self.board.bed_fade_in
         self.mixer.bed_fade_out = self.board.bed_fade_out
+        # The crossfade has two boxes now - one here and one under the running
+        # order - and they are two views of one number. Whichever was used, the
+        # other has to show it, or the app has two answers to one question.
+        self.playlist_panel.refresh()
 
         routing_changed = (bank_devices != (self.board.bank_devices or {}))
         device_changed = ((name, hostapi)
