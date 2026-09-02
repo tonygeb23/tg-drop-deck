@@ -216,7 +216,7 @@ class AssignHotkeyDialog(wx.Dialog):
 
     @property
     def result(self):
-        """(key_code, modifiers, label) — label is None when cleared."""
+        """(key_code, modifiers, label). label is None when cleared."""
         return self._key_code, self._modifiers, key_label(self._key_code, self._modifiers) or None
 
     def hotkey_text(self):
@@ -529,7 +529,7 @@ class SettingsDialog(wx.Dialog):
 
         outer.Add(wx.StaticText(self, label="&Output device"), 0, wx.LEFT | wx.TOP, 10)
         self.choices = ["System default"] + [
-            f"{d['name']} — {d['hostapi']}" for d in self.devices]
+            f"{d['name']}, {d['hostapi']}" for d in self.devices]
         self.device = wx.Choice(self, choices=self.choices)
         self.device.SetName("Output device")
         self.device.SetSelection(self._current_selection())
@@ -761,7 +761,7 @@ class SettingsDialog(wx.Dialog):
 
     @property
     def chosen_device(self):
-        """(index, name, hostapi) — index is None for the system default."""
+        """(index, name, hostapi). index is None for the system default."""
         selection = self.device.GetSelection()
         if selection <= 0:
             return None, None, None

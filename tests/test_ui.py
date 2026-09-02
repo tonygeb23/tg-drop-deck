@@ -210,7 +210,7 @@ def main():
           f"{dialog.results.GetCount()}")
     dialog._refresh("beep")
     check("search spans every bank", dialog.results.GetCount() == 2,
-          f"{dialog.results.GetCount()} — the effect and the bed both match")
+          f"{dialog.results.GetCount()}, the effect and the bed both match")
     dialog._refresh("test")
     check("search names the bank in its results",
           "SFX 1" in dialog.results.GetString(0), dialog.results.GetString(0))

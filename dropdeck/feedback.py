@@ -3,7 +3,7 @@
 WHY FROM INSIDE THE APP
 -----------------------
 The people using this are blind and low-vision, and the moment worth capturing
-is the moment something goes wrong — which is exactly the moment when leaving
+is the moment something goes wrong, which is exactly the moment when leaving
 the app, finding an email client, describing where you were and what you had
 pressed, and remembering the version number is most expensive. A menu item and
 a sentence gets a report that would otherwise never be written.
@@ -14,7 +14,7 @@ to read both means feedback actually gets read.
 NOTHING IS EVER LOST TO A BAD CONNECTION
 ----------------------------------------
 A report is written to a local queue first and only then sent. If the send
-fails — no network, the server restarting, somebody on a train — the queue
+fails, no network, the server restarting, somebody on a train, the queue
 keeps it and the next launch tries again. The user is told which of the two
 happened, because "thanks, that's been sent" when it has not is worse than
 saying nothing.

@@ -2,7 +2,7 @@
 
 Two problems come back from the API and both are fixed here.
 
-The effects arrive hot — peaks above full scale — which would clip the moment
+The effects arrive hot, peaks above full scale, which would clip the moment
 the mixer sums two of them. The beds arrive as MP3, which carries encoder
 padding, so a bed that should be thirty seconds is thirty seconds and a bit;
 loop that and you hear a tick every time round.
@@ -105,7 +105,7 @@ def make_seamless(data, rate, seconds=None, crossfade=LOOP_CROSSFADE_SECONDS):
     """Return a clip whose end runs into its own beginning without a seam.
 
     The tail is folded back over the head with an equal-power crossfade, and
-    the result is exactly the loop length — so playing it end to end forever
+    the result is exactly the loop length, so playing it end to end forever
     has no gap and no click.
     """
     total = len(data)
@@ -153,7 +153,7 @@ def _write_chunked(path, data, rate, fmt, subtype, block=48000):
     """Write in blocks rather than in one call.
 
     libsndfile's Vorbis encoder takes the whole buffer badly once a file gets
-    past a few seconds — it kills the process outright, with no exception to
+    past a few seconds, it kills the process outright, with no exception to
     catch. Feeding it a second at a time is just as fast and does not.
 
     Written to a temporary file and moved into place, so a failure never

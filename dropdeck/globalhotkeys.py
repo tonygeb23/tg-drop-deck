@@ -1,7 +1,7 @@
 """System-wide hotkeys, so a sound fires while another window has focus.
 
 This is the point of a soundboard on a live show. You are in the DAW, or the
-call software, or a browser, and you need the sting *now* — alt-tabbing to the
+call software, or a browser, and you need the sting *now*, alt-tabbing to the
 board first is the whole problem.
 
 Three rules, and they are why this is a separate opt-in layer rather than the

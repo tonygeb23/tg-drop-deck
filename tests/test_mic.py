@@ -4,7 +4,7 @@
 
 No microphone is opened. `MicInput` is driven by handing its callback blocks of
 samples directly, which is exactly what a sound card would do and works on a
-machine with no input device at all — the same trick `test_engine` uses on the
+machine with no input device at all, the same trick `test_engine` uses on the
 output side.
 
 The thing worth being careful about:

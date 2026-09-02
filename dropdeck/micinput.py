@@ -5,14 +5,14 @@ deliberately separate:
 
 **Capture.** One `sounddevice.InputStream`, opened at the smallest block the
 device will take and asked for low latency, because a monitored microphone with
-a lag on it is unusable — you hear yourself late and you cannot speak over it.
+a lag on it is unusable, you hear yourself late and you cannot speak over it.
 
 **Ducking.** While the microphone is open, everything musical gets out of the
 way. That is not done by listening to the level: it is done by the fact that the
 microphone is *on*. A gate that opens on your voice clips the first syllable of
 every sentence, and one that stays open ducks the bed when you cough. Open means
-ducked; closed means back up. `DuckBus` already exists for exactly this — it is
-how a drop on one sound card ducks a bed on another — so the microphone simply
+ducked; closed means back up. `DuckBus` already exists for exactly this, it is
+how a drop on one sound card ducks a bed on another, so the microphone simply
 publishes onto it under its own key.
 
 **Monitoring.** Off by default, and it says why: on speakers it is a feedback

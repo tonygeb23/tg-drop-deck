@@ -1,7 +1,7 @@
 """A radio playlist: a running order, its cue points, and the two decks.
 
 The soundboard fires sounds you choose, one press at a time. A playlist is the
-other half of a show — songs queued up, each one cueing the next before it has
+other half of a show, songs queued up, each one cueing the next before it has
 finished, with station drops sitting between them.
 
 Two ideas do all the work here.
@@ -15,7 +15,7 @@ A drop's cue defaults to zero, so it plays out and then hands over.
 crossfade is the two of them overlapping. So does this: `PLAYLIST_DECK_A` and
 `PLAYLIST_DECK_B` are slot indices above the eighty pads, and the player
 alternates between them. That is why a crossfade needs no special case in the
-mixer at all — it is one voice fading out while another fades in, which the
+mixer at all, it is one voice fading out while another fades in, which the
 mixer has always been able to do.
 
 Like `engine.py` and `mixer.py`, **nothing here knows what wx is.** The player

@@ -172,7 +172,7 @@ class Slot:
         """What the button says, and therefore what a screen reader reads.
 
         Name first, because that is what you are hunting for when you arrow
-        along a row. The bank is not repeated here — the tab already said it.
+        along a row. The bank is not repeated here, the tab already said it.
         """
         parts = [f"{self.number}. {self.display_name}"]
         if self.hotkey_label:
@@ -198,7 +198,7 @@ class Slot:
 
         Cheap to call often: it compares the folder's own timestamp and does
         nothing when nobody has touched it. It is never called between a
-        keypress and a sound — the trigger path uses whatever the last scan
+        keypress and a sound, the trigger path uses whatever the last scan
         found, and the cache warmer does the scanning at startup.
         """
         if not self.is_folder:

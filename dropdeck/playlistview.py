@@ -3,12 +3,12 @@
 Deliberately a ``wx.CheckListBox`` rather than anything cleverer. A list box is
 the one control every screen reader reads without argument, arrows through
 without surprises, and reports a position in. The whole row is the text, the
-same way a pad's whole label is its accessible name — and the tick beside it is
+same way a pad's whole label is its accessible name, and the tick beside it is
 whether that item goes out, so a running order can be "play this, this and
 this, not that" without anything having to leave the list and lose its place.
 
-**The rows never say "playing".** They carry the running order — position,
-name, whether it is a song or a drop, how long, its cue — and none of that
+**The rows never say "playing".** They carry the running order, position,
+name, whether it is a song or a drop, how long, its cue, and none of that
 changes while the show is on. Rewriting the row that has focus would restart a
 screen reader mid sentence at exactly the moment a song changes, which is the
 trap `SoundButton.refresh` exists to avoid. What is on air is *spoken* when it

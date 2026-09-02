@@ -18,7 +18,7 @@ from dropdeck.board import Board, FORMAT_VERSION
 
 CHECKS = []
 
-#: Tony's real bank from the app this one replaces. Optional — the suite still
+#: Tony's real bank from the app this one replaces. Optional, the suite still
 #: passes on a machine that does not have it.
 LEGACY_BANK = os.path.join(os.path.expanduser("~"), "Dropbox", "AI", "AI Apps",
                            "Sound Board", "TG1.json")
@@ -155,7 +155,7 @@ def main():
               again.assigned_count == old.assigned_count
               and again[3].name == old[3].name)
     else:
-        print(f"  skipped — {LEGACY_BANK} not on this machine")
+        print(f"  skipped, {LEGACY_BANK} not on this machine")
 
     passed = sum(1 for _, ok, _ in CHECKS if ok)
     print(f"\n{passed}/{len(CHECKS)} checks passed")

@@ -1,7 +1,7 @@
 """The mixer, driven silently.
 
 No sound card is opened. We render blocks by hand and look at the samples, so
-this runs anywhere — including on a machine with no audio at all.
+this runs anywhere, including on a machine with no audio at all.
 
     python tests/test_engine.py
 """

@@ -14,7 +14,7 @@ install something, and "what version am I on again" is a fair question to ask
 twice. A read-only multiline text control can be arrowed through, character by
 character if you like, and copied.
 
-Worse, one app had no dialog at all on the "you are up to date" path — it only
+Worse, one app had no dialog at all on the "you are up to date" path. It only
 spoke. Anyone who had turned the app's speech down got **silence** in reply to
 asking a direct question, which reads as the feature being broken.
 

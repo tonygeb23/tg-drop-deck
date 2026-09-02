@@ -4,14 +4,14 @@
 
 Three things, from two people:
 
-  * **David Goldfield — rename the banks.** A board you built yourself is not
+  * **David Goldfield, rename the banks.** A board you built yourself is not
     "Sound Effects" and "Dialog Drops", it is "Movie Clips" and "Sirens and
     Alarms". The name is the only thing that changes: bank three is still the
     looping bank and bank four still takes custom hotkeys, because those are
     what the keys do rather than what the tab says.
-  * **Brian Hartgen — Play in the Find dialog should not throw you out.** With
+  * **Brian Hartgen, Play in the Find dialog should not throw you out.** With
     several matches you want to hear which is which before you commit.
-  * **Brian Hartgen — a folder on one key.** Six jingles that all mean "down
+  * **Brian Hartgen, a folder on one key.** Six jingles that all mean "down
     the chart"; you do not care which one plays, only that one does.
 """
 

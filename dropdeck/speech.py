@@ -4,7 +4,7 @@ A screen reader already reads focus changes and button labels. This is for the
 things it cannot know about on its own: that a bed just started, that the
 volume moved, that a file has gone missing.
 
-If accessible_output2 is not installed the app still works — the same text goes
+If accessible_output2 is not installed the app still works, the same text goes
 to the status bar, which a screen reader can be pointed at.
 """
 
@@ -34,7 +34,7 @@ class Speaker:
         return self._output is not None
 
     def say(self, text, interrupt=True):
-        """Speak one line. Interrupting is the default — during a live show the
+        """Speak one line. Interrupting is the default, during a live show the
         thing you just did matters more than the thing you did a second ago."""
         text = (text or "").strip()
         if not text:

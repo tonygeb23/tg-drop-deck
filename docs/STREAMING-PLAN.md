@@ -1,4 +1,4 @@
-# Streaming out of Drop Deck — the groundwork
+# Streaming out of Drop Deck, the groundwork
 
 Written 2 September 2026, before any of it is built. Tony's direction is that
 this comes slowly; this document is so that when it starts, the decisions that
@@ -26,7 +26,7 @@ So there are two different things and **the encoder is not one of the outputs**:
 - **The encoder takes the PROGRAM: the sum of everything, whatever it was
   routed to.** A drop sent to a separate card is still part of the show.
 
-`MixerGroup` has no such sum today — each `Mixer` renders only its own voices.
+`MixerGroup` has no such sum today, each `Mixer` renders only its own voices.
 **The program bus has to exist before the encoder does**, and it is the piece
 worth building first because everything else hangs off it.
 
@@ -47,7 +47,7 @@ class ProgramBus:
 Same non-blocking contract as `MicInput.read`: silence rather than a stall. An
 encoder falling behind must never take the audio callback with it. Several
 mixers write into one bus per block, so the bus sums by position rather than
-appending — a block counter per mixer, mixed into the same slot.
+appending, a block counter per mixer, mixed into the same slot.
 
 ---
 
@@ -65,7 +65,7 @@ Headers, from the protocol notes:
 | Header | Notes |
 |---|---|
 | `Authorization: Basic …` | ordinary HTTP basic auth, usually user `source` |
-| `Content-Type` | **mandatory** — `audio/mpeg`, `application/ogg`, `audio/ogg` |
+| `Content-Type` | **mandatory**, `audio/mpeg`, `application/ogg`, `audio/ogg` |
 | `Expect: 100-continue` | `PUT` only; wait for the go-ahead before sending |
 | `Ice-Public` | `0` or `1`, whether to list in a directory |
 | `Ice-Name`, `Ice-Description`, `Ice-Genre`, `Ice-URL` | station details |
@@ -83,14 +83,14 @@ Three things that bite:
 3. **Mount naming.** Ogg mounts conventionally end `.ogg`; MP3 mounts have no
    extension. Cosmetic, but listeners' players key off it.
 
-### Metadata — the part that differs by format
+### Metadata, the part that differs by format
 
 - **Ogg (Vorbis/Opus):** the title travels *in* the stream, in the comment
   header of each chain. Changing it means starting a new logical stream.
 - **MP3:** the title is sent **out of band**, as a separate authenticated GET:
   `/admin/metadata?mode=updinfo&mount=/live&song=Artist%20-%20Title`.
 
-Drop Deck already knows the track name — `PlaylistPlayer._playlist_moved` is
+Drop Deck already knows the track name, `PlaylistPlayer._playlist_moved` is
 the exact place a "now playing" update belongs, and it fires once per song.
 That gets us song titles on the stream almost for free, which is a thing
 station software charges for.
@@ -125,7 +125,7 @@ conditions at all. MP3 is the compatibility choice, not the technical one.
   statically or against a shared library? If static, ship `libmp3lame.dll`
   beside the exe and load it, the way the demo pack sits beside the exe rather
   than inside it. Either way LAME's terms want acknowledgement and a link to
-  their site — which belongs in the About box next to the ElevenLabs
+  their site, which belongs in the About box next to the ElevenLabs
   disclosure that is already there.
 
 `lameenc` takes **16-bit interleaved PCM**; the mixer works in float32, so
@@ -153,12 +153,12 @@ Keeping to the rules the rest of the app already follows:
   keep encoding into the void, say so once rather than every retry. A show
   carries on when the internet does not.
 - **Say the state, do not show it.** "Streaming, 128k Ogg, 3 listeners" on
-  demand — the natural home is a key beside `Ctrl+L`, "what is playing".
+  demand, the natural home is a key beside `Ctrl+L`, "what is playing".
   Connect and disconnect are `announce()`, not `announce_help()`: whether you
   are on air is not a pleasantry.
 - **Settings**: server, port, mount, password, format, bitrate, and the station
   details that become the `Ice-*` headers. Password handling is the one new
-  privacy question — it is a credential, it has to be saved somewhere, and the
+  privacy question, it is a credential, it has to be saved somewhere, and the
   board file is plain JSON that travels with a show. **Keep it out of the board
   file**; the config directory, or Windows Credential Manager.
 
@@ -176,13 +176,13 @@ Keeping to the rules the rest of the app already follows:
 
 ## 5. Beyond Icecast
 
-- **Shoutcast v1/v2** — different enough to need its own client (v1 uses port+1
+- **Shoutcast v1/v2**, different enough to need its own client (v1 uses port+1
   for the source connection and its own metadata scheme). Common in older
   stations; worth having once Icecast works.
-- **RTMP** (Restream, YouTube, Twitch) — a different world: FFmpeg or PyAV
+- **RTMP** (Restream, YouTube, Twitch), a different world: FFmpeg or PyAV
   territory, and video-shaped even when audio-only. Tony already has
   RestreamA11y for that side, so this is not urgent.
-- **HLS** — for a station's own web player. Icecast can be fronted by something
+- **HLS**, for a station's own web player. Icecast can be fronted by something
   else for this; not the app's problem.
 - **A local file recorder** falls out of the encoder work almost free, and is
   worth having on its own: press record, get an Ogg of the show.

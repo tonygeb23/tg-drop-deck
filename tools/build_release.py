@@ -2,8 +2,8 @@
 
     python tools/build_release.py
 
-Produces `dist/TG Drop Deck/` — an executable you can double-click with no
-Python installed — and `dist/TG-Drop-Deck-<version>-windows.zip` ready to put
+Produces `dist/TG Drop Deck/`, an executable you can double-click with no
+Python installed, and `dist/TG-Drop-Deck-<version>-windows.zip` ready to put
 on the site.
 
 The demo pack is copied in beside the executable rather than bundled inside it.

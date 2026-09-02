@@ -1,23 +1,33 @@
-# TG Drop Deck — working notes
+# TG Drop Deck, working notes
 
 An accessible soundboard. wxPython, screen-reader first, free and MIT licensed,
 released under the TG Studios name alongside [TG Model Master](../TG%20Model%20Master/CLAUDE.md)
 and [TG Chord Caller](../TG%20Chord%20Caller/CLAUDE.md).
 
 Rebuilt August 2026 from The Tony Gebhard Show Soundboard 1.2. That app had no
-surviving source — only a frozen executable. The class layout, the bank
+surviving source, only a frozen executable. The class layout, the bank
 structure and the whole keyboard map were recovered out of the binary before a
 line was written, which is why they match exactly.
 
 ## Standing rules
+
+- **No em dashes or en dashes. Anywhere.** Tony's rule, 2 September 2026:
+  code comments, docstrings, commit messages, the changelog, the website, the
+  user guide, spoken strings, all of it. Use a full stop, a comma, a colon or
+  brackets, and write "1 to 0" rather than a range with a dash. An em dash is
+  one of the loudest tells that a machine wrote something, and a screen reader
+  either skips it or says "em dash", neither of which is the sentence.
+  `python tools/nodashes.py` reports them and `--fix` removes them, but **read
+  the diff afterwards**: a dash swapped for a comma leaves comma splices, and
+  the tool cannot tell a good comma from a bad one.
 
 Inherited from the other TG Studios apps, and not negotiable here either:
 
 - **wxPython only.** Never tkinter.
 - **Every user-facing change gets tested with NVDA actually running.**
 - Do not rewrite a control's accessible `Name` on **value** change. Rewriting
-  it on an **edit** is required — see the two halves of `SoundButton.refresh`.
-- Runs on the **global** Python 3.13.5, no venv — same as the other apps.
+  it on an **edit** is required, see the two halves of `SoundButton.refresh`.
+- Runs on the **global** Python 3.13.5, no venv, same as the other apps.
 
 And specific to this one:
 
@@ -30,7 +40,7 @@ And specific to this one:
   you rename either of them, and `tests/test_feedback_2_4.py` asserts it.
   David Goldfield asked for this; do not let a later feature key off the name.
 - **A slot may hold a folder instead of a file**, and then plays a random one
-  of its sounds per press — Brian Hartgen's chart-countdown case. `is_folder`
+  of its sounds per press, Brian Hartgen's chart-countdown case. `is_folder`
   is `os.path.isdir(filepath)`, so there is no second kind of slot to keep in
   sync. Two rules: **the scan never happens on the trigger path** (the cache
   warmer and the assign dialog do it; a press uses the last scan), and
@@ -60,7 +70,7 @@ And specific to this one:
 - **Nothing opens a microphone except a keypress.** Not startup, not loading
   a board. `mic_monitor`, the device and the gain are saved; whether it was
   ON is deliberately not, and there is a test that says so.
-- **The digit map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
+- **The digit map is frozen.** `1`-`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
   `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty. It is muscle
   memory built over years. A new feature gets a new key; it never takes one
   of these. Global hotkeys in 2.1.0 took `Ctrl+G` and nothing else.
@@ -79,8 +89,8 @@ And specific to this one:
   is typing into.
 - **A pad's label is rewritten the instant the user edits the slot, and never
   while it is only the mixer talking.** `SoundButton.refresh` decides which it
-  is by comparing `slot.button_label(False)` — the label with the "playing"
-  word left out — against `_last_content`. An edit lands immediately, focus or
+  is by comparing `slot.button_label(False)`, the label with the "playing"
+  word left out, against `_last_content`. An edit lands immediately, focus or
   no focus, because a screen reader has to answer "did that apply?" without
   the user tabbing away and back; that was Brian Hartgen's 2.3.0 report and it
   made every edit in the app look ignored. A sound starting is still deferred
@@ -91,9 +101,9 @@ And specific to this one:
 - **The bed fades are settings, not constants.** `board.bed_fade_in` and
   `board.bed_fade_out`, pushed onto the mixer in `__init__`, `_adopt` and
   `_on_settings`, defaulting to `C.FADE_IN_BED` / `C.FADE_OUT_BED`. **Zero is
-  a supported value and means the bed plays exactly as recorded** — a bed cued
+  a supported value and means the bed plays exactly as recorded**, a bed cued
   on its first beat cannot ease in. Nothing on the path may use `or` to
-  default them; `Board._fade` clamps to `0`–`C.MAX_BED_FADE` and falls back
+  default them; `Board._fade` clamps to `0`-`C.MAX_BED_FADE` and falls back
   only on something that is not a number. Sound effects never faded and this
   setting does not reach them.
 - **Nothing goes between a keypress and a sound.** No confirmation, no
@@ -125,7 +135,7 @@ And specific to this one:
 
 ```
 dropdeck/
-  constants.py   banks, hotkey labels, fades, help text — one source of truth
+  constants.py   banks, hotkey labels, fades, help text, one source of truth
   slot.py        one button's state, how it describes itself, folder picking
   playlist.py    the running order, its cue points, and the two decks
   playlistview.py the list, its tick boxes and its row menu
@@ -147,13 +157,13 @@ tools/
   check_guide.py     fact-checks the published user guide against the app
 ```
 
-`engine.py` and `mixer.py` know nothing about wx. That is deliberate — it is
+`engine.py` and `mixer.py` know nothing about wx. That is deliberate, it is
 why `tests/test_engine.py` can render the entire mixer and inspect the samples
 with no sound card present.
 
 ## Where this is going
 
-Tony's direction, 2 September 2026, deliberately **slow and steady** — none of
+Tony's direction, 2 September 2026, deliberately **slow and steady**, none of
 it is scheduled and none of it displaces a listener request:
 
 **Drop Deck should eventually handle live streaming**, taking influence from
@@ -229,17 +239,25 @@ would have had me editing correct prose.
 - **A timer swallows whatever its callback raises.** `_announce_startup` runs
   inside a `wx.CallLater` and asked a `MixerGroup` for a `stream` attribute it
   has never had. From 2.1.2 to 2.3.0 that raised on every single launch, so the
-  app said nothing at startup at all — including "3 files missing" and "audio
-  could not start" — and nothing anywhere reported it. It is `is_running` now,
+  app said nothing at startup at all, including "3 files missing" and "audio
+  could not start", and nothing anywhere reported it. It is `is_running` now,
   answered by both `Mixer` and `MixerGroup`, and `_announce_startup` wraps
   `_startup_line` so a future failure lands in the status bar instead of
   vanishing. **Anything you put in a timer callback needs the same treatment.**
 - **A wx.CallAfter with no wx.App raises**, and inside the hotkey listener
-  thread that killed the thread *before it reached the message loop* — leaving
+  thread that killed the thread *before it reached the message loop*, leaving
   every combination registered with Windows, firing nothing, and unavailable to
   every other program until the process died. Unregistering now happens in a
   `finally`, and the hop to the UI thread is guarded. A test asserts the thread
   is still alive after registering.
+- **A text tool that rewrites code it was not asked to rewrite is worse than
+  no tool.** The first `nodashes.py` ran tidy-up regexes over whole files to
+  clean up after its own replacements. One of them, `,\s*\)` to `)`, turned
+  `("",) * SLOTS_PER_BANK` into `("") * SLOTS_PER_BANK`: bank four's hotkey
+  labels became an empty string rather than a tuple of twenty, and the app
+  would have raised the moment anybody opened bank four. It was caught by
+  reading the diff, which is the only reason it is not in a release. The tool
+  now edits nothing but the dash character on lines that contain one.
 - **Do not point PyInstaller's `--distpath` inside Dropbox.** `--clean` dies on
   "cannot access the file because it is being used by another process" every
   time. The whole build goes to `%LOCALAPPDATA%\TG Studios Build\drop-deck`
@@ -255,14 +273,14 @@ would have had me editing correct prose.
   like one that hung.
 
 - **libsndfile's Vorbis encoder kills the process** on a one-shot write of more
-  than a few seconds. No exception, no traceback — the interpreter just exits.
+  than a few seconds. No exception, no traceback, the interpreter just exits.
   Write OGG in blocks through `sf.SoundFile`, which `audiopost._write_chunked`
   does. This cost an afternoon; do not "simplify" it back to `sf.write`.
 - **Dropbox holds a newly created file open** long enough to break
   `os.replace`. Every atomic write here retries.
 - **The ElevenLabs music endpoint ignores `output_format`** and returns MP3 at
   48 kHz whatever you ask for. It also returns slightly more audio than you
-  asked for — MP3 encoder padding — so beds are requested two seconds long and
+  asked for, MP3 encoder padding, so beds are requested two seconds long and
   trimmed to an exact loop.
 - **A test renders far faster than real time**, so a streaming voice starves
   purely because its reader thread never gets a turn. `test_engine` waits on
@@ -270,7 +288,7 @@ would have had me editing correct prose.
 - Duck depth, the fade defaults and the preload threshold all live in
   `constants.py`. The tests assert against those constants, so changing one
   does not silently invalidate a test. The bed fades are only *defaults*
-  there now — the live values are on the board.
+  there now, the live values are on the board.
 
 ## The demo pack
 
@@ -282,7 +300,7 @@ failure. Effects are peak-normalised to −1 dBFS; beds are loudness-matched to
 −20 dBFS RMS with a limiter rather than by turning the whole track down, then
 crossfaded into an exact thirty-second loop.
 
-Two beds sit a couple of decibels under the rest on purpose — `dark_tension`
+Two beds sit a couple of decibels under the rest on purpose, `dark_tension`
 and `suspense_pulse` are sparse and high-crest, and flattening them to match
 would ruin what they are for.
 
@@ -297,11 +315,11 @@ out of the generator.
 `%APPDATA%\TG Studios\TG Drop Deck\board.json`. Saved on change (two second
 debounce) and on exit, atomically.
 
-A board may store paths relative to itself — that is how the shipped demo
+A board may store paths relative to itself, that is how the shipped demo
 resolves wherever the app lands. Absolute paths are used for everything the
 user assigns. `Board.load` resolves relative paths against the board's own
 folder, so both work without a flag.
 
 Tony's old bank from the 1.2 app is parked in `boards/TG Show bank.json`. Many
-of its files no longer exist — the E: drive is gone and a Dropbox folder was
-renamed — which is what **File → Relink missing sounds** is for.
+of its files no longer exist, the E: drive is gone and a Dropbox folder was
+renamed, which is what **File → Relink missing sounds** is for.

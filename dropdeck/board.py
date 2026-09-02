@@ -1,7 +1,7 @@
 """A board: eighty slots, two volumes, and the settings that travel with them.
 
 Boards are plain JSON. The old Tony Gebhard Show Soundboard files load without
-conversion — that format is a subset of this one, so an existing bank opens and
+conversion, that format is a subset of this one, so an existing bank opens and
 keeps working.
 """
 
@@ -49,7 +49,7 @@ def default_board_path():
 def app_dir():
     """The folder the app was installed or checked out into.
 
-    Frozen, that is the folder holding the executable — which is where the demo
+    Frozen, that is the folder holding the executable, which is where the demo
     pack sits, deliberately outside the bundle so it can be opened, replaced or
     added to like any other folder of sounds.
     """
@@ -376,7 +376,7 @@ class Board:
 
         raw = data.get("slots") or []
         # A board may store paths relative to itself, which is how the shipped
-        # demo pack works — it has to resolve wherever the app is installed.
+        # demo pack works, it has to resolve wherever the app is installed.
         base = os.path.dirname(os.path.abspath(path))
         for index in range(C.TOTAL_SLOTS):
             entry = raw[index] if index < len(raw) else None

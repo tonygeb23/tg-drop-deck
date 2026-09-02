@@ -1,4 +1,4 @@
-"""TG Drop Deck — an accessible soundboard for podcasts, radio and live shows.
+"""TG Drop Deck, an accessible soundboard for podcasts, radio and live shows.
 
     python main.py
     python main.py --selftest --selftest-out report.txt

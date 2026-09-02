@@ -1,8 +1,8 @@
 """Names, banks, hotkeys and help text.
 
 Everything the rest of the app has to agree on lives here. The bank layout and
-the hotkeys are inherited unchanged from The Tony Gebhard Show Soundboard 1.2 —
-they are muscle memory and they are not up for redesign.
+the hotkeys are inherited unchanged from The Tony Gebhard Show Soundboard 1.2.
+They are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
@@ -180,27 +180,27 @@ MAX_MIC_GAIN_DB = 24.0
 MIC_RING_FRAMES = 12000
 
 # ------------------------------------------------------------------- keys ---
-KEYBOARD_HELP = f"""{APP_NAME} — keyboard shortcuts
+KEYBOARD_HELP = f"""{APP_NAME}: keyboard shortcuts
 
 The four bank names below are what the app ships with. Rename any of them
-with Ctrl+F2 — the keys, the looping and the hotkeys are unaffected.
+with Ctrl+F2, the keys, the looping and the hotkeys are unaffected.
 
-BANK 1 — Sound Effects
+BANK 1: Sound Effects
   1 to 0                    Play sounds 1 to 10
   Shift+1 to 0              Play sounds 11 to 20
 
-BANK 2 — Dialog Drops
+BANK 2: Dialog Drops
   Ctrl+1 to 0               Play drops 1 to 10
   Ctrl+Shift+1 to 0         Play drops 11 to 20
 
-BANK 3 — Music Beds (loop by default)
+BANK 3: Music Beds (loop by default)
   Alt+Ctrl+1 to 0           Start or stop beds 1 to 10
   Alt+Ctrl+Shift+1 to 0     Start or stop beds 11 to 20
   Right-click               Turn looping off or on for one bed
   A bed starts exactly where the file does and fades out when you stop it.
   Audio settings, Ctrl+P, sets both fades in seconds.
 
-BANK 4 — Miscellaneous
+BANK 4: Miscellaneous
   Right-click a button      Assign a sound file and your own hotkey
 
 PER BUTTON
@@ -215,7 +215,7 @@ BANK NAMES
   Banks menu                Rename, or put the shipped name back
   A name is yours and saves with the board. Renaming bank 3 does not stop it
   being the looping bank, and renaming bank 4 does not stop it taking your
-  own hotkeys — those are what the keys do, not what the tab says.
+  own hotkeys. Those are what the keys do, not what the tab says.
 
 A FOLDER INSTEAD OF A FILE
   Sounds menu, or right-click a button, then Assign a folder.
@@ -224,7 +224,7 @@ A FOLDER INSTEAD OF A FILE
   joins in; the app rescans when the folder changes.
   Good for the six jingles that all mean "down the chart".
 
-VOLUME — three independent masters, plus the microphone's own gain
+VOLUME: three independent masters, plus the microphone's own gain
   F3 / F4                   Sound volume down / up (banks 1, 2 and 4)
   F5 / F6                   Bed volume down / up (bank 3)
   F7 / F8                   Playlist volume down / up
