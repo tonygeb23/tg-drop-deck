@@ -117,6 +117,7 @@ class Mixer:
 
         self.sfx_gain = C.DEFAULT_SFX_VOLUME
         self.bed_gain = C.DEFAULT_BED_VOLUME
+        self.playlist_gain = C.DEFAULT_PLAYLIST_VOLUME
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
 
@@ -125,6 +126,10 @@ class Mixer:
         #: what a cued music bed has to do.
         self.bed_fade_in = C.FADE_IN_BED
         self.bed_fade_out = C.FADE_OUT_BED
+
+        #: A microphone being monitored, or None. Anything with a
+        #: read(frames) that never blocks will do; see micinput.MicInput.
+        self.monitor_source = None
 
         self._duck = 1.0
         self.peak = 0.0
@@ -211,8 +216,8 @@ class Mixer:
         return data
 
     # ------------------------------------------------------------ transport --
-    def play(self, slot_index, path, *, is_bed=False, loop=False, trim_db=0.0,
-             name="", duration=None, fade_in=None, fade_out=None):
+    def play(self, slot_index, path, *, is_bed=False, bus=None, loop=False,
+             trim_db=0.0, name="", duration=None, fade_in=None, fade_out=None):
         """Start a sound. Returns the Voice, or None if the file would not open."""
         if duration is None:
             try:
@@ -221,16 +226,16 @@ class Mixer:
                 self.last_error = str(exc)
                 return None
 
+        bus = bus or (C.BUS_BED if is_bed else C.BUS_SFX)
         if fade_in is None:
-            fade_in = self.bed_fade_in if is_bed else C.FADE_IN_SFX
+            fade_in = self.bed_fade_in if bus == C.BUS_BED else C.FADE_IN_SFX
         if fade_out is None:
-            fade_out = self.bed_fade_out if is_bed else C.FADE_OUT_SFX
+            fade_out = self.bed_fade_out if bus == C.BUS_BED else C.FADE_OUT_SFX
 
-        base = self.bed_gain if is_bed else self.sfx_gain
-        gain = base * db_to_gain(trim_db)
+        gain = self.bus_gain(bus) * db_to_gain(trim_db)
         common = dict(slot_index=slot_index, gain=gain, loop=loop, name=name,
                       fade_in=fade_in, fade_out=fade_out, rate=self.samplerate,
-                      is_bed=is_bed)
+                      bus=bus)
         try:
             if duration and duration <= C.PRELOAD_SECONDS:
                 voice = MemoryVoice(self._cached(path), **common)
@@ -244,14 +249,25 @@ class Mixer:
             self._voices.append(voice)
         return voice
 
-    def stop_slot(self, slot_index, fade_out=None):
-        """Fade out every voice belonging to one slot."""
+    def stop_slot(self, slot_index, fade_out=None, also_releasing=False):
+        """Fade out every voice belonging to one slot.
+
+        ``also_releasing`` re-releases a voice that is already on its way out,
+        with the shorter fade. That matters mid-crossfade: the outgoing song is
+        releasing over the whole crossfade, so "stop the playlist" would
+        otherwise leave it audible for another few seconds after being told to
+        stop. Voice.release is safe to call twice and takes the new fade.
+        """
         stopped = 0
         with self._lock:
             for voice in self._voices:
-                if voice.slot_index == slot_index and not voice.releasing:
-                    voice.release(fade_out)
+                if voice.slot_index != slot_index:
+                    continue
+                if voice.releasing and not also_releasing:
+                    continue
+                if not voice.releasing:
                     stopped += 1
+                voice.release(fade_out)
         return stopped
 
     def stop_all(self, fade_out=None):
@@ -280,19 +296,32 @@ class Mixer:
             return len(self._voices)
 
     # ------------------------------------------------------------- levels ----
-    def set_sfx_gain(self, gain):
-        self.sfx_gain = max(0.0, min(1.0, gain))
+    def bus_gain(self, bus):
+        return {C.BUS_SFX: self.sfx_gain,
+                C.BUS_BED: self.bed_gain,
+                C.BUS_PLAYLIST: self.playlist_gain}.get(bus, self.sfx_gain)
+
+    def _set_bus_gain(self, bus, gain):
+        gain = max(0.0, min(1.0, gain))
+        setattr(self, {C.BUS_SFX: "sfx_gain", C.BUS_BED: "bed_gain",
+                       C.BUS_PLAYLIST: "playlist_gain"}[bus], gain)
         with self._lock:
             for voice in self._voices:
-                if not voice.is_bed:
-                    voice.set_gain(self.sfx_gain)
+                if voice.bus == bus:
+                    # A voice mid-crossfade is on its way somewhere; moving its
+                    # target under it would abandon the fade half done.
+                    if not voice.releasing:
+                        voice.set_gain(gain)
+        return gain
+
+    def set_sfx_gain(self, gain):
+        self._set_bus_gain(C.BUS_SFX, gain)
 
     def set_bed_gain(self, gain):
-        self.bed_gain = max(0.0, min(1.0, gain))
-        with self._lock:
-            for voice in self._voices:
-                if voice.is_bed:
-                    voice.set_gain(self.bed_gain)
+        self._set_bus_gain(C.BUS_BED, gain)
+
+    def set_playlist_gain(self, gain):
+        self._set_bus_gain(C.BUS_PLAYLIST, gain)
 
     # ------------------------------------------------------------ rendering --
     def _reap(self, force=False):
@@ -314,7 +343,7 @@ class Mixer:
         # another output may be ducking and needs to know about our drops.
         self.duck_bus.publish(
             self.key,
-            any((not v.is_bed) and (not v.finished) and (not v.releasing)
+            any(v.is_loud and (not v.finished) and (not v.releasing)
                 for v in voices))
 
         target = 1.0
@@ -344,6 +373,16 @@ class Mixer:
         else:
             self._duck = 1.0
             self.duck_bus.publish(self.key, False)
+
+        # Monitoring is added AFTER the duck. The point of the duck is to get
+        # the music out from under the voice; ducking the voice as well would
+        # undo it.
+        source = self.monitor_source
+        if source is not None:
+            try:
+                mix += source.read(frames)
+            except Exception:
+                pass          # a monitor must never take the music down
 
         peak = float(np.abs(mix).max()) if frames else 0.0
         self.peak = peak
@@ -412,9 +451,15 @@ class MixerGroup:
     mostly does not have to care which it has.
     """
 
-    def __init__(self, bank_devices=None, open_stream=True):
+    def __init__(self, bank_devices=None, open_stream=True,
+                 monitor_device=None):
         #: bank number -> device index, or None for the system default.
         self.bank_devices = dict(bank_devices or {})
+        #: Where a monitored microphone goes. Its own output, because
+        #: monitoring belongs in the presenter's headphones and the show does
+        #: not. None means whatever bank 1 is using.
+        self.monitor_device = monitor_device
+        self._monitor_source = None
         self.open_stream = open_stream
         self.duck_bus = DuckBus()
         self._mixers = {}
@@ -429,6 +474,9 @@ class MixerGroup:
         self.problems = []
 
         wanted = {self.bank_devices.get(bank) for bank in range(1, C.BANK_COUNT + 1)}
+        # The monitor output is opened alongside the banks' outputs, so a
+        # microphone can be monitored on a card nothing else is using.
+        wanted.add(self.monitor_device)
         for device in sorted(wanted, key=lambda d: (d is not None, d)):
             mixer = Mixer(device=device, open_stream=self.open_stream,
                           duck_bus=self.duck_bus, key=device)
@@ -473,7 +521,8 @@ class MixerGroup:
     def set_bank_devices(self, bank_devices):
         """Re-route. Everything playing stops, because a voice belongs to a stream."""
         previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db,
-                    self.bed_fade_in, self.bed_fade_out)
+                    self.bed_fade_in, self.bed_fade_out, self.playlist_gain)
+        monitor = self.monitor_source
         self.stop_all(fade_out=0.0)
         self.bank_devices = dict(bank_devices or {})
         self._build()
@@ -483,6 +532,10 @@ class MixerGroup:
         self.duck_db = previous[3]
         self.bed_fade_in = previous[4]
         self.bed_fade_out = previous[5]
+        self.set_playlist_gain(previous[6])
+        # Rebuilding replaced every mixer, so the monitor has to be re-attached
+        # or it would go on writing into an output nothing is draining.
+        self.monitor_source = monitor
         return not self.problems
 
     def distinct_device_count(self):
@@ -509,8 +562,9 @@ class MixerGroup:
     def play(self, slot_index, path, **kwargs):
         return self.for_slot(slot_index).play(slot_index, path, **kwargs)
 
-    def stop_slot(self, slot_index, fade_out=None):
-        return self.for_slot(slot_index).stop_slot(slot_index, fade_out=fade_out)
+    def stop_slot(self, slot_index, fade_out=None, also_releasing=False):
+        return self.for_slot(slot_index).stop_slot(
+            slot_index, fade_out=fade_out, also_releasing=also_releasing)
 
     def stop_all(self, fade_out=None):
         return sum(m.stop_all(fade_out=fade_out) for m in self._mixers.values())
@@ -543,6 +597,46 @@ class MixerGroup:
     def set_bed_gain(self, gain):
         for mixer in self._mixers.values():
             mixer.set_bed_gain(gain)
+
+    @property
+    def monitor_mixer(self):
+        """The output a monitored microphone plays out of."""
+        return self._mixers.get(self.monitor_device) or self.primary
+
+    @property
+    def monitor_source(self):
+        return self._monitor_source
+
+    @monitor_source.setter
+    def monitor_source(self, source):
+        """Monitoring goes to exactly ONE output.
+
+        Attaching it to every mixer would have several of them draining the
+        same ring buffer, each getting a fraction of the audio and none of
+        them getting speech.
+        """
+        self._monitor_source = source
+        for mixer in self._mixers.values():
+            mixer.monitor_source = None
+        self.monitor_mixer.monitor_source = source
+
+    def set_monitor_device(self, device):
+        """Move monitoring to another output, opening it if need be."""
+        if device == self.monitor_device:
+            return False
+        self.monitor_device = device
+        source = self._monitor_source
+        self.set_bank_devices(self.bank_devices)
+        self.monitor_source = source
+        return True
+
+    @property
+    def playlist_gain(self):
+        return self.primary.playlist_gain
+
+    def set_playlist_gain(self, gain):
+        for mixer in self._mixers.values():
+            mixer.set_playlist_gain(gain)
 
     @property
     def ducking(self):

@@ -37,6 +37,29 @@ And specific to this one:
   **`pick_file` never returns the same file twice running** when there is
   anything else to pick, because that is the difference between random and
   broken.
+- **The playlist runs on two decks and a cue point.** Every item says how
+  long before its end the next one starts; that number is the crossfade, and
+  a crossfade is simply the outgoing voice releasing while the incoming one
+  fades in on the other deck. `PLAYLIST_DECK_A`/`_B` are slot indices above
+  the eighty pads, so the mixer needs no special case for any of it. The cue
+  arithmetic runs on the **ticked** items only - an unticked track keeps its
+  place in the list and is stepped over.
+- **Playlist rows never say "playing", and pads never relabel under focus.**
+  Same rule, two places. What is on air is *spoken* (`_playlist_moved`) and
+  answered on demand by `Ctrl+L`. Rewriting the row a screen reader is
+  standing on, at the moment a song changes, is the thing this app does not
+  do.
+- **The microphone ducks by being OPEN.** Not by level, not through a gate:
+  `MicInput._publish` puts a flag on the shared `DuckBus` when it opens and
+  takes it off when it closes, which is why it ducks a bed playing out of a
+  different sound card. A gate that opens on your voice clips the first
+  syllable of every sentence; one that hangs open ducks the bed when you
+  cough. **Monitoring is added after the duck** in `Mixer.render`, or the
+  voice would duck itself, and a monitor that starves or throws returns
+  silence rather than stalling the output callback.
+- **Nothing opens a microphone except a keypress.** Not startup, not loading
+  a board. `mic_monitor`, the device and the gain are saved; whether it was
+  ON is deliberately not, and there is a test that says so.
 - **The digit map is frozen.** `1`–`0`, `Shift`, `Ctrl`, `Ctrl+Shift`,
   `Alt+Ctrl`, `Alt+Ctrl+Shift` across four banks of twenty. It is muscle
   memory built over years. A new feature gets a new key; it never takes one
@@ -104,6 +127,10 @@ And specific to this one:
 dropdeck/
   constants.py   banks, hotkey labels, fades, help text — one source of truth
   slot.py        one button's state, how it describes itself, folder picking
+  playlist.py    the running order, its cue points, and the two decks
+  playlistview.py the list, its tick boxes and its row menu
+  micinput.py    the microphone: capture, gain, monitoring, ducking
+  plids.py       command ids the row menu and the frame both need
   engine.py      voices: memory playback, disk streaming, gain envelopes
   mixer.py       output streams, per-bank routing, ducking, the two masters
   board.py       eighty slots on disk, legacy import, relinking
@@ -139,11 +166,41 @@ Station Playlist rather than copying it:
   source into the same sum, and ducking a bed under a live mic is the same
   mechanism as ducking it under a drop.
 
-The order to do it in is the order that keeps a working app at every step:
-input device and monitoring first, then gain and fades, then the encoder.
-Nothing here justifies breaking the frozen digit map or the "nothing between a
-keypress and a sound" rule, both of which get harder, not easier, with a live
-stream attached.
+**Done as of 2.5.0:** the input device, its gain, monitoring with an output
+of its own, and ducking everything musical while the microphone is open.
+
+**What is left is the encoder, and it has one architectural constraint that
+must not be designed away.** Tony, 2 September 2026:
+
+> everything will still go to the streaming, regardless of what output device
+> it's sent to, the encoder picks up on all channels. however, if someone is
+> streaming live to an encoder, but also doing a live show that includes
+> output channels to go specific places, it will do that too.
+
+So there are two quite different things and the encoder is not one of the
+outputs:
+
+- **Physical routing is per channel.** A bank can go to its own sound card,
+  monitoring can go to the presenter's headphones, and those exist so a
+  broadcaster can ride levels on a desk. `MixerGroup` already holds one
+  `Mixer` per distinct device for exactly this.
+- **The encoder takes the PROGRAM: the sum of everything, whatever it was
+  routed to.** A drop sent to a separate card is still part of the show and
+  still has to reach the stream. A `MixerGroup` today has no such sum - each
+  `Mixer` renders only its own voices - so the encoder needs a program bus:
+  every `Mixer.render` also adding its block into a shared program buffer
+  that the encoder drains, in the same non-blocking "silence rather than a
+  stall" way `MicInput.read` already works.
+
+Monitoring is the one thing that must NOT be in the program sum. The
+presenter hearing themselves in their headphones is not part of what the
+audience hears, and putting it in the stream would send the voice twice.
+
+The order to do the rest in is the order that keeps a working app at every
+step: the program bus first, with a test that proves a bank on a second card
+still reaches it, then the encoder on top. Nothing here justifies breaking the
+frozen digit map or the "nothing between a keypress and a sound" rule, both of
+which get harder, not easier, with a live stream attached.
 
 ## Things that will bite
 

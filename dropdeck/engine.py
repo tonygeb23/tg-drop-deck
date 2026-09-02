@@ -17,6 +17,8 @@ import numpy as np
 import soundfile as sf
 import soxr
 
+from . import constants as C
+
 CHANNELS = 2
 _DTYPE = "float32"
 
@@ -99,10 +101,14 @@ class Voice:
     """One sound in flight, with its own gain envelope."""
 
     def __init__(self, slot_index, *, gain, loop, fade_in, fade_out, rate,
-                 is_bed, name=""):
+                 is_bed=False, bus=None, name=""):
         self.slot_index = slot_index
         self.name = name
-        self.is_bed = is_bed
+        #: Which fader this voice sits on, and how ducking treats it.
+        #: "sfx" causes ducking, "bed" and "playlist" get ducked. ``is_bed``
+        #: is still accepted and still readable, because it is what every
+        #: existing caller and test says.
+        self.bus = bus or (C.BUS_BED if is_bed else C.BUS_SFX)
         self.loop = loop
         self.rate = rate
         self.finished = False
@@ -139,6 +145,24 @@ class Voice:
         self._target = 0.0
 
     @property
+    def is_bed(self):
+        return self.bus == C.BUS_BED
+
+    @property
+    def is_ducked(self):
+        """Music gets out of the way of speech. Beds and playlist tracks both."""
+        return self.bus in (C.BUS_BED, C.BUS_PLAYLIST)
+
+    @property
+    def is_loud(self):
+        """Does this voice push the music down. Only sounds and drops do.
+
+        A playlist track must NOT: it is the music, and a bed ducking under
+        the song it is supposed to sit beneath is backwards.
+        """
+        return self.bus == C.BUS_SFX
+
+    @property
     def releasing(self):
         return self._releasing
 
@@ -171,7 +195,7 @@ class Voice:
                 self.finished = True
         self._frames_played += frames
         block = block * self._ramp(frames)
-        if self.is_bed:
+        if self.is_ducked:
             block = block * duck
         if self._releasing and self._gain <= 1e-5:
             self.finished = True

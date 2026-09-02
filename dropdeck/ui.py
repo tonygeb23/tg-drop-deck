@@ -18,10 +18,16 @@ from . import constants as C
 from . import globalhotkeys
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (AssignHotkeyDialog, SearchDialog, SettingsDialog,
-                      SlotPropertiesDialog, TrimDialog, audio_file_dialog,
-                      key_label)
+from .dialogs import (AssignHotkeyDialog, MicSettingsDialog, SearchDialog,
+                      SettingsDialog, SlotPropertiesDialog, TrimDialog,
+                      ask_text, audio_file_dialog, key_label)
 from .engine import probe
+from .micinput import MicInput, describe_input, resolve_input
+from .playlist import PlaylistPlayer
+from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
+                    ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
+                    ID_PL_ROW_STOP, ID_PL_ROW_TICK, ID_PL_ROW_UP)
+from .playlistview import PlaylistPanel
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
 from .slot import Slot, format_duration
@@ -56,6 +62,28 @@ ID_PROPERTIES = wx.ID_HIGHEST + 24
 ID_RENAME_BANK = wx.ID_HIGHEST + 25
 ID_RESET_BANK = wx.ID_HIGHEST + 26
 ID_ASSIGN_FOLDER = wx.ID_HIGHEST + 27
+ID_VIEW_BOARD = wx.ID_HIGHEST + 28
+ID_VIEW_PLAYLIST = wx.ID_HIGHEST + 29
+ID_VIEW_NEXT = wx.ID_HIGHEST + 30
+ID_PL_PASTE = wx.ID_HIGHEST + 31
+ID_PL_ADD = wx.ID_HIGHEST + 32
+ID_PL_DROP = wx.ID_HIGHEST + 33
+ID_PL_DROP_EVERY = wx.ID_HIGHEST + 34
+ID_PL_PLAY = wx.ID_HIGHEST + 35
+ID_PL_STOP = wx.ID_HIGHEST + 36
+ID_PL_NEXT = wx.ID_HIGHEST + 37
+ID_PL_PREV = wx.ID_HIGHEST + 38
+ID_PL_CROSSFADE = wx.ID_HIGHEST + 39
+ID_PL_CLEAR = wx.ID_HIGHEST + 40
+ID_VOL_PL_DOWN = wx.ID_HIGHEST + 41
+ID_VOL_PL_UP = wx.ID_HIGHEST + 42
+ID_PL_CHECK_ALL = wx.ID_HIGHEST + 43
+ID_PL_UNCHECK_ALL = wx.ID_HIGHEST + 44
+ID_MIC_TOGGLE = wx.ID_HIGHEST + 45
+ID_MIC_SETTINGS = wx.ID_HIGHEST + 46
+
+#: The two things this window can be showing.
+VIEW_BOARD, VIEW_PLAYLIST = 0, 1
 
 #: Which slot each fixed hotkey fires, as (modifiers, key_code, slot_index).
 def fixed_accelerators():
@@ -403,16 +431,30 @@ class DropDeckFrame(wx.Frame):
         self._hinted_banks = set()
         self.board = self._load_startup_board()
         self.mixer = MixerGroup(bank_devices=self._resolve_bank_devices(),
-                                open_stream=True)
+                                open_stream=True,
+                                monitor_device=self._resolve_monitor_device())
         self.mixer.set_sfx_gain(self.board.sfx_volume)
         self.mixer.set_bed_gain(self.board.bed_volume)
+        self.mixer.set_playlist_gain(self.board.playlist_volume)
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
+        # The microphone shares the mixers' duck bus, which is what makes
+        # opening it duck a bed playing out of a completely different sound
+        # card. It is created closed: nothing here opens a microphone except
+        # somebody pressing the key for it.
+        self.mic = MicInput(duck_bus=self.mixer.duck_bus,
+                            samplerate=self.mixer.samplerate,
+                            device=resolve_input(self._mic_spec()),
+                            gain_db=self.board.mic_gain_db,
+                            monitor=self.board.mic_monitor)
+        self.mixer.monitor_source = self.mic
         self.mixer.bed_fade_in = self.board.bed_fade_in
         self.mixer.bed_fade_out = self.board.bed_fade_out
         # set_device clears the decode cache, so the whole board just went
         # cold. Warm it again rather than making the next key pay for it.
         self.warm_cache()
+
+        self._start_player()
 
         self._build_menu()
         self._build_ui()
@@ -612,19 +654,36 @@ class DropDeckFrame(wx.Frame):
         panel = wx.Panel(self)
         outer = wx.BoxSizer(wx.VERTICAL)
 
-        self.notebook = wx.Notebook(panel)
+        # Two views in one window: the soundboard, and the playlist. A
+        # Simplebook rather than another notebook, because nesting a tab strip
+        # inside a tab strip gives a screen reader two levels of "tab" to walk
+        # and Ctrl+Tab two meanings. The view is changed by key and by menu,
+        # and announced when it changes - see show_view.
+        self.views = wx.Simplebook(panel)
+        self.views.SetName("View")
+
+        board_page = wx.Panel(self.views)
+        board_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.notebook = wx.Notebook(board_page)
         self.notebook.SetName("Banks")
         self.pages = {}
         for bank in range(1, C.BANK_COUNT + 1):
             page = BankPage(self.notebook, self, bank)
             self.notebook.AddPage(page, self._tab_title(bank))
             self.pages[bank] = page
+        board_sizer.Add(self.notebook, 1, wx.EXPAND)
+        board_page.SetSizer(board_sizer)
+
+        self.playlist_panel = PlaylistPanel(self.views, self)
+        self.views.AddPage(board_page, "Soundboard")
+        self.views.AddPage(self.playlist_panel, "Playlist")
+        self.views.SetSelection(VIEW_BOARD)
         # Say which bank you landed in. The tab is a sibling of the page in the
         # accessibility tree, not an ancestor of the buttons, so a screen
         # reader announces the button and never the bank - and the button label
         # deliberately leaves the bank out because "the tab already said it".
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_bank_changed)
-        outer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 6)
+        outer.Add(self.views, 1, wx.EXPAND | wx.ALL, 6)
 
         stop = wx.Button(panel, ID_STOP_ALL, "Stop everything  (Escape)")
         stop.SetFont(stop.GetFont().Bold())
@@ -702,6 +761,44 @@ class DropDeckFrame(wx.Frame):
                      "Put the shipped name back")
         bar.Append(banks, "&Banks")
 
+        # The playlist. Everything it can do is here, because a view you reach
+        # with a key still has to be findable by somebody who does not know
+        # the key yet.
+        pl = wx.Menu()
+        pl.Append(ID_VIEW_PLAYLIST, "Go to the &playlist\tCtrl+Shift+P")
+        pl.Append(ID_VIEW_BOARD, "Go to the &soundboard\tCtrl+Shift+S")
+        pl.Append(ID_VIEW_NEXT, "S&wap between the two\tCtrl+Alt+Tab",
+                  "Windows may take this key for its own task switcher; the "
+                  "two above always work")
+        pl.AppendSeparator()
+        pl.Append(ID_PL_PASTE, "&Paste songs from the clipboard\tCtrl+V",
+                  "Copy files in File Explorer, then paste them in here")
+        pl.Append(ID_PL_ADD, "&Add songs to the end...")
+        pl.Append(ID_PL_DROP, "&Insert a drop here...\tCtrl+Shift+D",
+                  "Put a drop in front of the item you are on")
+        pl.Append(ID_PL_DROP_EVERY, "Insert a drop &every so many songs...")
+        pl.AppendSeparator()
+        pl.Append(ID_PL_CHECK_ALL, "&Tick every track",
+                  "Everything in the running order will play")
+        pl.Append(ID_PL_UNCHECK_ALL, "&Untick every track",
+                  "Nothing plays until you tick it again. Space toggles one")
+        pl.AppendSeparator()
+        pl.Append(ID_PL_PLAY, "Play &from here\tCtrl+Shift+Enter")
+        pl.Append(ID_PL_NEXT, "&Next track")
+        pl.Append(ID_PL_PREV, "Pre&vious track")
+        pl.Append(ID_PL_STOP, "Stop the play&list")
+        pl.AppendSeparator()
+        pl.Append(ID_PL_CROSSFADE, "&Crossfade length...")
+        pl.Append(ID_PL_CLEAR, "Clear the &running order")
+        pl.AppendSeparator()
+        self.mic_item = pl.AppendCheckItem(
+            ID_MIC_TOGGLE, "&Microphone on\tCtrl+M",
+            "While it is on, the beds and the playlist duck out of the way")
+        pl.Append(ID_MIC_SETTINGS, "Microphone se&ttings...\tCtrl+Shift+M",
+                  "Which microphone, how much gain, which output you hear it "
+                  "on, and whether you hear it at all")
+        bar.Append(pl, "P&laylist")
+
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
         help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
@@ -726,6 +823,54 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("folder"),
                   id=ID_ASSIGN_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_rename_bank, id=ID_RENAME_BANK)
+        self.Bind(wx.EVT_MENU, lambda _e: self.show_view(VIEW_BOARD),
+                  id=ID_VIEW_BOARD)
+        self.Bind(wx.EVT_MENU, lambda _e: self.show_view(VIEW_PLAYLIST),
+                  id=ID_VIEW_PLAYLIST)
+        self.Bind(wx.EVT_MENU, lambda _e: self.show_view(None), id=ID_VIEW_NEXT)
+        self.Bind(wx.EVT_MENU, self._on_playlist_paste, id=ID_PL_PASTE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.add_playlist_files(), id=ID_PL_ADD)
+        self.Bind(wx.EVT_MENU, lambda _e: self.insert_playlist_drop(), id=ID_PL_DROP)
+        self.Bind(wx.EVT_MENU, self._on_drop_every, id=ID_PL_DROP_EVERY)
+        self.Bind(wx.EVT_MENU, self._on_playlist_play, id=ID_PL_PLAY)
+        self.Bind(wx.EVT_MENU, lambda _e: self.playlist_next(), id=ID_PL_NEXT)
+        self.Bind(wx.EVT_MENU, lambda _e: self.playlist_previous(), id=ID_PL_PREV)
+        self.Bind(wx.EVT_MENU, lambda _e: self.stop_playlist(), id=ID_PL_STOP)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self._all_ticked(True), id=ID_PL_CHECK_ALL)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self._all_ticked(False), id=ID_PL_UNCHECK_ALL)
+        # The row menu. Its items are raised on the list, which is a
+        # descendant of this frame, so the events arrive here on their own.
+        self.Bind(wx.EVT_MENU, self._on_playlist_play, id=ID_PL_ROW_PLAY)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.segue_to_selected(),
+                  id=ID_PL_ROW_SEGUE)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.toggle_selected(),
+                  id=ID_PL_ROW_TICK)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.move_selected(-1),
+                  id=ID_PL_ROW_UP)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.move_selected(1),
+                  id=ID_PL_ROW_DOWN)
+        self.Bind(wx.EVT_MENU, lambda _e: self.insert_playlist_drop(),
+                  id=ID_PL_ROW_DROP)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.remove_selected(),
+                  id=ID_PL_ROW_REMOVE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.add_playlist_files(),
+                  id=ID_PL_ROW_ADD)
+        self.Bind(wx.EVT_MENU, lambda _e: self.stop_playlist(), id=ID_PL_ROW_STOP)
+        self.Bind(wx.EVT_MENU, lambda _e: self.toggle_mic(), id=ID_MIC_TOGGLE)
+        self.Bind(wx.EVT_MENU, self._on_mic_settings, id=ID_MIC_SETTINGS)
+        self.Bind(wx.EVT_MENU, self._on_crossfade, id=ID_PL_CROSSFADE)
+        self.Bind(wx.EVT_MENU, self._on_clear_playlist, id=ID_PL_CLEAR)
+        self.Bind(wx.EVT_MENU, lambda _e: self._nudge("playlist", -1),
+                  id=ID_VOL_PL_DOWN)
+        self.Bind(wx.EVT_MENU, lambda _e: self._nudge("playlist", +1),
+                  id=ID_VOL_PL_UP)
         self.Bind(wx.EVT_MENU, self._on_reset_bank_name, id=ID_RESET_BANK)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("rename"), id=ID_RENAME)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("trim"), id=ID_TRIM)
@@ -758,6 +903,31 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F4, ID_VOL_SFX_UP),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F5, ID_VOL_BED_DOWN),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F6, ID_VOL_BED_UP),
+            # F7 and F8 continue the pattern for the third fader. New keys,
+            # not taken off anything.
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F7, ID_VOL_PL_DOWN),
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F8, ID_VOL_PL_UP),
+            # The two views.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("P"),
+                                ID_VIEW_PLAYLIST),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"),
+                                ID_VIEW_BOARD),
+            # Asked for, and bound. Windows reserves Ctrl+Alt+Tab for its own
+            # persistent task switcher and usually takes it before any
+            # application sees it, which is why the menu says so and why the
+            # two keys above exist.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_ALT, wx.WXK_TAB,
+                                ID_VIEW_NEXT),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("V"), ID_PL_PASTE),
+            # Ctrl+M opens and closes the microphone, Ctrl+Shift+M sets it up.
+            # Both new; nothing on the frozen digit map moved for them.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("M"), ID_MIC_TOGGLE),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
+                                ID_MIC_SETTINGS),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
+                                ID_PL_DROP),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, wx.WXK_RETURN,
+                                ID_PL_PLAY),
             # Ctrl+F2 renames the bank, next to the F2 that renames a sound.
             # A new key, not one taken off the frozen digit map.
             wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_F2, ID_RENAME_BANK),
@@ -1014,7 +1184,9 @@ class DropDeckFrame(wx.Frame):
         self.status.SetStatusText(
             f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)   "
             f"Beds {percent(self.mixer.bed_gain)} (F5, F6)   "
-            f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)", 0)
+            f"Playlist {percent(self.mixer.playlist_gain)} (F7, F8)   "
+            f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)   "
+            f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)", 0)
 
     # ------------------------------------------------------------ transport --
     def trigger(self, index):
@@ -1077,6 +1249,10 @@ class DropDeckFrame(wx.Frame):
             f"{slot.display_name}{', ' + length if length else ''}")
 
     def stop_all(self):
+        # The playlist is part of "everything". Stopping its voices without
+        # telling the player would leave it convinced it was still on air.
+        self.player.stop(fade_out=None, quiet=True)
+        self._player_timer.Stop()
         count = self.mixer.stop_all()
         self.announce_help("Everything stopped" if count else "Nothing was playing")
 
@@ -1087,6 +1263,10 @@ class DropDeckFrame(wx.Frame):
             self.mixer.set_sfx_gain(self.mixer.sfx_gain + step)
             self.board.sfx_volume = self.mixer.sfx_gain
             self.announce(f"Sound volume {percent(self.mixer.sfx_gain)}")
+        elif which == "playlist":
+            self.mixer.set_playlist_gain(self.mixer.playlist_gain + step)
+            self.board.playlist_volume = self.mixer.playlist_gain
+            self.announce(f"Playlist volume {percent(self.mixer.playlist_gain)}")
         else:
             self.mixer.set_bed_gain(self.mixer.bed_gain + step)
             self.board.bed_volume = self.mixer.bed_gain
@@ -1102,12 +1282,18 @@ class DropDeckFrame(wx.Frame):
         self._touch()
 
     def _on_whats_playing(self, _event):
-        indices = self.mixer.playing_slots()
-        if not indices:
-            self.announce("Nothing is playing")
-            return
-        names = ", ".join(self.board[i].display_name for i in indices)
-        self.announce(f"{len(indices)} playing. {names}")
+        # Playlist first: it is the bed the whole show sits on, and its deck
+        # indices are not board slots, so they have to be named separately.
+        parts = []
+        track = self.player.current if self.player.playing else None
+        if track is not None:
+            parts.append("Playlist, %s" % track.display_name)
+        indices = [i for i in self.mixer.playing_slots() if i < C.TOTAL_SLOTS]
+        if indices:
+            parts.append("%d playing. %s" % (
+                len(indices),
+                ", ".join(self.board[i].display_name for i in indices)))
+        self.announce(". ".join(parts) if parts else "Nothing is playing")
 
     # ------------------------------------------------------- slot editing ----
     def _focused_slot(self):
@@ -1132,6 +1318,16 @@ class DropDeckFrame(wx.Frame):
         button.refresh(playing)
 
     def _focused_action(self, action):
+        # Delete means "remove this item" in the playlist and "clear this pad"
+        # on the board. One key, the thing in front of you.
+        if (self.views.GetSelection() == VIEW_PLAYLIST
+                and self._view_focused(VIEW_PLAYLIST)):
+            if action == "clear":
+                self.playlist_panel.remove_selected()
+                return
+            self.announce("That one is for the soundboard. "
+                          "Ctrl+Shift+S goes back to it")
+            return
         slot = self._focused_slot()
         if slot is None:
             self.announce("Move to a sound button first")
@@ -1226,15 +1422,17 @@ class DropDeckFrame(wx.Frame):
         if not slot.is_assigned:
             self.announce("That slot is empty")
             return
-        with wx.TextEntryDialog(self, "Name for this sound",
-                                "Rename", slot.display_name) as dialog:
+        with ask_text(self, "Name for this sound",
+                      "Rename", slot.display_name) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return
             name = dialog.GetValue().strip()
-        if not name:
-            return
-        slot.name = name
-        self._sync_button(slot)
+            if not name:
+                return
+            # Inside the dialog, for the same reason as the bank rename: the
+            # pad has to carry its new label before focus lands back on it.
+            slot.name = name
+            self._sync_button(slot)
         self.announce_help(f"Renamed to {name}")
         self._touch()
 
@@ -1349,6 +1547,417 @@ class DropDeckFrame(wx.Frame):
         self.announce_help(f"Hotkey {label or 'cleared'} for {slot.display_name}")
         self._touch()
 
+
+    # =====================================================================
+    # The playlist
+    #
+    # The soundboard fires what you choose. The playlist runs itself: each
+    # song cues the next before it ends, and the overlap is the crossfade.
+    # PlaylistPlayer does the arithmetic and owns the two decks; everything
+    # here is the app end of it - saying what happened, and keeping the list
+    # and the timer honest.
+    # =====================================================================
+
+    def _start_player(self):
+        self.player = PlaylistPlayer(self.mixer, self.board.playlist,
+                                     on_change=self._playlist_moved)
+        # Only runs while something is playing. A fiftieth of a second is
+        # inaudible on a crossfade; the 250 ms pad timer would have put a
+        # handover a quarter of a second out.
+        self._player_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_player_tick, self._player_timer)
+
+    def _on_player_tick(self, _event):
+        try:
+            self.player.tick()
+        except Exception as exc:              # pragma: no cover
+            self.status.SetStatusText("Playlist stopped: %s" % exc, 1)
+            self._player_timer.Stop()
+        if not self.player.playing:
+            self._player_timer.Stop()
+
+    def _playlist_moved(self):
+        """The player changed item. Say what is on, do NOT rewrite the rows.
+
+        The rows carry the running order and never the word "playing", so a
+        song change cannot restart a screen reader on the row the user is
+        standing on. What went to air is spoken instead, which is the thing
+        somebody actually wants told to them.
+        """
+        track = self.player.current
+        if self.player.playing and track is not None:
+            length = format_duration(track.duration)
+            self.announce_playback(
+                "%s%s" % (track.display_name, ", " + length if length else ""))
+        self._update_status()
+
+    def show_view(self, view=None):
+        """Swap between the soundboard and the playlist.
+
+        Announced and focused explicitly. A Simplebook has no tab strip for a
+        screen reader to read, which is the price of not nesting two of them -
+        so the app says where you are and puts focus somewhere useful.
+        """
+        current = self.views.GetSelection()
+        if view is None:
+            view = VIEW_PLAYLIST if current == VIEW_BOARD else VIEW_BOARD
+        if view == current and self._view_focused(view):
+            # Already here. Say so rather than appearing to do nothing.
+            self.announce_help(self._view_summary(view))
+            return
+        self.views.SetSelection(view)
+        if view == VIEW_PLAYLIST:
+            self.playlist_panel.focus_list()
+        else:
+            slot = self.board[
+                (self._current_bank() - 1) * C.SLOTS_PER_BANK]
+            self._button_for(slot).SetFocus()
+        self.announce(self._view_summary(view))
+
+    def _view_focused(self, view):
+        window = wx.Window.FindFocus()
+        if window is None:
+            return False
+        page = self.views.GetPage(view)
+        while window is not None:
+            if window is page:
+                return True
+            window = window.GetParent()
+        return False
+
+    def _view_summary(self, view):
+        if view == VIEW_PLAYLIST:
+            return "Playlist. " + self.playlist_panel.describe()
+        return "Soundboard. %s, %d sounds" % (
+            self.board.bank_name(self._current_bank()),
+            sum(1 for s in self.board.bank_slots(self._current_bank())
+                if s.is_assigned))
+
+    def playlist_changed(self, relabel=True):
+        """The running order was edited: relabel, and save shortly.
+
+        ``relabel`` is False when the panel has already brought itself up to
+        date - ticking a box is the case, and rebuilding the rows underneath a
+        screen reader that has just said "checked" would read the row again on
+        top of it.
+        """
+        if relabel:
+            self.playlist_panel.refresh()
+        self._touch()
+
+    # ------------------------------------------------------------ editing --
+    def _on_playlist_paste(self, _event=None):
+        """Ctrl+V from anywhere, because that is where people press it.
+
+        Copy in Explorer, come back to the app, paste. Making that work only
+        while the playlist already had focus would mean learning two keys to
+        do one thing.
+        """
+        self.views.SetSelection(VIEW_PLAYLIST)
+        added = self.playlist_panel.paste()
+        self.playlist_panel.focus_list()
+        return added
+
+    def add_playlist_files(self):
+        with wx.FileDialog(self, "Add songs to the running order",
+                           defaultDir=self.board.last_sound_dir or "",
+                           wildcard=C.AUDIO_WILDCARD,
+                           style=wx.FD_OPEN | wx.FD_MULTIPLE
+                           | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing chosen")
+                return []
+            paths = dialog.GetPaths()
+        if paths:
+            self.board.last_sound_dir = os.path.dirname(paths[0])
+        self.views.SetSelection(VIEW_PLAYLIST)
+        added = self.playlist_panel.add_paths(paths)
+        self.playlist_panel.focus_list()
+        return added
+
+    def _choose_drop(self, title):
+        """A file for a drop. Returns a path, or None."""
+        return audio_file_dialog(self, self.board.last_sound_dir, title)
+
+    def insert_playlist_drop(self):
+        """One drop, in front of whatever the list is sitting on."""
+        path = self._choose_drop("Choose a drop to put in the running order")
+        if not path:
+            self.announce_help("Nothing chosen")
+            return None
+        at = self.playlist_panel.selection()
+        track = self.board.playlist.insert_drop(path, at=at)
+        if track is None:
+            self.announce("That file could not be read")
+            return None
+        self.board.last_sound_dir = os.path.dirname(path)
+        if self.player.index >= (at if at is not None else len(self.board.playlist)):
+            self.player.index += 1
+        self.views.SetSelection(VIEW_PLAYLIST)
+        self.playlist_panel.refresh(keep=at if at is not None
+                                    else len(self.board.playlist) - 1)
+        self.playlist_panel.focus_list()
+        self.announce_help("%s put in at %d" % (
+            track.display_name,
+            (at if at is not None else len(self.board.playlist) - 1) + 1))
+        self.playlist_changed()
+        return track
+
+    def _on_drop_every(self, _event=None):
+        """The same drop after every so many songs, in one go."""
+        if not len(self.board.playlist):
+            self.announce("Put some songs in the running order first")
+            return
+        with wx.TextEntryDialog(
+                self, "Put a drop in after every how many songs?\n\n"
+                "Two means one drop between every second song. Drops already "
+                "in the order are left where they are.",
+                "A drop every so often", "2") as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return
+            try:
+                every = int(dialog.GetValue().strip())
+            except ValueError:
+                self.announce("That is not a number")
+                return
+        if every < 1:
+            self.announce("It has to be one song or more")
+            return
+        path = self._choose_drop("Choose the drop to put in every %d songs" % every)
+        if not path:
+            self.announce_help("Nothing chosen")
+            return
+        count = self.board.playlist.insert_drop_every(path, every)
+        self.board.last_sound_dir = os.path.dirname(path)
+        self.views.SetSelection(VIEW_PLAYLIST)
+        self.playlist_panel.refresh(keep=0)
+        self.playlist_panel.focus_list()
+        if not count:
+            self.announce("There was nowhere to put one")
+            return
+        self.announce_help("%d drop%s put in, one after every %d songs"
+                           % (count, "" if count == 1 else "s", every))
+        self.playlist_changed()
+
+    def _on_crossfade(self, _event=None):
+        current = self.board.playlist.crossfade
+        with wx.TextEntryDialog(
+                self, "How many seconds should one song overlap the next?\n\n"
+                "Zero means each song plays right out before the next starts. "
+                "This is the cue point for every song that has not been given "
+                "one of its own.",
+                "Crossfade length", "%g" % current) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return
+            text = dialog.GetValue().strip()
+        try:
+            seconds = float(text)
+        except ValueError:
+            self.announce("That is not a number of seconds")
+            return
+        seconds = max(0.0, min(C.MAX_CROSSFADE, seconds))
+        self.board.playlist.crossfade = seconds
+        self.playlist_panel.refresh()
+        self.announce_help(
+            "Crossfade %s" % (format_duration(seconds) or "off, songs play right out"))
+        self.playlist_changed()
+
+    def _on_clear_playlist(self, _event=None):
+        count = len(self.board.playlist)
+        if not count:
+            self.announce("The running order is already empty")
+            return
+        if wx.MessageBox("Take all %d items out of the running order?" % count,
+                         "Clear the playlist",
+                         wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+            return
+        self.stop_playlist(quiet=True)
+        self.board.playlist.clear()
+        self.player.index = -1
+        self.playlist_panel.refresh()
+        self.announce_help("Running order cleared")
+        self.playlist_changed()
+
+    def _all_ticked(self, value):
+        if not len(self.board.playlist):
+            self.announce("There is nothing in the running order yet")
+            return
+        self.views.SetSelection(VIEW_PLAYLIST)
+        self.playlist_panel.set_all_ticked(value)
+        self.playlist_panel.focus_list()
+
+    # ---------------------------------------------------------- transport --
+    def _on_playlist_play(self, _event=None):
+        self.play_playlist(self.playlist_panel.selection())
+
+    def play_playlist(self, index=None):
+        if not len(self.board.playlist):
+            self.announce("There is nothing in the running order yet")
+            return False
+        asked = index
+        if not self.player.play(index):
+            self.announce("Could not start the playlist. %s"
+                          % (self.player.last_error or ""))
+            return False
+        if asked is not None and self.player.index != asked:
+            # It walked past something unticked or missing. Say so, or the
+            # wrong song appears to have started for no reason.
+            self.announce_help(
+                "%s was skipped, starting at %s"
+                % (self.board.playlist[asked].display_name,
+                   self.player.current.display_name))
+        self._player_timer.Start(C.PLAYLIST_TICK_MS)
+        self._update_status()
+        return True
+
+    def stop_playlist(self, quiet=False):
+        stopped = self.player.stop(fade_out=C.FADE_OUT_BED, quiet=True)
+        self._player_timer.Stop()
+        if not quiet:
+            self.announce_playback("Playlist stopped" if stopped
+                                   else "The playlist was not playing")
+        self._update_status()
+        return stopped
+
+    # ====================================================================
+    # The microphone
+    #
+    # Opening it ducks the music. Not because the level went up - because it
+    # is OPEN. A gate that opens on your voice clips the first syllable of
+    # every sentence, and one that hangs open ducks the bed when you cough.
+    # DuckBus already carried "something loud is happening" across sound
+    # cards, so the microphone publishes onto it under a key of its own.
+    # ====================================================================
+
+    def _mic_open(self):
+        mic = getattr(self, "mic", None)
+        return bool(mic is not None and mic.is_open)
+
+    def _mic_spec(self):
+        return {"name": self.board.mic_device_name,
+                "hostapi": self.board.mic_device_hostapi}
+
+    def _resolve_monitor_device(self):
+        """Which output a monitored microphone comes out of, as a live index."""
+        return resolve_device({"name": self.board.mic_output_name,
+                               "hostapi": self.board.mic_output_hostapi})
+
+    def toggle_mic(self, _event=None):
+        """Ctrl+M. Open or close the microphone, and say which it now is.
+
+        Announced on the essential channel, never the confirmation one. "Am I
+        live" is not a pleasantry, and somebody who has turned the app's
+        chattiness down has not asked to stop being told that.
+        """
+        if self._mic_open():
+            self.mic.stop()
+            self.mic_item.Check(False)
+            self.announce("Microphone off. Music back up")
+        else:
+            if not self.mic.start(device=resolve_input(self._mic_spec())):
+                self.mic_item.Check(False)
+                self.announce("The microphone would not open. %s"
+                              % (self.mic.last_error or ""))
+                self._update_status()
+                return False
+            self.mic_item.Check(True)
+            self.announce("Microphone on, %s. Music ducked"
+                          % describe_input(self.mic.device))
+        self._update_status()
+        return self._mic_open()
+
+    def _on_mic_settings(self, _event=None):
+        with MicSettingsDialog(self, self.board, self.mic) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return
+            index, name, hostapi = dialog.chosen_device
+            out_index, out_name, out_hostapi = dialog.chosen_output
+            gain_db = dialog.gain_db
+            monitoring = dialog.monitoring
+
+        changed_input = ((name, hostapi) != (self.board.mic_device_name,
+                                             self.board.mic_device_hostapi))
+        changed_output = ((out_name, out_hostapi)
+                          != (self.board.mic_output_name,
+                              self.board.mic_output_hostapi))
+        self.board.mic_device_name = name
+        self.board.mic_device_hostapi = hostapi
+        self.board.mic_output_name = out_name
+        self.board.mic_output_hostapi = out_hostapi
+        self.board.mic_gain_db = gain_db
+        self.board.mic_monitor = monitoring
+        self.mic.gain_db = gain_db
+        self.mic.monitor = monitoring
+        self.mic.device = index
+
+        if changed_output:
+            # Moving the monitor to another card rebuilds the group, which
+            # stops everything and empties the decode caches - so warm them.
+            self.mixer.set_monitor_device(out_index)
+            self.mixer.monitor_source = self.mic
+            self.warm_cache()
+        if changed_input and self._mic_open():
+            self.mic.start(device=index)
+
+        self.announce_help(
+            "Microphone %s, gain %+.0f decibels, monitoring %s%s"
+            % (describe_input(index), gain_db,
+               "on" if monitoring else "off",
+               ", through " + describe_device(out_index) if monitoring else ""))
+        self._update_status()
+        self._touch()
+
+    def segue_playlist(self, index):
+        """Bring one track up and take what is on air down under it.
+
+        The manual version of what a cue point does on its own: the same
+        crossfade length, at the moment you ask for it rather than at the end
+        of the song. This is how you get out of a track early.
+        """
+        if not len(self.board.playlist):
+            self.announce("There is nothing in the running order yet")
+            return False
+        if not self.player.playing:
+            # Nothing to fade out of, so this is simply a start.
+            return self.play_playlist(index)
+        if not self.board.playlist.will_play(index):
+            self.announce("%s is unticked, so it will not play. "
+                          "Press Space to tick it"
+                          % self.board.playlist[index].display_name)
+            return False
+        going = self.player.current
+        if not self.player.segue_to(index):
+            self.announce("Could not play that one. %s"
+                          % (self.player.last_error or ""))
+            return False
+        self._player_timer.Start(C.PLAYLIST_TICK_MS)
+        self.announce_playback(
+            "Segue to %s%s" % (self.player.current.display_name,
+                               ", out of %s" % going.display_name if going else ""))
+        return True
+
+    def playlist_next(self):
+        if not self.player.playing:
+            self.announce("The playlist is not playing")
+            return False
+        if not self.player.next():
+            self.announce_playback("That was the last one")
+            self._player_timer.Stop()
+            return False
+        return True
+
+    def playlist_previous(self):
+        if not self.player.playing:
+            self.announce("The playlist is not playing")
+            return False
+        if not self.player.previous():
+            self.announce("That is the first one")
+            return False
+        return True
+
     # ----------------------------------------------------------- banks ----
     def _current_bank(self):
         """The bank the user is looking at, which is the one a command means."""
@@ -1359,7 +1968,7 @@ class DropDeckFrame(wx.Frame):
         if not 1 <= bank <= C.BANK_COUNT:
             return
         current = self.board.bank_name(bank)
-        with wx.TextEntryDialog(
+        with ask_text(
                 self,
                 "Name for bank %d.\n\n"
                 "This changes what the tab is called and nothing else - the "
@@ -1371,7 +1980,12 @@ class DropDeckFrame(wx.Frame):
                 self.announce_help("Nothing changed")
                 return
             name = dialog.GetValue().strip()[:C.MAX_BANK_NAME]
-        self._set_bank_name(bank, name)
+            # Applied while the dialog is still alive, so the tab already
+            # carries the new name by the time focus goes back to it. Doing it
+            # after the dialog was destroyed meant a screen reader read the
+            # OLD tab on the way out - Brian Hartgen, on 2.4.0, and the same
+            # stale-name bug 2.3.0 fixed for the pads, in a new place.
+            self._set_bank_name(bank, name)
 
     def _on_reset_bank_name(self, _event=None):
         bank = self._current_bank()
@@ -1402,7 +2016,10 @@ class DropDeckFrame(wx.Frame):
             note = ". Still the looping bank"
         elif bank == C.BANK_MISC:
             note = ". Still the bank that takes your own hotkeys"
-        self.announce_help("Bank %d is now %s%s" % (bank, applied, note))
+        # announce, not announce_help. A tab a screen reader may have read out
+        # with its old name has to be corrected at every speech level bar
+        # silence; a confirmation you can switch off is not good enough here.
+        self.announce("Bank %d is now %s%s" % (bank, applied, note))
         self._touch()
 
     def _hotkey_map(self, exclude=None):
@@ -1540,14 +2157,20 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_bed_gain(board.bed_volume)
         self.mixer.ducking = board.ducking
         self.mixer.duck_db = board.duck_db
+        self.mixer.set_playlist_gain(board.playlist_volume)
         self.mixer.bed_fade_in = board.bed_fade_in
         self.mixer.bed_fade_out = board.bed_fade_out
+        self.stop_playlist(quiet=True)
+        self.player.playlist = board.playlist
+        self.player.index = -1
         for bank in range(1, C.BANK_COUNT + 1):
             for button, slot in zip(self.pages[bank].buttons,
                                     board.bank_slots(bank)):
                 button.set_slot(slot)
         self._playing = set()
         self._build_accelerators()
+        if getattr(self, "playlist_panel", None) is not None:
+            self.playlist_panel.refresh(keep=0)
         self._update_status()
 
     def _load_into(self, path, keep_path=True):
@@ -1568,13 +2191,17 @@ class DropDeckFrame(wx.Frame):
                       f"{board.assigned_count} sounds{tail}")
 
     def _on_relink(self, _event):
+        # The playlist counts too: one walk of the folder repairs both, so a
+        # board whose pads are fine but whose running order is not still has
+        # something to relink.
         missing = self.board.missing_slots
-        if not missing:
+        asked = len(missing) + len(self.board.playlist.missing)
+        if not asked:
             self.announce_help("Nothing is missing")
             wx.MessageBox("Every sound on this board was found.", "Nothing to relink",
                           wx.OK | wx.ICON_INFORMATION, self)
             return
-        with wx.DirDialog(self, f"Where should I look for the {len(missing)} "
+        with wx.DirDialog(self, f"Where should I look for the {asked} "
                           "missing sounds?", style=wx.DD_DIR_MUST_EXIST) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return
@@ -1598,15 +2225,24 @@ class DropDeckFrame(wx.Frame):
             if "error" in result:
                 self.announce("Could not search that folder. %s" % result["error"])
                 return
-            self._relink_finished(result.get("repaired") or [],
-                                  len(missing))
+            self._relink_finished(result.get("repaired") or [], asked)
 
         threading.Thread(target=work, daemon=True, name="dropdeck-relink").start()
 
     def _relink_finished(self, repaired, asked):
-        for slot in repaired:
-            self._sync_button(slot)
-        still = len(self.board.missing_slots)
+        """Bring the board and the playlist back in line with what was found.
+
+        ``repaired`` holds Slots AND playlist Tracks - one walk of the folder
+        repairs both, which is the whole reason they share it. Only a Slot has
+        a pad behind it; handing a Track to _sync_button asked it for a bank
+        that a Track has never had, and took the relink down with it.
+        """
+        for item in repaired:
+            if isinstance(item, Slot):
+                self._sync_button(item)
+        if any(not isinstance(item, Slot) for item in repaired):
+            self.playlist_panel.refresh()
+        still = len(self.board.missing_slots) + len(self.board.playlist.missing)
         self.announce(f"Relinked {len(repaired)} of {asked}. "
                       f"{still} still missing" if still
                       else f"Relinked all {len(repaired)}")
@@ -1640,6 +2276,13 @@ class DropDeckFrame(wx.Frame):
         self.board.device_name = name
         self.board.device_hostapi = hostapi
         self.board.bank_devices = bank_devices
+
+        # A microphone monitored into an output that has just moved to a
+        # device with another rate would be sharp or flat by however far the
+        # two differ. It reopens itself if it is live.
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            mic.set_output_rate(self.mixer.samplerate)
 
         if device_changed or routing_changed:
             # Re-routing stops everything and clears every decode cache, because
@@ -1763,6 +2406,14 @@ class DropDeckFrame(wx.Frame):
         self._playing = now
 
     def stop_background_work(self):
+        timer = getattr(self, "_player_timer", None)
+        if timer is not None:
+            timer.Stop()
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            # An open input stream keeps the process alive after the window
+            # has gone, exactly the way an open output stream does.
+            mic.close()
         """Bring the worker threads to a halt and wait for them.
 
         Called from both the close handler and Destroy, because Destroy does

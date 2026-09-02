@@ -12,6 +12,7 @@ import sys
 import os
 
 from . import constants as C
+from .playlist import Playlist
 from .slot import Slot
 
 FORMAT_VERSION = 2
@@ -89,6 +90,24 @@ class Board:
         #: why these are settings rather than the constants they used to be.
         self.bed_fade_in = C.FADE_IN_BED
         self.bed_fade_out = C.FADE_OUT_BED
+        #: A third fader, for the playlist. Separate from the beds because a
+        #: song under a presenter and a bed under a link are different jobs
+        #: and never want the same level.
+        self.playlist_volume = C.DEFAULT_PLAYLIST_VOLUME
+        #: The running order. Saved with the board, because a board IS a show.
+        self.playlist = Playlist()
+        #: The microphone. Remembered by name, like every other device.
+        #: Whether it was ON is deliberately NOT remembered: nothing opens a
+        #: microphone except somebody pressing the key for it.
+        self.mic_device_name = None
+        self.mic_device_hostapi = None
+        self.mic_gain_db = C.DEFAULT_MIC_GAIN_DB
+        self.mic_monitor = False
+        #: Which OUTPUT the monitored microphone comes out of. Separate from
+        #: the banks' outputs on purpose: monitoring belongs in the
+        #: presenter's headphones, and the show does not.
+        self.mic_output_name = None
+        self.mic_output_hostapi = None
         #: Whether system-wide hotkeys are armed. Off by default: while they
         #: are on this app owns those combinations across the whole machine,
         #: so it has to be something the user turned on deliberately.
@@ -221,6 +240,9 @@ class Board:
                     index.setdefault(stem.lower(), full)
 
         repaired = []
+        # The playlist is repaired out of the same walk. Two separate hunts
+        # through a music library for the same folder is one hunt too many.
+        repaired.extend(self.playlist.relink(index))
         for slot in self.missing_slots:
             base = os.path.basename(slot.filepath.rstrip("\\/"))
             stem = os.path.splitext(base)[0]
@@ -248,6 +270,14 @@ class Board:
             "bed_fade_in": self.bed_fade_in,
             "bed_fade_out": self.bed_fade_out,
             "bank_names": {str(k): v for k, v in self.bank_names.items()},
+            "playlist_volume": self.playlist_volume,
+            "mic_device_name": self.mic_device_name,
+            "mic_device_hostapi": self.mic_device_hostapi,
+            "mic_gain_db": self.mic_gain_db,
+            "mic_monitor": bool(self.mic_monitor),
+            "mic_output_name": self.mic_output_name,
+            "mic_output_hostapi": self.mic_output_hostapi,
+            "playlist": self.playlist.to_dict(),
             "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
@@ -281,6 +311,19 @@ class Board:
         board.bed_volume = float(data.get("bed_volume", C.DEFAULT_BED_VOLUME))
         board.ducking = bool(data.get("ducking", True))
         board.duck_db = float(data.get("duck_db", C.DEFAULT_DUCK_DB))
+        board.playlist_volume = float(
+            data.get("playlist_volume", C.DEFAULT_PLAYLIST_VOLUME))
+        board.mic_device_name = data.get("mic_device_name")
+        board.mic_device_hostapi = data.get("mic_device_hostapi")
+        try:
+            board.mic_gain_db = max(C.MIN_MIC_GAIN_DB,
+                                    min(C.MAX_MIC_GAIN_DB,
+                                        float(data.get("mic_gain_db", 0.0))))
+        except (TypeError, ValueError):
+            board.mic_gain_db = C.DEFAULT_MIC_GAIN_DB
+        board.mic_monitor = bool(data.get("mic_monitor", False))
+        board.mic_output_name = data.get("mic_output_name")
+        board.mic_output_hostapi = data.get("mic_output_hostapi")
         board.bed_fade_in = _fade(data.get("bed_fade_in"), C.FADE_IN_BED)
         board.bed_fade_out = _fade(data.get("bed_fade_out"), C.FADE_OUT_BED)
 
@@ -322,6 +365,9 @@ class Board:
             if isinstance(spec, dict) and spec.get("name"):
                 board.bank_devices[bank] = {"name": spec.get("name"),
                                            "hostapi": spec.get("hostapi")}
+
+        board.playlist = Playlist.from_dict(
+            data.get("playlist"), base_dir=os.path.dirname(os.path.abspath(path)))
 
         raw = data.get("slots") or []
         # A board may store paths relative to itself, which is how the shipped

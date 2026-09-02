@@ -11,6 +11,7 @@ import os
 import wx
 
 from . import constants as C
+from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
 
@@ -745,6 +746,153 @@ class SettingsDialog(wx.Dialog):
             dev = self.devices[selection - 1]
             chosen[bank] = {"name": dev["name"], "hostapi": dev["hostapi"]}
         return chosen
+
+
+class MicSettingsDialog(wx.Dialog):
+    """Which microphone, how loud, and whether you hear yourself."""
+
+    def __init__(self, parent, board, mic):
+        super().__init__(parent, title="Microphone settings")
+        self.board = board
+        self.mic = mic
+        self.devices = input_devices()
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        outer.Add(wx.StaticText(self, label="&Microphone"), 0,
+                  wx.LEFT | wx.TOP, 10)
+        self.choices = ["System default"] + [
+            "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]
+        self.device = wx.Choice(self, choices=self.choices)
+        self.device.SetName("Microphone")
+        self.device.SetSelection(self._current_selection())
+        outer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
+
+        note = wx.StaticText(self, label=(
+            "Ctrl+M turns the microphone on and off. While it is on, the beds\n"
+            "and the playlist duck out of the way, and they come back up the\n"
+            "moment you turn it off."))
+        outer.Add(note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        outer.Add(wx.StaticText(self, label="&Gain in decibels"), 0, wx.LEFT, 10)
+        self.gain = wx.Slider(self, value=int(round(board.mic_gain_db)),
+                              minValue=int(C.MIN_MIC_GAIN_DB),
+                              maxValue=int(C.MAX_MIC_GAIN_DB),
+                              style=wx.SL_HORIZONTAL)
+        self.gain.SetName("Microphone gain in decibels")
+        self.gain.SetToolTip(
+            "Zero is the microphone as Windows gives it to us. Raise it for a "
+            "quiet headset, lower it for a hot one.")
+        outer.Add(self.gain, 0, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="Hear yourself thr&ough"), 0,
+                  wx.LEFT, 10)
+        self.output_choices = ["Same as the soundboard"] + [
+            "%s - %s" % (d["name"], d["hostapi"]) for d in output_devices()]
+        self.output = wx.Choice(self, choices=self.output_choices)
+        self.output.SetName("Monitor output")
+        self.output.SetSelection(self._output_selection())
+        self.output.SetToolTip(
+            "Put monitoring on your headphones and leave the show on the main "
+            "output. Everything an encoder picks up is unaffected by this.")
+        outer.Add(self.output, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.monitor = wx.CheckBox(
+            self, label="&Hear yourself through the output (headphones only)")
+        self.monitor.SetValue(bool(board.mic_monitor))
+        self.monitor.SetToolTip(
+            "On headphones this is how you know you are live. On speakers it "
+            "is a feedback loop, which is why it is off to begin with.")
+        outer.Add(self.monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.status = wx.StaticText(self, label=self._status_text())
+        outer.Add(self.status, 0, wx.ALL, 10)
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+        self.device.SetFocus()
+
+    def _status_text(self):
+        if self.mic is None:
+            return "The microphone is off."
+        if self.mic.is_open:
+            return "The microphone is ON, through %s." % self.mic.describe()
+        if self.mic.last_error:
+            return "It would not open last time. %s" % self.mic.last_error
+        return "The microphone is off. Ctrl+M turns it on."
+
+    def _current_selection(self):
+        if not self.board.mic_device_name:
+            return 0
+        for position, device in enumerate(self.devices):
+            if (device["name"] == self.board.mic_device_name
+                    and device["hostapi"] == self.board.mic_device_hostapi):
+                return position + 1
+        for position, device in enumerate(self.devices):
+            if device["name"] == self.board.mic_device_name:
+                return position + 1
+        return 0
+
+    @property
+    def chosen_device(self):
+        """(index, name, hostapi) for the microphone that was picked."""
+        position = self.device.GetSelection()
+        if position <= 0:
+            return None, None, None
+        device = self.devices[position - 1]
+        return device["index"], device["name"], device["hostapi"]
+
+    def _output_selection(self):
+        if not self.board.mic_output_name:
+            return 0
+        outputs = output_devices()
+        for position, device in enumerate(outputs):
+            if (device["name"] == self.board.mic_output_name
+                    and device["hostapi"] == self.board.mic_output_hostapi):
+                return position + 1
+        for position, device in enumerate(outputs):
+            if device["name"] == self.board.mic_output_name:
+                return position + 1
+        return 0
+
+    @property
+    def chosen_output(self):
+        """(index, name, hostapi) for the output monitoring should use."""
+        position = self.output.GetSelection()
+        if position <= 0:
+            return None, None, None
+        device = output_devices()[position - 1]
+        return device["index"], device["name"], device["hostapi"]
+
+    @property
+    def gain_db(self):
+        return float(self.gain.GetValue())
+
+    @property
+    def monitoring(self):
+        return bool(self.monitor.GetValue())
+
+
+def ask_text(parent, prompt, title, value=""):
+    """A text prompt whose existing text is selected, ready to be typed over.
+
+    Brian Hartgen, on 2.4.0: renaming a bank put the current name in the box
+    and left the caret at the end of it, so you had to clear it yourself.
+    Every other Windows rename hands you the old name selected - F2 in
+    Explorer, in the registry editor, anywhere - and typing replaces it.
+
+    wx.TextEntryDialog does not expose its text control, so the control is
+    found among the dialog's children. If it ever cannot be, the dialog still
+    works exactly as it did; only the convenience is lost.
+    """
+    dialog = wx.TextEntryDialog(parent, prompt, title, value)
+    for child in dialog.GetChildren():
+        if isinstance(child, wx.TextCtrl):
+            child.SetSelection(-1, -1)
+            child.SetFocus()
+            break
+    return dialog
 
 
 def audio_file_dialog(parent, start_dir="", title="Choose a sound"):

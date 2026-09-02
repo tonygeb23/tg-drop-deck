@@ -6,7 +6,7 @@ they are muscle memory and they are not up for redesign.
 """
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -96,9 +96,36 @@ DEFAULT_SPEECH_LEVEL = SPEECH_ALL
 #: of them still shows which one you are on.
 MAX_BANK_NAME = 32
 
+#: The three faders. A voice sits on exactly one of them, which decides both
+#: its level and how ducking treats it - see engine.Voice.is_ducked/is_loud.
+BUS_SFX, BUS_BED, BUS_PLAYLIST = "sfx", "bed", "playlist"
+
 VOLUME_STEP = 0.05
 DEFAULT_SFX_VOLUME = 0.75
 DEFAULT_BED_VOLUME = 0.50
+DEFAULT_PLAYLIST_VOLUME = 0.80
+
+# ---------------------------------------------------------------- playlist ---
+#
+# The playlist plays on two decks, exactly the way a playout system does: the
+# outgoing song is on one and the incoming song on the other, and a crossfade
+# is the two of them overlapping. Their slot indices sit above the eighty pads
+# so the mixer can tell them apart from anything on the board.
+PLAYLIST_DECK_A = TOTAL_SLOTS
+PLAYLIST_DECK_B = TOTAL_SLOTS + 1
+PLAYLIST_DECKS = (PLAYLIST_DECK_A, PLAYLIST_DECK_B)
+
+#: How long one song overlaps the next, in seconds. A song's cue point is this
+#: far from its end - that is where the next one starts.
+DEFAULT_CROSSFADE = 3.0
+MAX_CROSSFADE = 30.0
+
+#: How often the player is asked whether a cue is due, in milliseconds. A
+#: crossfade landing within a twentieth of a second is inaudible; the 250 ms
+#: pad-refresh timer would have put it a quarter of a second out.
+PLAYLIST_TICK_MS = 50
+
+TRACK_SONG, TRACK_DROP = "song", "drop"
 
 #: Anything at or below this is decoded into memory so it fires instantly.
 #: Longer files stream from disk so twenty music beds do not cost a gigabyte.
@@ -130,6 +157,22 @@ DUCK_ATTACK = 0.12
 DUCK_RELEASE = 0.70
 
 BLOCKSIZE = 512
+
+#: Used when no device has told us otherwise, which is only ever the case
+#: before a stream has been opened.
+DEFAULT_SAMPLERATE = 48000
+
+# -------------------------------------------------------------- microphone ---
+#
+# The microphone ducks the music by being OPEN, not by being loud. A gate that
+# opens on your voice clips the first syllable of every sentence.
+DEFAULT_MIC_GAIN_DB = 0.0
+MIN_MIC_GAIN_DB = -24.0
+MAX_MIC_GAIN_DB = 24.0
+
+#: A quarter of a second of monitoring held back, which is far more than the
+#: two streams will ever drift apart in and small enough to be inaudible.
+MIC_RING_FRAMES = 12000
 
 # ------------------------------------------------------------------- keys ---
 KEYBOARD_HELP = f"""{APP_NAME} — keyboard shortcuts
@@ -176,9 +219,57 @@ A FOLDER INSTEAD OF A FILE
   joins in; the app rescans when the folder changes.
   Good for the six jingles that all mean "down the chart".
 
-VOLUME — two independent masters
+VOLUME — three independent masters, plus the microphone's own gain
   F3 / F4                   Sound volume down / up (banks 1, 2 and 4)
   F5 / F6                   Bed volume down / up (bank 3)
+  F7 / F8                   Playlist volume down / up
+
+THE TWO VIEWS - soundboard and playlist
+  Ctrl+Shift+S              Go to the soundboard
+  Ctrl+Shift+P              Go to the playlist
+  Ctrl+Alt+Tab              Swap between them
+                            Windows uses Ctrl+Alt+Tab for its own task
+                            switcher and may take it first. The two keys
+                            above always work.
+
+THE PLAYLIST - a running order that cues itself
+  Ctrl+V                    Paste songs copied in File Explorer
+                            Works from anywhere and brings you to the list.
+                            You can drag files onto the list as well.
+  Enter                     Play from the item you are on
+  Space                     Tick or untick it. An unticked track stays in
+                            the list, keeps its place, and is skipped
+  Delete                    Take that item out
+  Alt+Up / Alt+Down         Move it up or down the order
+  Applications key          Everything above, in a menu, plus Segue to this
+                            now - which crosses to it at the crossfade
+                            length instead of waiting for the cue
+  Ctrl+Shift+D              Put a drop in front of the item you are on
+  Playlist menu             Add files, drops every so many songs, crossfade
+                            length, tick or untick everything, next,
+                            previous, stop, clear
+
+  Each song hands over to the next before it ends. The overlap is the
+  crossfade, three seconds unless you change it, and that handover point is
+  the song's cue. A drop does not crossfade unless you give it one: it plays
+  out and then the next song starts.
+
+THE MICROPHONE
+  Ctrl+M                    Microphone on or off
+  Ctrl+Shift+M              Which microphone, how much gain, which output
+                            you hear yourself on, and whether you do
+
+  While the microphone is ON, the beds and the playlist duck out of the way,
+  and they come back up the moment you turn it off. That happens because the
+  microphone is open, not because you are talking - a gate that opens on your
+  voice clips the first word of every sentence.
+
+  Hearing yourself is off until you turn it on. On headphones it is how you
+  know you are live; on speakers it is a feedback loop. It can go to an output
+  of its own, so monitoring sits in your headphones and the show does not.
+
+  Nothing here ever opens the microphone on its own. It opens when you press
+  Ctrl+M and at no other time, and whether it was on is never saved.
 
 GLOBAL
   Ctrl+F                    Search every bank by name (Ctrl+E also works)
@@ -212,6 +303,9 @@ FILE
   Ctrl+Shift+S              Save the board to a new file
   Ctrl+O                    Open a board
   Ctrl+P                    Audio output device and ducking settings
+
+The playlist has its own fader and ducks under sounds and drops, the same
+way the beds do. Escape stops it along with everything else.
 
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off.
 A bed toggles: press its hotkey again and it fades out.
