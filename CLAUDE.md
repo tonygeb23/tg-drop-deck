@@ -262,6 +262,22 @@ would have had me editing correct prose.
   "cannot access the file because it is being used by another process" every
   time. The whole build goes to `%LOCALAPPDATA%\TG Studios Build\drop-deck`
   and only the zip and the installer are copied back.
+- **A modal message box in a test hangs it for ever.** `wx.MessageBox` waits
+  for a click that a test cannot give, and `test_feedback_2_4` drives a path
+  that raises one on purpose: assigning an empty folder is refused with a
+  message box. It hung about one run in three, always after every check had
+  passed, so it showed only as an exit code. That file stands `wx.MessageBox`
+  in now, which also lets it assert that the user was told rather than only
+  that the folder was refused. **Any test that reaches a modal path needs the
+  same stub.**
+- **There is still an intermittent hang at frame teardown, roughly one run in
+  many.** Seen twice, in different suites, always with every check already
+  passed. `test_playlist` runs in 3 seconds normally and then occasionally
+  does not finish at all. Every background thread the frame starts is
+  `daemon=True`, so none of them holds the interpreter, and the modal box
+  above was a different cause with the same symptom. Not yet found. If you
+  are chasing it, `faulthandler.dump_traceback_later(45, exit=True)` around
+  `runpy.run_path` is what located the modal one.
 - **A daemon thread inside libsndfile at interpreter shutdown segfaults.** The
   cache warmer decodes on a background thread, and tearing the process down
   under it crashed on exit about one run in three - after every check had

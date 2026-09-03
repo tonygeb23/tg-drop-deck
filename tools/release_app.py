@@ -87,6 +87,10 @@ NOTES = {
               "hit by accident. And the playlist crossfade box says what it "
               "does, and is in Audio settings as well as under the running "
               "order."),
+    "2.5.2": ("Text only. Every em dash is gone from the app, the help and the "
+              "website, because a screen reader either skips one or says the "
+              "words em dash, and neither is what the sentence meant. Nothing "
+              "you press has changed."),
 }
 
 

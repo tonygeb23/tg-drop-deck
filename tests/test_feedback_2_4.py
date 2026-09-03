@@ -57,6 +57,24 @@ def tone(path, seconds=0.25, rate=48000, freq=440.0):
 app = wx.App(redirect=False)
 tmp = tempfile.mkdtemp(prefix="dropdeck-feedback-24-")
 
+# A modal message box with nobody to click it blocks for ever, and this file
+# drives a code path that raises one on purpose: assigning an empty folder is
+# refused, and the refusal is a message box. The test hung roughly one run in
+# three, after every check had passed, which shows up only as an exit code.
+#
+# Standing in for it makes the run deterministic AND makes the check stronger:
+# it can now assert that the user was actually told, rather than only that the
+# folder was not assigned.
+MESSAGES = []
+
+
+def _no_modal(message, caption="", style=0, parent=None):
+    MESSAGES.append((caption, message))
+    return wx.OK if style & wx.OK else wx.YES
+
+
+wx.MessageBox = _no_modal
+
 # A folder of jingles, plus one file that is not audio and must be ignored.
 jingles = os.path.join(tmp, "Chart Drops")
 os.makedirs(jingles)
@@ -287,9 +305,16 @@ check("and it is named after the folder",
       target.display_name == "Chart Drops", target.display_name)
 
 before = frame.board[8].filepath
+MESSAGES.clear()
 frame._apply_folder(frame.board[8], empty_dir)
 check("an empty folder is refused at assignment, not at showtime",
       frame.board[8].filepath == before, frame.board[8].filepath)
+check("and the user is told why, rather than left with a dead key",
+      MESSAGES and "no sounds in that folder" in MESSAGES[0][1],
+      MESSAGES)
+check("said out loud too, for anybody who has the app's speech turned down",
+      "no sounds in it" in frame.speaker.last_message,
+      frame.speaker.last_message)
 
 properties = SlotPropertiesDialog(frame, target, {})
 check("properties says it is a folder and how many are in it",

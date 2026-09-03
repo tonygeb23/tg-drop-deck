@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.5.2, 2 September 2026
+
+Text only. Nothing you press has changed.
+
+Every em dash and en dash is gone from the app, the `F1` help, the dialogs, the
+About box, the changelog and the whole website. A screen reader either skips a
+dash or says the words "em dash", and neither is what the sentence meant.
+
+`tools/nodashes.py` finds them and removes them. Read its diff afterwards: a
+dash swapped for a comma leaves comma splices, and no tool can tell a good
+comma from a bad one.
+
+Also corrected: the website said F4 renames a sound. That stopped being true in
+2.2.0, when the volume keys moved down one and F2 took over. It had been wrong
+for five releases.
+
+
 ## 2.5.1, 2 September 2026
 
 **There is a user guide.** [tgstudios.app/drop-deck-guide](https://tgstudios.app/drop-deck-guide/),
