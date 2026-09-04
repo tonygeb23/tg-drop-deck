@@ -147,7 +147,16 @@ def main():
         mixer.close()
         return 1
 
+    # The title, checked rather than assumed. A real Liquidsoap harbor
+    # answers "Updated metadatas for mount /live" to this; a server that does
+    # not take metadata at all says so here rather than silently doing
+    # nothing, which is how a station ends up showing the wrong track all
+    # night.
     streamer.set_title("TG Drop Deck - connection test")
+    pace(started + min(seconds, 4))
+    sink = streamer._sink
+    say("the server took the track title, so listeners see what is playing",
+        sink is not None and sink.send_metadata("TG Drop Deck - on air"))
     pace(started + seconds)
 
     say("it stayed on air for the whole run",
