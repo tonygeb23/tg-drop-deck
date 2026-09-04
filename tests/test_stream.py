@@ -747,6 +747,97 @@ check("forgetting one leaves the other", board.forget_station("Only One") is Fal
       and board.forget_station("Tony Gebhard Radio")
       and board.station_names() == ["Blindside Radio"], board.station_names())
 
+
+# ---------------------------------------------------------------------------
+print("\nNothing is lost on the way out")
+# ---------------------------------------------------------------------------
+
+# Users reported skips and stutters. Two real things came out of chasing it:
+# the last fraction of a second was thrown away every time you came off air,
+# and a connection that could not keep up said nothing at all.
+
+got_tail = bytearray()
+enc = Encoder(got_tail.extend, fmt="mp3", samplerate=RATE, bitrate=128)
+# Deliberately not a whole number of codec frames, which is the ordinary case.
+frames = enc.frame_size * 3 + enc.frame_size // 2
+enc.feed(tone(frames, 440.0))
+enc.close()
+back, _rate = decode(got_tail)
+check("the remainder is encoded rather than dropped when a stream ends",
+      len(back) >= frames, "fed %d, got %d back" % (frames, len(back)))
+
+with MockServer(password="hackme") as server:
+    mixer = Mixer(open_stream=False, samplerate=RATE)
+    bus = AirBus(RATE)
+    mixer.air_tap = bus
+    streamer = Streamer(bus, settings(server.port))
+    streamer.start()
+    mixer.play_samples(0, tone(RATE * 6, 440.0), bus=C.BUS_SFX)
+    started = time.time()
+    made = 0
+    while time.time() - started < 4.0:
+        want = int((time.time() - started) * RATE) - made
+        if want >= 512:
+            step = min(want, 4096) // 512 * 512
+            mixer.render(step)
+            made += step
+        else:
+            time.sleep(0.002)
+    streamer.stop()
+    mixer.stop_all(fade_out=0.0)
+    mixer.close()
+    heard, rate = decode(server.body)
+    played = made / float(RATE)
+    arrived = len(heard) / float(rate) if rate else 0.0
+    check("and coming off air does not clip the last moment of the show",
+          arrived > played - 0.12,
+          "played %.2fs, arrived %.2fs" % (played, arrived))
+
+# ---------------------------------------------------------------------------
+print("\nA connection that cannot keep up says so")
+# ---------------------------------------------------------------------------
+
+# A stream falling behind sounds perfect in the room and skips at the other
+# end. Silence about it is the worst of both.
+
+warnings = []
+with MockServer(password="hackme", bytes_per_second=6000) as server:
+    mixer = Mixer(open_stream=False, samplerate=RATE)
+    bus = AirBus(RATE)
+    mixer.air_tap = bus
+    streamer = Streamer(bus, settings(server.port, bitrate=320),
+                        on_trouble=warnings.append)
+    streamer.start()
+    mixer.play_samples(0, tone(RATE * 40, 440.0), bus=C.BUS_SFX)
+    started = time.time()
+    made = 0
+    while time.time() - started < 25 and not warnings:
+        want = int((time.time() - started) * RATE) - made
+        if want >= 512:
+            step = min(want, 4096) // 512 * 512
+            mixer.render(step)
+            made += step
+        else:
+            time.sleep(0.002)
+    check("320 kbps down a link that cannot carry it is noticed",
+          bool(warnings), warnings[:1])
+    check("and what it says names the problem, not a number",
+          any("listeners" in w.lower() for w in warnings), warnings[:1])
+    streamer.stop()
+    mixer.stop_all(fade_out=0.0)
+    mixer.close()
+
+# It only says it once, because a show does not need it every quarter second.
+quiet = []
+bus = AirBus(RATE)
+streamer = Streamer(bus, settings(9), on_trouble=quiet.append)
+streamer.bus.dropped = 5
+streamer._watch_backlog()
+streamer._watch_backlog()
+streamer._watch_backlog()
+check("and it says it once, not every time round the loop",
+      len(quiet) == 1, len(quiet))
+
 # ---------------------------------------------------------------------------
 print("\nThe app around it")
 # ---------------------------------------------------------------------------

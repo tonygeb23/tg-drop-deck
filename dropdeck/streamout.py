@@ -260,10 +260,22 @@ class Encoder:
             self._container.mux(packet)
 
     def close(self):
-        """Flush what the codec is holding and finish the container."""
+        """Flush what the codec is holding and finish the container.
+
+        The remainder is padded out to a whole frame and encoded rather than
+        dropped. A codec only takes whole frames, so up to one frame of audio
+        was being thrown away at the end of every broadcast: the last fraction
+        of a second before you came off air, which is exactly the moment
+        somebody is likely to still be talking.
+        """
         if self._closed:
             return
         try:
+            if len(self._pending):
+                tail = np.zeros((self.frame_size, CHANNELS), dtype=np.float32)
+                tail[:len(self._pending)] = self._pending
+                self._pending = np.zeros((0, CHANNELS), dtype=np.float32)
+                self._encode(tail)
             for packet in self._stream.encode(None):
                 self._container.mux(packet)
             self._container.close()
@@ -610,7 +622,8 @@ class Streamer:
     ring drops stream audio, not the sound coming out of the speakers.
     """
 
-    def __init__(self, bus, settings, on_state=None, on_title=None):
+    def __init__(self, bus, settings, on_state=None, on_title=None,
+                 on_trouble=None):
         self.bus = bus
         self.settings = dict(settings)
         self.on_state = on_state or (lambda state, detail: None)
@@ -634,6 +647,17 @@ class Streamer:
         self.started_at = 0.0
         self.attempts = 0
         self.reconnects = 0
+
+        #: Said once when the connection stops keeping up, because a stream
+        #: that is quietly falling behind sounds fine at this end and skips at
+        #: the other. Measured 4 September 2026: a link at half the needed
+        #: speed drops nothing for half a minute and puts the listener half a
+        #: minute late, and only then starts losing audio.
+        self.on_trouble = on_trouble or (lambda message: None)
+        #: How far behind the encoder is, in seconds of audio waiting.
+        self.backlog = 0.0
+        self._worried_at = 0.0
+        self._said_dropping = False
 
     # ------------------------------------------------------------- lifetime --
     def start(self):
@@ -792,6 +816,7 @@ class Streamer:
                 self.error = str(exc)
             except Exception as exc:                 # pragma: no cover
                 self.error = "the stream stopped: %s" % exc
+            self._drain()
             self._teardown()
             if self._stop.is_set():
                 break
@@ -818,6 +843,50 @@ class Streamer:
                                               FORMATS["mp3"])["label"],
                                   self.settings.get("host", ""))
 
+    def _drain(self):
+        """Send whatever is still in the ring before closing.
+
+        Coming off air should not cost the last quarter second of the show.
+        The ring holds up to one chunk that the pump had not reached yet, and
+        the encoder holds a partial frame; both are worth the moment it takes
+        to push them out.
+        """
+        try:
+            left = self.bus.available()
+            if left and self._encoder is not None:
+                block = self._resampler.feed(self.bus.read(left))
+                if len(block):
+                    self._encoder.feed(block)
+        except Exception:
+            pass          # never let tidying up raise on the way out
+
+    def _watch_backlog(self):
+        """Notice when the link stops keeping up, and say so once.
+
+        Two different failures, and a presenter needs to hear about both:
+        audio waiting in the ring means the far end is slower than the show,
+        and dropped blocks mean it has been slower for long enough that
+        listeners have now missed something.
+        """
+        waiting = self.bus.available() / float(self.bus.samplerate)
+        self.backlog = waiting
+        now = time.monotonic()
+        if waiting > C.STREAM_BEHIND_SECONDS:
+            if not self._worried_at:
+                self._worried_at = now
+            elif now - self._worried_at > C.STREAM_BEHIND_FOR:
+                self._worried_at = now + C.STREAM_BEHIND_AGAIN
+                self.on_trouble(
+                    "The connection is not keeping up. Listeners are %d "
+                    "seconds behind. A lower bitrate would fix it"
+                    % int(waiting))
+        else:
+            self._worried_at = 0.0
+        if self.bus.dropped and not self._said_dropping:
+            self._said_dropping = True
+            self.on_trouble("The stream is losing audio. Listeners are "
+                            "hearing gaps")
+
     def _pump(self):
         """Take what the sound card has made and send it, until told to stop."""
         chunk = max(256, int(self.bus.samplerate * C.STREAM_CHUNK_SECONDS))
@@ -833,6 +902,7 @@ class Streamer:
                     raise SinkError("the audio stopped arriving")
                 continue
             idle = 0.0
+            self._watch_backlog()
             block = self.bus.read(chunk)
             block = self._resampler.feed(block)
             if len(block):

@@ -3263,7 +3263,8 @@ class DropDeckFrame(wx.Frame):
 
         self.streamer = streamout.Streamer(
             self.air_bus, self._stream_settings(),
-            on_state=self._on_stream_state)
+            on_state=self._on_stream_state,
+            on_trouble=self._on_stream_trouble)
         self.streamer.start()
         self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
         return True
@@ -3339,6 +3340,14 @@ class DropDeckFrame(wx.Frame):
                 "genre": board.stream_genre, "url": board.stream_url,
                 "public": board.stream_public}
 
+    def _on_stream_trouble(self, message):
+        """The connection is not keeping up. Said, not written.
+
+        A stream falling behind sounds perfect in the room and skips at the
+        other end, so the only way a presenter finds out is being told.
+        """
+        wx.CallAfter(self.announce, message)
+
     def _on_stream_state(self, state, detail):
         """Called from the streaming thread. Nothing here touches wx.
 
@@ -3389,6 +3398,9 @@ class DropDeckFrame(wx.Frame):
         if dropped:
             parts.append("%d blocks lost, so listeners have heard gaps"
                          % dropped)
+        if streamer.backlog > C.STREAM_BEHIND_SECONDS:
+            parts.append("running %d seconds behind, so the connection is not "
+                         "keeping up" % int(streamer.backlog))
         if streamer.reconnects:
             parts.append("reconnected %d times" % streamer.reconnects)
         return ", ".join(parts)

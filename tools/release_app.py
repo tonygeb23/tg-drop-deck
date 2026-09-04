@@ -123,6 +123,13 @@ NOTES = {
               "fader: turn the playlist down to hear your screen reader and "
               "listeners still get it at full level. Set it up under On air, "
               "and nothing goes out until you press Ctrl+B."),
+    "2.9.1": ("Three fixes. Every field in every dialog now says what it is "
+              "when you tab onto it: the Streaming tab was announcing each "
+              "box with the label of the one above it, and the crossfade box "
+              "beside the running order had no label at all. Coming off air "
+              "no longer clips the last fraction of a second of the show. "
+              "And if the connection cannot keep up, Drop Deck tells you "
+              "instead of quietly losing audio."),
     "2.9.0": ("You can stream in AAC now, as well as MP3 and Ogg Opus, and "
               "you can save more than one station and switch between them "
               "from the On air menu. Only one music bed plays at a time: "

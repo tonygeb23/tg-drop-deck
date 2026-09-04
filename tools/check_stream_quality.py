@@ -166,7 +166,7 @@ def run(fmt, bitrate, seconds, slow_after=None, label=None):
         say("%s: it never had to reconnect" % title,
             streamer.reconnects == 0, streamer.reconnects)
         say("%s: every second played arrived" % title,
-            abs(missing) < 0.25,
+            abs(missing) < 0.12,
             "played %.2fs, received %.2fs, missing %.3fs"
             % (sent_seconds, got_seconds, missing))
         kbps = server_kbps = len(server.body) * 8 / max(0.01, got_seconds) / 1000

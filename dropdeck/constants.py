@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.9.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -570,6 +570,15 @@ STREAM_META_TIMEOUT = 5.0
 STREAM_STOP_TIMEOUT = 5.0
 #: No audio for this long means something is wrong worth reconnecting over.
 STREAM_SILENCE_TIMEOUT = 5.0
+
+#: Audio waiting to be encoded, past which the link is not keeping up. Half
+#: the ring: any less and a busy moment would cry wolf.
+STREAM_BEHIND_SECONDS = 1.0
+#: How long it has to stay behind before saying so, and how long before saying
+#: so again. A show does not need this every second, and it does need it more
+#: than once.
+STREAM_BEHIND_FOR = 5.0
+STREAM_BEHIND_AGAIN = 60.0
 
 #: Reconnect backoff, in seconds. Starts quick because most drops are brief.
 STREAM_RETRY_FIRST = 2.0

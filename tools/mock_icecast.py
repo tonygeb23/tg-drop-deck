@@ -22,7 +22,7 @@ class MockServer:
 
     def __init__(self, password="hackme", kind="icecast", accept=True,
                  drop_after=None, expect_mount="/live", stall_after=None,
-                 stall_seconds=6.0):
+                 stall_seconds=6.0, bytes_per_second=None):
         #: What it will accept.
         self.password = password
         self.kind = kind
@@ -39,6 +39,10 @@ class MockServer:
         self.stall_after = stall_after
         self.stall_seconds = stall_seconds
         self.stalled = False
+        #: Read no faster than this. A link that cannot carry the stream is a
+        #: different failure from one that drops: the sender never catches up,
+        #: and what it does about that is the thing worth testing.
+        self.bytes_per_second = bytes_per_second
         self.expect_mount = expect_mount
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -184,6 +188,7 @@ class MockServer:
         return password == self.password
 
     def _drain(self, conn, rest):
+        started = time.monotonic()
         if rest:
             self.body.extend(rest)
         conn.settimeout(1.0)
@@ -197,6 +202,14 @@ class MockServer:
                 # does to a source client.
                 self.stalled = True
                 time.sleep(self.stall_seconds)
+            if self.bytes_per_second:
+                # Pace the reader. The sender fills the kernel buffer and then
+                # blocks, which is what a slow uplink feels like from inside.
+                allowed = self.bytes_per_second * max(
+                    1e-6, time.monotonic() - started)
+                if len(self.body) > allowed:
+                    time.sleep(0.05)
+                    continue
             try:
                 chunk = conn.recv(16384)
             except socket.timeout:

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.9.1, 4 September 2026
+
+**Fields say what they are.** Tabbing the Streaming tab with NVDA announced
+every field with the label of the one above it, so the password box called
+itself "User name", and the crossfade box beside the running order had no
+label at all. Both are fixed, along with the same fault in the per bank
+outputs and four Alt keys that each did two jobs.
+
+The cause is worth writing down: `SetName` is not the accessible name on
+Windows. A screen reader is given the static text that precedes a control in
+creation order, so building a control before its label labels it with the row
+above. Spin controls needed an accessible object of their own, because focus
+lands on the edit box inside them and that box has no label in front of it.
+
+**Nothing is lost coming off air.** A codec only takes whole frames, so up to
+a quarter of a second was thrown away at the end of every broadcast: the last
+moment before you pressed Ctrl+B, which is exactly when somebody is still
+talking. The remainder is now sent.
+
+**A connection that cannot keep up says so.** A stream falling behind sounds
+perfect in the room and skips at the other end. Drop Deck now watches how far
+behind it is and tells you, once, rather than quietly losing audio. If it has
+already lost some it says that too, and `Ctrl+Shift+B` reports both.
+
+
 ## 2.9.0, 4 September 2026
 
 **AAC.** Stream in AAC as well as MP3 and Ogg Opus. Brian Hartgen asked for
