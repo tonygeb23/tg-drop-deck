@@ -39,6 +39,22 @@ for _n in range(1, 25):
     _NAMED_KEYS[getattr(wx, f"WXK_F{_n}")] = f"F{_n}"
 
 
+def name_field(control, name):
+    """Name a control, and the inner box that focus actually lands on.
+
+    A wx.SpinCtrlDouble is a text box and a pair of arrows inside a wrapper.
+    Tab lands on the text box, not the wrapper, so naming only the wrapper
+    leaves the thing a screen reader reaches called "text". Everything a
+    caption in front already does still applies; this makes sure the control
+    can also say what it is on its own.
+    """
+    control.SetName(name)
+    for child in control.GetChildren():
+        if isinstance(child, wx.TextCtrl):
+            child.SetName(name)
+    return control
+
+
 def key_label(key_code, modifiers):
     """A readable name for a key combination, in the app's usual order."""
     if not key_code:
@@ -422,6 +438,7 @@ class SlotPropertiesDialog(wx.Dialog):
 
         caption("&Name")
         self.name_field = wx.TextCtrl(self, value=slot.display_name)
+        self.name_field.SetName("Name")
         outer.Add(self.name_field, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
         caption("&Level in decibels")
@@ -440,15 +457,18 @@ class SlotPropertiesDialog(wx.Dialog):
         if slot.bank == C.BANK_MISC:
             caption("Hotke&y, inside this app")
             self.hotkey_readout = self._readout(
-                outer, key_label(self._key_code, self._modifiers) or "None")
+                outer, key_label(self._key_code, self._modifiers) or "None",
+                "Hotkey, inside this app")
             self._button(outer, "C&hoose a hotkey...", self._on_change_hotkey)
 
         caption("&Global hotkey, which works from any program")
-        self.global_readout = self._readout(outer, self._global_hotkey or "None")
+        self.global_readout = self._readout(
+            outer, self._global_hotkey or "None",
+            "Global hotkey, which works from any program")
         self._button(outer, "Cho&ose a global hotkey...", self._on_change_global)
 
         caption("&File")
-        self.file_readout = self._readout(outer, self._file_text())
+        self.file_readout = self._readout(outer, self._file_text(), "File")
 
         # Taking the slot off the board. Here as well as in the two menus,
         # because properties is where somebody looks for what a pad is and
@@ -475,10 +495,17 @@ class SlotPropertiesDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
     # ------------------------------------------------------------ building --
-    def _readout(self, sizer, value):
+    def _readout(self, sizer, value, name=""):
         """A read-only field, so a screen reader can read a value it cannot
-        otherwise reach and a mouse user can see one that would not fit."""
+        otherwise reach and a mouse user can see one that would not fit.
+
+        Named as well as captioned. The caption in front is what MSAA reads
+        and it does work; the name is the belt to its braces, so tabbing onto
+        this can never land on a box that says nothing at all.
+        """
         ctrl = wx.TextCtrl(self, value=value, style=wx.TE_READONLY)
+        if name:
+            ctrl.SetName(name)
         sizer.Add(ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         return ctrl
 
@@ -734,7 +761,7 @@ class SettingsDialog(wx.Dialog):
             initial=float(getattr(self.board.playlist, "crossfade",
                                   C.DEFAULT_CROSSFADE)))
         self.crossfade_ctrl.SetDigits(1)
-        self.crossfade_ctrl.SetName("Playlist crossfade, seconds")
+        name_field(self.crossfade_ctrl, "Playlist crossfade, seconds")
         self.crossfade_ctrl.SetToolTip(
             "The same box that sits under the running order. A single track "
             "can be given a crossfade of its own from its right-click menu.")
@@ -1173,7 +1200,7 @@ class SettingsDialog(wx.Dialog):
         spin = wx.SpinCtrlDouble(panel, min=0.0, max=C.MAX_BED_FADE, inc=0.05,
                                  initial=float(value))
         spin.SetDigits(2)
-        spin.SetName(name)
+        name_field(spin, name)
         spin.SetToolTip(tip)
         grid.Add(spin, 0)
         return spin
@@ -1471,7 +1498,7 @@ class TrackCrossfadeDialog(wx.Dialog):
         self.seconds = wx.SpinCtrlDouble(
             self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5, initial=float(start))
         self.seconds.SetDigits(1)
-        self.seconds.SetName("Crossfade for this track, seconds")
+        name_field(self.seconds, "Crossfade for this track, seconds")
         self.seconds.SetToolTip(
             "Zero means it plays right out and the next one starts after it, "
             "which is what a drop does unless you say otherwise.")

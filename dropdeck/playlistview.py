@@ -40,6 +40,7 @@ import os
 import wx
 
 from . import constants as C
+from .dialogs import name_field
 from . import m3u
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
                     ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
@@ -124,7 +125,7 @@ class PlaylistPanel(wx.Panel):
             initial=float(self.playlist.crossfade),
             style=wx.SP_ARROW_KEYS | wx.TE_PROCESS_ENTER)
         self.crossfade.SetDigits(1)
-        self.crossfade.SetName("Crossfade between tracks, seconds")
+        name_field(self.crossfade, "Crossfade between tracks, seconds")
         self.crossfade.SetToolTip(
             "How long one song overlaps the next. Type a number or use the "
             "arrow keys. Zero means each one plays right out before the next "

@@ -1581,6 +1581,24 @@ class DropDeckFrame(wx.Frame):
             f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
             f"{self._air_label()} (Ctrl+B)", 0)
 
+    def _stop_other_beds(self, keep):
+        """Take down every bed but this one. Returns the name of the last.
+
+        Bank 3 is the bed bank, so "is it a bed" is a question about the slot
+        rather than about the voice, which is why this reads the board.
+        """
+        stopped = ""
+        for index in list(self.mixer.playing_slots()):
+            if index == keep or not 0 <= index < C.TOTAL_SLOTS:
+                continue
+            other = self.board[index]
+            if not other.is_bed:
+                continue
+            self.mixer.stop_slot(index)
+            self._sync_button(other, playing=False)
+            stopped = other.display_name
+        return stopped
+
     def _air_label(self):
         streamer = getattr(self, "streamer", None)
         if streamer is None or not streamer.running:
@@ -1629,6 +1647,12 @@ class DropDeckFrame(wx.Frame):
                 self.announce_playback(f"Stopped bed, {slot.display_name}")
                 self._sync_button(slot, playing=False)
                 return
+            # One bed at a time. Two music beds running together is two
+            # pieces of music fighting, which is a mistake rather than a
+            # texture, and on a live show it is a mistake you make by leaning
+            # on the wrong key. Starting a bed takes the previous one down
+            # with its own fade, so it sounds like a change and not a fault.
+            replaced = self._stop_other_beds(index)
             voice = self.mixer.play(index, path, is_bed=True,
                                    loop=slot.loop, trim_db=slot.trim_db,
                                    name=slot.display_name, duration=duration)
@@ -1636,7 +1660,9 @@ class DropDeckFrame(wx.Frame):
                 self.announce(f"Could not play {slot.display_name}")
                 return
             tail = " looping" if slot.loop else ""
-            self.announce_playback(f"Playing bed, {slot.display_name}{tail}")
+            swapped = ", replacing %s" % replaced if replaced else ""
+            self.announce_playback(
+                f"Playing bed, {slot.display_name}{tail}{swapped}")
             self._sync_button(slot, playing=True)
             return
 

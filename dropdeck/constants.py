@@ -291,6 +291,11 @@ BANK 2: Dialog Drops
 BANK 3: Music Beds (loop by default)
   Alt+Ctrl+1 to 0           Start or stop beds 1 to 10
   Alt+Ctrl+Shift+1 to 0     Start or stop beds 11 to 20
+
+  Only one bed plays at a time. Starting another takes the one before it down
+  with its own fade, so it sounds like a change rather than a fault. Sound
+  effects and drops still overlap, because a laugh on top of a sting is the
+  point of a soundboard.
   Right-click               Turn looping off or on for one bed
   A bed starts exactly where the file does and fades out when you stop it.
   Preferences, Ctrl+P, sets both fades in seconds.

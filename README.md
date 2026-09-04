@@ -66,7 +66,8 @@ else: bank 3 is still the looping bank and bank 4 still takes your own hotkeys.
    of your own.
 
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off. A bed
-toggles: the same key starts it and stops it.
+toggles: the same key starts it and stops it, and only one bed plays at a
+time, so starting another takes the one before it down.
 
 ## A playlist, next to the soundboard
 
