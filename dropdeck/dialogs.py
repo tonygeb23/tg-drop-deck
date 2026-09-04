@@ -867,6 +867,24 @@ class SettingsDialog(wx.Dialog):
                    "the beds and the playlist duck out of the way, and they\n"
                    "come back up the moment you turn it off.")
 
+        # Which side of a stereo input the voice is on. A headset is mono
+        # and this never matters; a hardware mixer feeding a line input puts
+        # the voice on one channel, and taking the other one is silence.
+        # JamminJerry, 4 September 2026: "I can't get my microphone from my
+        # mixer on the air though."
+        self._label(panel, sizer, "Which &channel the voice is on")
+        self.mic_channel = wx.Choice(
+            panel, choices=["Both, mixed together", "Left only", "Right only"])
+        name_field(self.mic_channel, "Which channel the voice is on")
+        self.mic_channel.SetSelection(
+            {"mix": 0, "left": 1, "right": 2}.get(
+                getattr(self.board, "mic_channel", "mix"), 0))
+        self.mic_channel.SetToolTip(
+            "Only matters for a stereo input, such as a hardware mixer on a "
+            "line in. If you can see the level moving but hear nothing, this "
+            "is usually why.")
+        sizer.Add(self.mic_channel, 0, wx.EXPAND | wx.ALL, 10)
+
         self._label(panel, sizer, "&Gain in decibels")
         self.mic_gain = wx.Slider(
             panel, value=int(round(self.board.mic_gain_db)),

@@ -204,6 +204,11 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+        #: Which half of a stereo input carries the voice. A hardware
+        #: mixer feeding a line input puts it on one side, and taking the
+        #: wrong one is silence.
+        self.mic_channel = "mix"
+
         #: The microphone chain: gate, equaliser, compressor, limiter.
         #: Empty means the defaults, which are chosen for a spoken voice.
         self.voice_on = True
@@ -470,6 +475,7 @@ class Board:
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
             "stream_stations": list(self.stream_stations),
+            "mic_channel": self.mic_channel,
             "voice_on": bool(self.voice_on),
             "voice_settings": dict(self.voice_settings),
             "last_sound_dir": self.last_sound_dir,
@@ -549,6 +555,8 @@ class Board:
         board.stream_titles = bool(data.get("stream_titles", True))
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
+        channel = data.get("mic_channel")
+        board.mic_channel = channel if channel in ("mix", "left", "right") else "mix"
         board.voice_on = bool(data.get("voice_on", True))
         settings = data.get("voice_settings")
         board.voice_settings = dict(settings) if isinstance(settings, dict) else {}

@@ -545,6 +545,7 @@ class DropDeckFrame(wx.Frame):
         # Gate, equaliser, compressor and limiter. Built even when the
         # processing library is missing, because a chain that does nothing is
         # simpler for everything downstream than a chain that is None.
+        self.mic.channel = self.board.mic_channel
         if dsp.available():
             self.mic.chain = dsp.MicChain(self.mixer.samplerate,
                                           self.board.voice_settings)
@@ -2867,6 +2868,11 @@ class DropDeckFrame(wx.Frame):
         self.board.mic_gain_db = gain_db
         self.board.mic_monitor = monitoring
         self.mic.gain_db = gain_db
+        channel = ["mix", "left", "right"][
+            max(0, dialog.mic_channel.GetSelection())]
+        if channel != self.mic.channel:
+            self.board.mic_channel = channel
+            self.mic.channel = channel
         self.mic.monitor = monitoring
         self.mic.device = index
 

@@ -32,6 +32,7 @@ a filter disagreed with a number is worse than a microphone with no filter.
 from __future__ import annotations
 
 import math
+import threading
 
 import numpy as np
 
@@ -231,6 +232,21 @@ class MicChain:
         #: does not report it and a number you can hear is worth having.
         self.gain_reduction_db = 0.0
         self._board = None
+        #: Held while the chain is used and while it is rebuilt, so the two
+        #: never overlap. Rebuilding hands pedalboard a fresh set of objects,
+        #: and handing a plugin to a new Pedalboard calls into that plugin at
+        #: the same moment the audio thread may be inside its processBlock.
+        #: That is a crash in C++, not an exception in Python, and it is what
+        #: Tony saw as "it almost crashed when I was moving around and
+        #: loading vsts".
+        #:
+        #: Only ever held for one block, about a tenth of a millisecond, or
+        #: one rebuild, about a hundredth. Loading a plugin takes over a
+        #: second and happens OUTSIDE it, deliberately.
+        self._lock = threading.RLock()
+        #: The live stage objects, so a value can be changed on the chain
+        #: that is running rather than by building a new one around it.
+        self._stages = {}
         #: Ours, not pedalboard's, and always the last thing to touch the
         #: audio. See Ceiling for why.
         self._ceiling = Ceiling(self.samplerate)
@@ -244,55 +260,128 @@ class MicChain:
         if rebuild:
             self.rebuild()
 
+    #: Which live object and attribute each setting drives. A value listed
+    #: here is changed on the running chain; anything else, and every switch,
+    #: changes the SHAPE of the chain and so needs it rebuilt.
+    LIVE = {
+        "gate_threshold": ("gate", "threshold_db"),
+        "gate_ratio": ("gate", "ratio"),
+        "gate_attack": ("gate", "attack_ms"),
+        "gate_release": ("gate", "release_ms"),
+        "highpass_hz": ("highpass", "cutoff_frequency_hz"),
+        "eq_low_hz": ("low", "cutoff_frequency_hz"),
+        "eq_low_db": ("low", "gain_db"),
+        "eq_mid_hz": ("mid", "cutoff_frequency_hz"),
+        "eq_mid_db": ("mid", "gain_db"),
+        "eq_mid_q": ("mid", "q"),
+        "eq_high_hz": ("high", "cutoff_frequency_hz"),
+        "eq_high_db": ("high", "gain_db"),
+        "comp_threshold": ("comp", "threshold_db"),
+        "comp_ratio": ("comp", "ratio"),
+        "comp_attack": ("comp", "attack_ms"),
+        "comp_release": ("comp", "release_ms"),
+        "comp_makeup": ("makeup", "gain_db"),
+    }
+
+    def apply_one(self, key, value):
+        """Change one setting on the chain that is already running.
+
+        Arrowing through the settings list used to rebuild the whole chain on
+        every single keypress. Wasteful on its own, and the reason loading a
+        plugin was dangerous: a rebuild while the audio thread is inside the
+        old chain is two threads in one plugin. A number now lands on the
+        live object, and only a switch or a plugin changes any shape.
+        """
+        self.settings[key] = value
+        if key in ("limit_ceiling", "limit_release"):
+            self._ceiling.ceiling_db = float(self.settings["limit_ceiling"])
+            self._ceiling.release_ms = float(self.settings["limit_release"])
+            return
+        where = self.LIVE.get(key)
+        if where is None:
+            self.rebuild()
+            return
+        with self._lock:
+            stage = self._stages.get(where[0])
+            if stage is not None:
+                try:
+                    setattr(stage, where[1], float(value))
+                    return
+                except Exception:
+                    pass
+        self.rebuild()
+
     def rebuild(self):
         """Make the processor chain the settings describe."""
         if pedalboard is None:
-            self._board = None
+            with self._lock:
+                self._board = None
+                self._stages = {}
             return
         s = self.settings
         stages = []
+        live = {}
         try:
             if s["gate_on"]:
-                stages.append(pedalboard.NoiseGate(
+                live["gate"] = pedalboard.NoiseGate(
                     threshold_db=float(s["gate_threshold"]),
                     ratio=float(s["gate_ratio"]),
                     attack_ms=float(s["gate_attack"]),
-                    release_ms=float(s["gate_release"])))
+                    release_ms=float(s["gate_release"]))
+                stages.append(live["gate"])
             if s["highpass_on"]:
-                stages.append(pedalboard.HighpassFilter(
-                    cutoff_frequency_hz=float(s["highpass_hz"])))
+                live["highpass"] = pedalboard.HighpassFilter(
+                    cutoff_frequency_hz=float(s["highpass_hz"]))
+                stages.append(live["highpass"])
             if s["eq_on"]:
-                stages.append(pedalboard.LowShelfFilter(
+                live["low"] = pedalboard.LowShelfFilter(
                     cutoff_frequency_hz=float(s["eq_low_hz"]),
-                    gain_db=float(s["eq_low_db"])))
-                stages.append(pedalboard.PeakFilter(
+                    gain_db=float(s["eq_low_db"]))
+                live["mid"] = pedalboard.PeakFilter(
                     cutoff_frequency_hz=float(s["eq_mid_hz"]),
                     gain_db=float(s["eq_mid_db"]),
-                    q=float(s["eq_mid_q"])))
-                stages.append(pedalboard.HighShelfFilter(
+                    q=float(s["eq_mid_q"]))
+                live["high"] = pedalboard.HighShelfFilter(
                     cutoff_frequency_hz=float(s["eq_high_hz"]),
-                    gain_db=float(s["eq_high_db"])))
+                    gain_db=float(s["eq_high_db"]))
+                stages.extend([live["low"], live["mid"], live["high"]])
             if s["comp_on"]:
-                stages.append(pedalboard.Compressor(
+                live["comp"] = pedalboard.Compressor(
                     threshold_db=float(s["comp_threshold"]),
                     ratio=float(s["comp_ratio"]),
                     attack_ms=float(s["comp_attack"]),
-                    release_ms=float(s["comp_release"])))
-                if s["comp_makeup"]:
-                    stages.append(pedalboard.Gain(
-                        gain_db=float(s["comp_makeup"])))
+                    release_ms=float(s["comp_release"]))
+                stages.append(live["comp"])
+                # Always present, even at nought, so make up gain can change
+                # without changing the shape of the chain.
+                live["makeup"] = pedalboard.Gain(
+                    gain_db=float(s["comp_makeup"]))
+                stages.append(live["makeup"])
             if self.plugin is not None:
                 stages.append(self.plugin)
-            self._board = pedalboard.Pedalboard(stages) if stages else None
+            built = pedalboard.Pedalboard(stages) if stages else None
+            with self._lock:
+                self._board = built
+                self._stages = live
         except Exception:
             # A number the library will not take must not leave the
             # microphone dead. No chain is a working microphone.
-            self._board = None
+            with self._lock:
+                self._board = None
+                self._stages = {}
         self._ceiling.ceiling_db = float(s["limit_ceiling"])
         self._ceiling.release_ms = float(s["limit_release"])
 
     def set_plugin(self, plugin):
-        self.plugin = plugin
+        """Put a plugin in the chain, or take one out.
+
+        The plugin must already be LOADED. Loading takes over a second and
+        runs the plugin's own start up code; doing that while holding the
+        lock would stall the audio thread for the whole of it, which is a
+        gap in the sound rather than a race.
+        """
+        with self._lock:
+            self.plugin = plugin
         self.rebuild()
 
     # --------------------------------------------------------------- audio --
@@ -308,13 +397,14 @@ class MicChain:
             return block
         try:
             before = float(np.abs(block).max())
-            if self._board is not None:
-                out = self._board.process(
-                    np.ascontiguousarray(block.T), self.samplerate,
-                    reset=False)
-                out = np.ascontiguousarray(out.T).astype(np.float32)
-            else:
-                out = block
+            with self._lock:
+                if self._board is not None:
+                    out = self._board.process(
+                        np.ascontiguousarray(block.T), self.samplerate,
+                        reset=False)
+                    out = np.ascontiguousarray(out.T).astype(np.float32)
+                else:
+                    out = block
             if self.settings["limit_on"]:
                 out = self._ceiling.process(out)
             if len(out) != len(block):
@@ -352,7 +442,7 @@ class MicChain:
             return Parameter(
                 key, label,
                 lambda k=key: float(s[k]),
-                lambda v, k=key: (s.__setitem__(k, v), self.rebuild()),
+                lambda v, k=key: self.apply_one(k, v),
                 low, high, step, unit, decimals)
 
         def switch(key, label):

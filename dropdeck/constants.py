@@ -443,6 +443,12 @@ THE MICROPHONE
   know you are live; on speakers it is a feedback loop. It can go to an output
   of its own, so monitoring sits in your headphones and the show does not.
 
+  WHICH CHANNEL, if your microphone comes from a mixer. A headset is mono and
+  this never matters. A hardware mixer feeding a line input puts the voice on
+  one side of a stereo pair, and taking the other side is silence. If the
+  level meter moves and you hear nothing, this is almost always why. It is in
+  Preferences, Microphone.
+
   Nothing here ever opens the microphone on its own. It opens when you press
   Ctrl+M and at no other time, and whether it was on is never saved.
 

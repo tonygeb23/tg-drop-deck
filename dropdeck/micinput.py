@@ -185,9 +185,24 @@ class MicInput:
         #: The rate the microphone is actually open at. Set by start().
         self.samplerate = self.output_rate
         self.gain_db = float(gain_db)
+        #: Which part of a stereo input carries the voice.
+        #:
+        #: The microphone used to be opened with channels=1, which takes the
+        #: FIRST channel and nothing else. That is right for a headset and
+        #: wrong for the way a lot of broadcasters actually work: a hardware
+        #: mixer's output arrives as a stereo pair on a line input, and if
+        #: the voice is on the right, or the left is a different source
+        #: entirely, one channel is all you get and it is the wrong one.
+        #:
+        #: JamminJerry, on Mastodon, 4 September 2026, with four sound cards
+        #: into a mixer: "I can't get my microphone from my mixer on the air
+        #: though."
+        self.channel = "mix"
         self.monitor = bool(monitor)
         self.stream = None
         self.last_error = None
+        #: How many channels the device was actually opened with.
+        self.channels_open = 1
         #: Peak of the most recent block, 0 to 1, for a level readout. This
         #: one is BEFORE the processing, because it is what a gain control
         #: needs to be set against.
@@ -271,6 +286,39 @@ class MicInput:
                 seen.append(rate)
         return seen
 
+    def _channel_counts(self):
+        """How many channels to ask the device for, best first."""
+        try:
+            info = sd.query_devices(self.device)
+            most = int(info.get("max_input_channels", 1))
+        except Exception:
+            most = 2
+        return [2, 1] if most >= 2 else [1]
+
+    def _try_open(self, channels, rate, failures):
+        """One attempt at one shape. True if the microphone is now running."""
+        try:
+            stream = sd.InputStream(
+                device=self.device,
+                samplerate=rate,
+                channels=channels,
+                dtype="float32",
+                blocksize=C.BLOCKSIZE,
+                latency="low",
+                callback=self._callback,
+            )
+            stream.start()
+        except Exception as exc:  # no microphone, in use, rate or shape refused
+            failures.append("%d Hz, %d channel: %s" % (rate, channels, exc))
+            return False
+        self.stream = stream
+        self.samplerate = rate
+        self.channels_open = channels
+        self.last_error = None
+        self._reset_ring()
+        self._publish(True)
+        return True
+
     def start(self, device=None):
         """Open the microphone. Returns True if it is actually running.
 
@@ -283,27 +331,14 @@ class MicInput:
         self.stop()
 
         failures = []
-        for rate in self.candidate_rates():
-            try:
-                stream = sd.InputStream(
-                    device=self.device,
-                    samplerate=rate,
-                    channels=1,      # one channel, spread across both outputs
-                    dtype="float32",
-                    blocksize=C.BLOCKSIZE,
-                    latency="low",
-                    callback=self._callback,
-                )
-                stream.start()
-            except Exception as exc:  # no microphone, in use, rate refused
-                failures.append("%d Hz: %s" % (rate, exc))
-                continue
-            self.stream = stream
-            self.samplerate = rate
-            self.last_error = None
-            self._reset_ring()
-            self._publish(True)
-            return True
+        # Two channels where the device has them, so a mixer feeding a stereo
+        # pair can have either side or both, and one where it does not. Two is
+        # tried first and one is the fallback, because a working microphone on
+        # the wrong channel beats no microphone at all.
+        for wanted in self._channel_counts():
+            for rate in self.candidate_rates():
+                if self._try_open(wanted, rate, failures):
+                    return True
 
         self.stream = None
         # Every rate, not just the last one. "Invalid sample rate" on its own
@@ -371,7 +406,18 @@ class MicInput:
             self.overruns += 1
         block = np.asarray(indata, dtype=np.float32)
         if block.ndim == 2:
-            block = block[:, 0]
+            if block.shape[1] >= 2:
+                # Which half of a stereo input the voice is actually on.
+                # "mix" averages rather than sums, so choosing it never makes
+                # a centred voice 6 dB louder than choosing a side.
+                if self.channel == "left":
+                    block = block[:, 0]
+                elif self.channel == "right":
+                    block = block[:, 1]
+                else:
+                    block = block[:, :2].mean(axis=1)
+            else:
+                block = block[:, 0]
         block = block * self.gain
         peak = float(np.abs(block).max()) if frames else 0.0
         self.peak = peak
