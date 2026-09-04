@@ -616,6 +616,137 @@ with MockServer(password="hackme") as server:
           early > 0.02 and late > 0.02 and abs(early - late) < early * 0.5,
           (round(early, 4), round(late, 4)))
 
+
+# ---------------------------------------------------------------------------
+print("\nAAC, because that is what broadcasters use")
+# ---------------------------------------------------------------------------
+
+# Brian Hartgen, 4 September 2026: "you may want to consider streaming using
+# AAC, which is what we do."
+
+check("AAC is on the list of formats", "aac" in streamout.FORMATS)
+check("and it is offered in Preferences", "aac" in C.STREAM_FORMAT_ORDER,
+      C.STREAM_FORMAT_ORDER)
+got_aac = bytearray()
+enc = Encoder(got_aac.extend, fmt="aac", samplerate=RATE, bitrate=128)
+for i in range(120):
+    enc.feed(tone(1024, 440.0, start=i * 1024))
+enc.close()
+check("it encodes", len(got_aac) > 8000, "%d bytes" % len(got_aac))
+check("as ADTS, so a listener joining halfway through knows the rate",
+      got_aac[0] == 0xFF and (got_aac[1] & 0xF0) == 0xF0,
+      (hex(got_aac[0]), hex(got_aac[1])))
+check("and it is announced to the server as audio/aac",
+      streamout.FORMATS["aac"]["content_type"] == "audio/aac")
+aac_samples, aac_rate = decode(got_aac, container="adts")
+check("it decodes back to audio at the right rate",
+      len(aac_samples) > RATE and aac_rate == RATE, (len(aac_samples), aac_rate))
+mid = aac_samples[len(aac_samples) // 3:len(aac_samples) // 3 + 8192, 0]
+check("and it is the sound that went in",
+      goertzel(mid, 440.0) > 0.02 and goertzel(mid, 1500.0) < 0.01,
+      (round(goertzel(mid, 440.0), 4), round(goertzel(mid, 1500.0), 4)))
+
+with MockServer(password="hackme") as server:
+    mixer = Mixer(open_stream=False, samplerate=RATE)
+    bus = AirBus(RATE)
+    mixer.air_tap = bus
+    streamer = Streamer(bus, settings(server.port, format="aac"))
+    streamer.start()
+    mixer.play_samples(0, tone(RATE * 6, 440.0), bus=C.BUS_SFX)
+    deadline = time.time() + 12
+    while time.time() < deadline and len(server.body) < 16000:
+        mixer.render(512)
+        time.sleep(0.004)
+    check("a whole AAC stream reaches a server",
+          streamer.state == streamout.ON_AIR and len(server.body) > 8000,
+          (streamer.state, len(server.body)))
+    check("told it is AAC, not MP3",
+          server.headers.get("content-type") == "audio/aac",
+          server.headers.get("content-type"))
+    streamer.stop()
+    mixer.stop_all(fade_out=0.0)
+    mixer.close()
+    heard, _r = decode(server.body, container="adts")
+    part = heard[len(heard) // 3:len(heard) // 3 + 8192, 0]
+    check("and it decodes back to what was played",
+          goertzel(part, 440.0) > 0.02, round(goertzel(part, 440.0), 4))
+
+# ---------------------------------------------------------------------------
+print("\nMore than one station")
+# ---------------------------------------------------------------------------
+
+# Tony now runs two: his own, and Blindside Radio. Retyping an address, a
+# mount and a password to move between them is the friction that stops you
+# bothering.
+
+board = Board()
+check("a fresh board knows about no stations", board.station_names() == [])
+board.stream_name = "Tony Gebhard Radio"
+board.stream_host = "radio.tonygebhard.me"
+board.stream_port = 8001
+board.stream_password = "one"
+board.save_station()
+board.stream_name = "Blindside Radio"
+board.stream_host = "blindsideradio.com"
+board.stream_port = 8003
+board.stream_format = "aac"
+board.stream_bitrate = 192
+board.stream_password = "two"
+board.save_station()
+check("two are remembered, in the order they were saved",
+      board.station_names() == ["Tony Gebhard Radio", "Blindside Radio"],
+      board.station_names())
+
+board.load_station("Tony Gebhard Radio")
+check("loading one brings back every field, not just the address",
+      (board.stream_host, board.stream_port, board.stream_format,
+       board.stream_password)
+      == ("radio.tonygebhard.me", 8001, "mp3", "one"),
+      (board.stream_host, board.stream_port, board.stream_format))
+board.load_station("Blindside Radio")
+check("and the other one comes back whole too",
+      (board.stream_host, board.stream_port, board.stream_format,
+       board.stream_bitrate, board.stream_password)
+      == ("blindsideradio.com", 8003, "aac", 192, "two"),
+      (board.stream_host, board.stream_port, board.stream_format))
+
+board.save_station("Blindside Radio")
+check("saving over one replaces it rather than making a second",
+      board.station_names().count("Blindside Radio") == 1,
+      board.station_names())
+
+kept = os.path.join(tempfile.mkdtemp(), "stations.json")
+board.save(kept)
+reloaded = Board.load(kept)
+check("they survive a save and a load",
+      reloaded.station_names() == ["Tony Gebhard Radio", "Blindside Radio"],
+      reloaded.station_names())
+check("with their passwords, or you would type them again every time",
+      all(s.get("stream_password") for s in reloaded.stream_stations))
+check("and the one that was loaded is still the one loaded",
+      reloaded.stream_name == "Blindside Radio", reloaded.stream_name)
+
+older = os.path.join(tempfile.mkdtemp(), "old.json")
+with open(older, "w", encoding="utf-8") as handle:
+    json.dump({"stream_host": "radio.example.com", "stream_port": 8001,
+               "stream_name": "Only One"}, handle)
+upgraded = Board.load(older)
+check("a board saved before stations existed keeps the one it had",
+      upgraded.station_names() == ["Only One"], upgraded.station_names())
+
+junk = os.path.join(tempfile.mkdtemp(), "junk.json")
+with open(junk, "w", encoding="utf-8") as handle:
+    json.dump({"stream_stations": ["nonsense", 7, {"no": "name"},
+                                   {"stream_name": "Real", "stream_port": 9}]},
+              handle)
+check("nonsense in the file is dropped rather than becoming a station",
+      Board.load(junk).station_names() == ["Real"],
+      Board.load(junk).station_names())
+
+check("forgetting one leaves the other", board.forget_station("Only One") is False
+      and board.forget_station("Tony Gebhard Radio")
+      and board.station_names() == ["Blindside Radio"], board.station_names())
+
 # ---------------------------------------------------------------------------
 print("\nThe app around it")
 # ---------------------------------------------------------------------------

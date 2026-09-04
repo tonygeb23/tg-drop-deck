@@ -18,6 +18,35 @@ from .slot import Slot
 FORMAT_VERSION = 2
 
 
+#: What one saved station remembers. Everything the streamer needs plus a
+#: name to pick it by.
+STATION_FIELDS = (
+    "stream_name", "stream_server", "stream_host", "stream_port",
+    "stream_mount", "stream_user", "stream_password", "stream_format",
+    "stream_bitrate", "stream_description", "stream_genre", "stream_url",
+    "stream_public", "stream_mic", "stream_titles",
+)
+
+
+def _stations(value):
+    """Whatever was in the file, as a list of usable stations.
+
+    A board file is not a trusted document, so anything that is not a dict
+    with a name is dropped rather than allowed to become a station that
+    explodes when you select it.
+    """
+    if not isinstance(value, list):
+        return []
+    out = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        if not str(entry.get("stream_name") or "").strip():
+            continue
+        out.append({k: entry.get(k) for k in STATION_FIELDS if k in entry})
+    return out
+
+
 def _stream_port(value):
     """A port, or the default. A board file is not a trusted document."""
     try:
@@ -175,6 +204,10 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+        #: Every station this board knows, newest last. The live settings
+        #: above are whichever one is loaded; this is the shelf they came off.
+        self.stream_stations = []
+
         #: F7 and F8 change what you hear and not what goes out. On, because
         #: that is what a fader on a desk does and it is the only way to turn
         #: the music down to hear a screen reader without taking it off air.
@@ -341,6 +374,51 @@ class Board:
         return repaired
 
     # ------------------------------------------------------------------- io --
+    # ------------------------------------------------------------ stations --
+    def station_settings(self):
+        """The station that is set up right now, as a saved station would be."""
+        return {field: getattr(self, field) for field in STATION_FIELDS}
+
+    def station_names(self):
+        return [s.get("stream_name", "") for s in self.stream_stations]
+
+    def load_station(self, name):
+        """Put a saved station into the live settings. True if there was one."""
+        for station in self.stream_stations:
+            if station.get("stream_name") == name:
+                for field in STATION_FIELDS:
+                    if field in station:
+                        setattr(self, field, station[field])
+                self.stream_port = _stream_port(self.stream_port)
+                self.stream_bitrate = _stream_bitrate(self.stream_bitrate)
+                return True
+        return False
+
+    def save_station(self, name=None):
+        """Remember the current settings under their own name.
+
+        Saving over a station of the same name replaces it in place rather
+        than adding a second one, because two stations called the same thing
+        is a list nobody can use.
+        """
+        name = (name or self.stream_name or "").strip()
+        if not name:
+            return None
+        self.stream_name = name
+        entry = self.station_settings()
+        for index, station in enumerate(self.stream_stations):
+            if station.get("stream_name") == name:
+                self.stream_stations[index] = entry
+                return entry
+        self.stream_stations.append(entry)
+        return entry
+
+    def forget_station(self, name):
+        before = len(self.stream_stations)
+        self.stream_stations = [s for s in self.stream_stations
+                                if s.get("stream_name") != name]
+        return len(self.stream_stations) != before
+
     def to_dict(self):
         return {
             "app": C.APP_NAME,
@@ -386,6 +464,7 @@ class Board:
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
+            "stream_stations": list(self.stream_stations),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -463,6 +542,11 @@ class Board:
         board.stream_titles = bool(data.get("stream_titles", True))
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
+        board.stream_stations = _stations(data.get("stream_stations"))
+        # A board written before stations existed still has one set up, and
+        # losing it on upgrade would be the worst kind of small betrayal.
+        if not board.stream_stations and board.stream_host:
+            board.stream_stations = [board.station_settings()]
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")

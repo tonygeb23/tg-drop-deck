@@ -45,6 +45,10 @@ from .speech import Speaker, percent
 ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
+#: One id per saved station on the On air menu. Twenty is more stations than
+#: anyone has, and a fixed block keeps them clear of every other id.
+ID_STATION_BASE = wx.ID_HIGHEST + 410
+MAX_STATIONS = 20
 
 ID_SLOT_BASE = wx.ID_HIGHEST + 500
 
@@ -1023,6 +1027,11 @@ class DropDeckFrame(wx.Frame):
                    "Whether it is on air, for how long, and whether anything "
                    "has been lost")
         air.AppendSeparator()
+        # Switching station without going through Preferences, because on a
+        # show you want it on a menu, not four keystrokes into a dialog.
+        self.station_menu = wx.Menu()
+        air.AppendSubMenu(self.station_menu, "&Station")
+        self._rebuild_station_menu()
         air.Append(ID_STREAM_SETUP, "Set &up streaming...",
                    "The address, the mount point and the password for your "
                    "server")
@@ -1109,6 +1118,9 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
                   id=ID_STREAM_SETUP)
+        for offset in range(MAX_STATIONS):
+            self.Bind(wx.EVT_MENU, self._on_pick_station,
+                      id=ID_STATION_BASE + offset)
         self.Bind(wx.EVT_MENU, self._on_mic_settings, id=ID_MIC_SETTINGS)
         self.Bind(wx.EVT_MENU, self._on_crossfade, id=ID_PL_CROSSFADE)
         self.Bind(wx.EVT_MENU, lambda _e: self.save_playlist_file(),
@@ -3220,6 +3232,46 @@ class DropDeckFrame(wx.Frame):
             self.announce("Off air")
         self._update_status()
 
+    def _rebuild_station_menu(self):
+        """The saved stations, with a dot beside the one that is loaded."""
+        menu = getattr(self, "station_menu", None)
+        if menu is None:
+            return
+        for item in list(menu.GetMenuItems()):
+            menu.Delete(item)
+        names = self.board.station_names()[:MAX_STATIONS]
+        if not names:
+            # A dead "None saved yet" line would be a menu item that does
+            # nothing, which the menu audit rightly refuses. Offer the thing
+            # somebody with no stations actually wants instead.
+            menu.Append(ID_STREAM_SETUP, "&Set one up...",
+                        "The address, mount point and password for a server")
+            return
+        for offset, name in enumerate(names):
+            item = menu.AppendRadioItem(ID_STATION_BASE + offset, name)
+            if name == self.board.stream_name:
+                item.Check(True)
+
+    def _on_pick_station(self, event):
+        """Load a saved station. Not while it is broadcasting, though."""
+        offset = event.GetId() - ID_STATION_BASE
+        names = self.board.station_names()
+        if not 0 <= offset < len(names):
+            return
+        name = names[offset]
+        if name == self.board.stream_name:
+            return
+        if self.streaming():
+            # Swapping the server under a live stream mid sentence is not a
+            # thing to do quietly. Come off air first, deliberately.
+            self.announce("Come off air first, Ctrl+B, then change station")
+            self._rebuild_station_menu()
+            return
+        if self.board.load_station(name):
+            self._touch()
+            self.announce("Station %s, %s" % (name, self.board.stream_host))
+        self._rebuild_station_menu()
+
     def _stream_settings(self):
         """What the board holds, in the shape the streamer wants."""
         board = self.board
@@ -3338,6 +3390,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
         self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
+        self._rebuild_station_menu()
         # Beds already in flight keep the fade they started with - a voice owns
         # its envelope - so this takes effect from the next press.
         self.mixer.bed_fade_in = self.board.bed_fade_in

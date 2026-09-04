@@ -163,6 +163,13 @@ FORMATS = {
             "muxer": {"write_xing": "0", "id3v2_version": "0"}},
     "opus": {"label": "Ogg Opus", "codec": "libopus", "container": "ogg",
              "content_type": "audio/ogg", "muxer": {}},
+    # Brian Hartgen, 4 September 2026: "you may want to consider streaming
+    # using AAC, which is what we do." ADTS rather than a bare stream, because
+    # ADTS puts a header on every frame, which is what lets a listener joining
+    # halfway through work out the rate and channels. Icecast has carried
+    # AAC this way for years.
+    "aac": {"label": "AAC", "codec": "aac", "container": "adts",
+            "content_type": "audio/aac", "muxer": {}},
 }
 
 #: Bitrates offered, in kbps. 128 is the honest default for speech and music

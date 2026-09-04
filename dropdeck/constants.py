@@ -454,8 +454,15 @@ PUTTING THE SHOW ON THE INTERNET
   yourself. Being heard and hearing yourself are separate questions, and a
   presenter working on speakers monitors nothing and is still on air.
 
-  Icecast, a Liquidsoap harbor and SHOUTcast all work. For SHOUTcast put in
-  the port your listeners use; the app works out the one a source needs.
+  Icecast, a Liquidsoap harbor and SHOUTcast all work, in MP3, AAC or Ogg
+  Opus. For SHOUTcast put in the port your listeners use; the app works out
+  the one a source needs.
+
+  MORE THAN ONE STATION
+  Save as many as you like. Set one up, give it a name, and press Save this
+  station. The On air menu then lists them under Station, so switching is one
+  menu away rather than four boxes of retyping. Switching is refused while you
+  are on air; come off first, which is deliberate.
 
   F7 and F8 become a MONITOR fader while you are on air. Turn the playlist
   down to hear your screen reader and your listeners still get it at full
@@ -576,4 +583,4 @@ STREAM_BITRATES = (64, 96, 128, 160, 192, 256, 320)
 #: The order the Streaming tab offers them in. Kept here rather than taken
 #: from a dict so the list on screen cannot quietly reorder itself.
 STREAM_SERVER_ORDER = ("icecast", "shoutcast")
-STREAM_FORMAT_ORDER = ("mp3", "opus")
+STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")

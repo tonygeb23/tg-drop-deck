@@ -836,6 +836,26 @@ class SettingsDialog(wx.Dialog):
         """
         panel, sizer = self._page("Streaming")
 
+        # More than one station, because Tony runs two and retyping an
+        # address, a mount and a password to move between them is the kind of
+        # friction that means you stop bothering.
+        self._label(panel, sizer, "&Saved stations")
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.stream_picker = wx.Choice(panel, choices=self._station_choices())
+        self.stream_picker.SetName("Saved stations")
+        self.stream_picker.SetToolTip(
+            "Pick one to load its settings. Save this station remembers "
+            "whatever is in the boxes below under the station name.")
+        self.stream_picker.Bind(wx.EVT_CHOICE, self._on_pick_station)
+        row.Add(self.stream_picker, 1, wx.EXPAND | wx.RIGHT, 8)
+        save = wx.Button(panel, label="Sa&ve this station")
+        save.Bind(wx.EVT_BUTTON, self._on_save_station)
+        row.Add(save, 0, wx.RIGHT, 8)
+        forget = wx.Button(panel, label="For&get it")
+        forget.Bind(wx.EVT_BUTTON, self._on_forget_station)
+        row.Add(forget, 0)
+        sizer.Add(row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         grid = wx.FlexGridSizer(2, 8, 12)
         grid.AddGrowableCol(1, 1)
 
@@ -963,8 +983,95 @@ class SettingsDialog(wx.Dialog):
             panel, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 60),
             value="Not tested yet.")
         self.stream_result.SetName("Test result")
+        self._refresh_stations()
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
+
+    #: The boxes a saved station fills in, and what reads and writes each.
+    def _stream_controls(self):
+        return {
+            "stream_server": (self.stream_server, "choice",
+                              C.STREAM_SERVER_ORDER),
+            "stream_host": (self.stream_host, "text", None),
+            "stream_port": (self.stream_port, "spin", None),
+            "stream_mount": (self.stream_mount, "text", None),
+            "stream_user": (self.stream_user, "text", None),
+            "stream_password": (self.stream_password, "text", None),
+            "stream_format": (self.stream_format, "choice",
+                              C.STREAM_FORMAT_ORDER),
+            "stream_bitrate": (self.stream_bitrate, "index",
+                               C.STREAM_BITRATES),
+            "stream_name": (self.stream_name, "text", None),
+            "stream_public": (self.stream_public, "check", None),
+            "stream_mic": (self.stream_mic, "check", None),
+            "stream_titles": (self.stream_titles, "check", None),
+        }
+
+    def _station_choices(self):
+        names = self.board.station_names()
+        return names or ["No stations saved yet"]
+
+    def _fill_stream_fields(self):
+        """Put the board's live settings into the boxes."""
+        for field, (control, kind, order) in self._stream_controls().items():
+            value = getattr(self.board, field)
+            if kind == "text":
+                control.SetValue(value or "")
+            elif kind == "spin":
+                control.SetValue(int(value))
+            elif kind == "check":
+                control.SetValue(bool(value))
+            elif kind == "choice":
+                control.SetSelection(order.index(value) if value in order else 0)
+            elif kind == "index":
+                control.SetSelection(order.index(value) if value in order
+                                     else len(order) // 2)
+
+    def _on_pick_station(self, _event):
+        name = self.stream_picker.GetStringSelection()
+        if not self.board.load_station(name):
+            return
+        self._fill_stream_fields()
+        self._say_test("Loaded %s." % name)
+
+    def _on_save_station(self, _event):
+        """Remember what is in the boxes, under the station name."""
+        settings = self.stream_settings
+        if not settings["name"]:
+            self._say_test("Give the station a name first, in Station name.")
+            self.stream_name.SetFocus()
+            return
+        for field, value in (("stream_server", settings["server"]),
+                             ("stream_host", settings["host"]),
+                             ("stream_port", settings["port"]),
+                             ("stream_mount", settings["mount"]),
+                             ("stream_user", settings["user"]),
+                             ("stream_password", settings["password"]),
+                             ("stream_format", settings["format"]),
+                             ("stream_bitrate", settings["bitrate"]),
+                             ("stream_name", settings["name"]),
+                             ("stream_public", settings["public"]),
+                             ("stream_mic", self.stream_mic.GetValue()),
+                             ("stream_titles", self.stream_titles.GetValue())):
+            setattr(self.board, field, value)
+        self.board.save_station()
+        self._refresh_stations(settings["name"])
+        self._say_test("Saved %s." % settings["name"])
+
+    def _on_forget_station(self, _event):
+        name = self.stream_picker.GetStringSelection()
+        if not self.board.forget_station(name):
+            self._say_test("There is nothing saved by that name.")
+            return
+        self._refresh_stations()
+        self._say_test("Forgot %s." % name)
+
+    def _refresh_stations(self, select=None):
+        names = self._station_choices()
+        self.stream_picker.Set(names)
+        wanted = select or self.stream_name.GetValue().strip()
+        self.stream_picker.SetSelection(
+            names.index(wanted) if wanted in names else 0)
 
     def _on_test_stream(self, _event):
         """Connect, say what happened, disconnect. Never broadcasts anything.
