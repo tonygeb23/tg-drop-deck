@@ -57,7 +57,7 @@ full scale.
 
 ### A beep before a track ends
 
-**Audio settings, Ctrl+P.** Turn it on, set how many seconds, ten by default.
+**Preferences, Ctrl+P.** Turn it on, set how many seconds, ten by default.
 A short pip tells you a playlist track is nearly over. It is the countdown
 clock a sighted presenter watches.
 
@@ -85,6 +85,16 @@ Dragging an M3U onto the running order adds it to the end instead of replacing.
 **The app takes m4a files.** It took none before: libsndfile has no MPEG-4
 support. FFmpeg is bundled now and picks up `m4a`, `m4b`, `mp4`, `aac`, `wma`,
 `opus`, `webm` and more. About 26 MB bigger for it.
+
+### Preferences, on tabs
+
+**Audio settings is Preferences now**, still `Ctrl+P`, and it has five tabs:
+Output, Sounds and beds, Playlist, Microphone, Speech. It was one long column
+of every setting the app has, in the order they were added.
+
+Microphone settings is one of those tabs rather than a window of its own.
+`Ctrl+Shift+M` still works and opens the same window on that tab. Two keys,
+one place to look.
 
 ### Also fixed
 
@@ -126,7 +136,7 @@ is still the key list; the guide is the why.
 volume row and was too easy to hit by accident. Nothing else moved.
 
 **The crossfade box now says what it does.** It sits under the running order
-with the explanation beside it. It is also in Audio settings, which is where
+with the explanation beside it. It is also in Preferences, which is where
 most people look first. Set it in either and the other shows it.
 
 ## 2.5.0, 2 September 2026
@@ -240,7 +250,7 @@ A bed used to ease in over about a third of a second. If you cue a bed on its
 first beat, that is the beat it ate.
 
 Beds no longer fade in at all. Stopping one still fades, because a bed cut dead
-mid phrase is a more obvious mistake. Both fades are in Audio settings if you
+mid phrase is a more obvious mistake. Both fades are in Preferences if you
 want the old behaviour.
 
 ### A button tells you what you changed
@@ -296,7 +306,7 @@ value.
 
 ### The app talks less, if you want
 
-Audio settings has a Spoken feedback setting with three levels: everything,
+Preferences has a Spoken feedback setting with three levels: everything,
 only what you cannot hear or read for yourself, or nothing at all.
 
 The bank hint is spoken once per bank per session rather than on every tab
@@ -308,7 +318,7 @@ Both from Brian Hartgen.
 
 ### Send a bank to its own output
 
-Audio settings has an output for each of the four banks. Set Music Beds to one
+Preferences has an output for each of the four banks. Set Music Beds to one
 sound card and Dialog Drops to another and you can bring each up on its own
 channel of a physical mixer.
 
@@ -319,7 +329,7 @@ nothing.
 
 ### Turn off the announcement when a sound starts
 
-Audio settings, Say the name when a sound starts or stops. For when you built
+Preferences, Say the name when a sound starts or stops. For when you built
 the board and can hear the sound perfectly well. Anything you cannot hear, such
 as a missing file, always speaks.
 

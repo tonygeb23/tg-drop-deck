@@ -203,7 +203,7 @@ FADE_IN_SFX = 0.0
 FADE_OUT_SFX = 0.05
 
 #: The bed fades are a setting, not a fixed value - see ``board.bed_fade_in``
-#: and Audio settings. These two are only what a board starts life with.
+#: and Preferences. These two are only what a board starts life with.
 #:
 #: Brian Hartgen: a music bed that eases in cannot be used on air, because the
 #: first beat of the track is the thing you cued it for. So a bed now starts
@@ -214,7 +214,7 @@ FADE_OUT_SFX = 0.05
 FADE_IN_BED = 0.0
 FADE_OUT_BED = 0.60
 #: Anything longer than this is a mix move, not a fade, and the spin controls
-#: in Audio settings stop here.
+#: in Preferences stop here.
 MAX_BED_FADE = 5.0
 
 FADE_OUT_PANIC = 0.25
@@ -268,7 +268,7 @@ BANK 3: Music Beds (loop by default)
   Alt+Ctrl+Shift+1 to 0     Start or stop beds 11 to 20
   Right-click               Turn looping off or on for one bed
   A bed starts exactly where the file does and fades out when you stop it.
-  Audio settings, Ctrl+P, sets both fades in seconds.
+  Preferences, Ctrl+P, sets both fades in seconds.
 
 BANK 4: Miscellaneous
   Right-click a button      Assign a sound file and your own hotkey
@@ -331,7 +331,7 @@ THE PLAYLIST - a running order that cues itself
   Ctrl+Shift+D              Choose a file and put it in as a drop
   Alt+D                     Put a RANDOM drop in, from your drops library,
                             never the same one twice running
-  Crossfade box             In the playlist view, and in Audio settings.
+  Crossfade box             In the playlist view, and in Preferences.
                             Under the running order, with what it does written
                             beside it.
                             Type a number into it or use the arrow keys, and
@@ -345,7 +345,7 @@ THE PLAYLIST - a running order that cues itself
                             previous, stop, save, open, clear
 
 A BEEP BEFORE A TRACK ENDS
-  Audio settings, Ctrl+P. Turn it on and set how many seconds, ten by
+  Preferences, Ctrl+P, Playlist tab. Turn it on and set how many seconds, ten by
   default. A short pip tells you a playlist track is nearly over, which is
   the countdown clock a sighted presenter watches.
   You hear it wherever you hear yourself, set in Microphone settings, so
@@ -403,7 +403,7 @@ GLOBAL
   Ctrl+Tab                  Next bank
 
 HOW MUCH THE APP SAYS
-  Audio settings, Ctrl+P, has a Spoken feedback setting with three levels.
+  Preferences, Ctrl+P, has a Spoken feedback setting with three levels.
   Everything is the default. Only what I cannot hear drops the confirmations
   and the bank hints and keeps failures. Nothing leaves the running
   commentary to your screen reader and the status bar entirely, and still
@@ -435,7 +435,8 @@ FILE
   Ctrl+S                    Save the current board
   Ctrl+F12                  Save the board to a new file
   Ctrl+O                    Open a board
-  Ctrl+P                    Audio output device and ducking settings
+  Ctrl+P                    Preferences: output, sounds and beds, playlist,
+                            microphone, speech. Five tabs, Ctrl+Tab between
 
 The playlist has its own fader and ducks under sounds and drops, the same
 way the beds do. Escape stops it along with everything else.

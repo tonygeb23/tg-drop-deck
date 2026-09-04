@@ -1168,22 +1168,50 @@ check("Ctrl+M is the microphone",
 check("Ctrl+Shift+M is its settings",
       found.get((wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"))) == ID_MIC_SETTINGS)
 
-from dropdeck.dialogs import MicSettingsDialog
-mic_dialog = MicSettingsDialog(frame, frame.board, frame.mic)
-check("the settings name every control for a screen reader",
-      mic_dialog.device.GetName() == "Microphone"
-      and mic_dialog.output.GetName() == "Monitor output"
-      and mic_dialog.gain.GetName() == "Microphone gain in decibels")
+# The microphone is a tab in Preferences now, not a dialog of its own. Two
+# keys, one window: Ctrl+P opens it on Output, Ctrl+Shift+M on Microphone.
+from dropdeck.dialogs import SettingsDialog
+prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
+                       page=SettingsDialog.PAGE_MIC)
+check("Preferences has five tabs", prefs.tabs.GetPageCount() == 5,
+      prefs.tabs.GetPageCount())
+check("named for what is on them",
+      [prefs.tabs.GetPageText(i) for i in range(5)]
+      == ["Output", "Sounds and beds", "Playlist", "Microphone", "Speech"],
+      [prefs.tabs.GetPageText(i) for i in range(5)])
+check("Ctrl+Shift+M opens it on the microphone tab",
+      prefs.tabs.GetSelection() == SettingsDialog.PAGE_MIC,
+      prefs.tabs.GetSelection())
+check("the microphone controls are named for a screen reader",
+      prefs.mic_device.GetName() == "Microphone"
+      and prefs.mic_output.GetName() == "Monitor output"
+      and prefs.mic_gain.GetName() == "Microphone gain in decibels")
 check("the gain runs both ways from zero",
-      mic_dialog.gain.GetMin() == int(C.MIN_MIC_GAIN_DB)
-      and mic_dialog.gain.GetMax() == int(C.MAX_MIC_GAIN_DB))
+      prefs.mic_gain.GetMin() == int(C.MIN_MIC_GAIN_DB)
+      and prefs.mic_gain.GetMax() == int(C.MAX_MIC_GAIN_DB))
 check("monitoring can go somewhere other than the soundboard's output",
-      mic_dialog.output.GetCount() >= 1
-      and mic_dialog.output.GetString(0) == "Same as the soundboard",
-      mic_dialog.output.GetString(0))
+      prefs.mic_output.GetCount() >= 1
+      and prefs.mic_output.GetString(0) == "Same as the soundboard",
+      prefs.mic_output.GetString(0))
 check("and the default is the soundboard's output",
-      mic_dialog.chosen_output == (None, None, None), mic_dialog.chosen_output)
-mic_dialog.Destroy()
+      prefs.chosen_monitor_output == (None, None, None),
+      prefs.chosen_monitor_output)
+check("the output device is still its own control, not the microphone's",
+      prefs.device.GetName() == "Output device"
+      and prefs.device is not prefs.mic_device)
+prefs.Destroy()
+
+# Ctrl+P lands on Output, and every tab's controls exist whichever one opened.
+prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic)
+check("Ctrl+P opens on Output", prefs.tabs.GetSelection() == 0,
+      prefs.tabs.GetSelection())
+check("and every tab is built, so OK saves the lot",
+      all(getattr(prefs, name, None) is not None for name in
+          ("device", "bank_choices", "duck_on", "duck_db", "fade_in_ctrl",
+           "fade_out_ctrl", "crossfade_ctrl", "warn_on", "warn_seconds_ctrl",
+           "mic_device", "mic_gain", "mic_output", "mic_monitor",
+           "speech_choice", "announce_playback")))
+prefs.Destroy()
 
 # ---------------------------------------------------------------------------
 print("The keyboard map standing down while somebody types")

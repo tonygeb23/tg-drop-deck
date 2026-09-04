@@ -517,99 +517,145 @@ class SlotPropertiesDialog(wx.Dialog):
 
 
 class SettingsDialog(wx.Dialog):
-    """Where the sound comes out, and how hard the beds duck."""
+    """Everything you can set, on five tabs.
 
-    def __init__(self, parent, board, mixer):
-        super().__init__(parent, title="Audio settings")
+    It was one long column: output, routing, speech, ducking, bed fades,
+    crossfade, and then the end of track beep on the end of that. Every
+    setting the app has, in the order they happened to be added, with no way
+    to find the one you came for except to read past all the others. The
+    microphone had a dialog of its own on a different key, which meant two
+    places to look and two things to remember.
+
+    Tabs, and one dialog. `Ctrl+P` opens it on Output and `Ctrl+Shift+M` opens
+    it on Microphone; they are the same window. Ctrl+Tab moves between the
+    tabs, and a screen reader reads a tab name when you land on it, which is
+    the whole reason this is a notebook rather than five group boxes.
+    """
+
+    #: The tabs, in order. Named rather than numbered at the call sites, so
+    #: adding one in the middle does not open the wrong page somewhere else.
+    PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_SPEECH = range(5)
+
+    def __init__(self, parent, board, mixer, mic=None, page=None):
+        super().__init__(parent, title="Preferences")
         self.board = board
         self.mixer = mixer
+        self.mic = mic
         self.devices = output_devices()
+        self.mic_devices = input_devices()
 
         outer = wx.BoxSizer(wx.VERTICAL)
+        self.tabs = wx.Notebook(self)
+        self.tabs.SetName("Settings")
+        self._build_output_tab()
+        self._build_sound_tab()
+        self._build_playlist_tab()
+        self._build_mic_tab()
+        self._build_speech_tab()
+        outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
 
-        outer.Add(wx.StaticText(self, label="&Output device"), 0, wx.LEFT | wx.TOP, 10)
+        self.status = wx.StaticText(self, label=self._status_text())
+        outer.Add(self.status, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+
+        if page is not None:
+            self.tabs.SetSelection(page)
+        # Focus the first control on whichever tab opened, not the tab strip.
+        # Landing on the tabs means one more keystroke before you can do the
+        # thing you opened the window for.
+        first = self._first_control()
+        if first is not None:
+            first.SetFocus()
+
+    # ------------------------------------------------------------- helpers --
+    def _page(self, title):
+        """One tab: a panel, its sizer, and the tab added to the notebook."""
+        panel = wx.Panel(self.tabs)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(sizer)
+        self.tabs.AddPage(panel, title)
+        return panel, sizer
+
+    @staticmethod
+    def _label(panel, sizer, text):
+        sizer.Add(wx.StaticText(panel, label=text), 0, wx.LEFT | wx.TOP, 10)
+
+    @staticmethod
+    def _note(panel, sizer, text):
+        sizer.Add(wx.StaticText(panel, label=text), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+    def _first_control(self):
+        return {self.PAGE_OUTPUT: self.device,
+                self.PAGE_SOUND: self.duck_on,
+                self.PAGE_PLAYLIST: self.crossfade_ctrl,
+                self.PAGE_MIC: self.mic_device,
+                self.PAGE_SPEECH: self.speech_choice}.get(
+                    self.tabs.GetSelection())
+
+    # ---------------------------------------------------------- the tabs ----
+    def _build_output_tab(self):
+        panel, sizer = self._page("Output")
+
+        self._label(panel, sizer, "&Output device")
         self.choices = ["System default"] + [
             f"{d['name']}, {d['hostapi']}" for d in self.devices]
-        self.device = wx.Choice(self, choices=self.choices)
+        self.device = wx.Choice(panel, choices=self.choices)
         self.device.SetName("Output device")
         self.device.SetSelection(self._current_selection())
-        outer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
+        sizer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
 
-        note = wx.StaticText(self, label=(
-            "Pick a virtual cable here to feed a stream or a recorder while you\n"
-            "keep listening on your own speakers."))
-        outer.Add(note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        self._note(panel, sizer,
+                   "Pick a virtual cable here to feed a stream or a recorder\n"
+                   "while you keep listening on your own speakers.")
 
         # Per-bank outputs.
         #
-        # Sending beds to one card and drops to another lets a broadcaster ride
-        # the balance on a physical desk instead of relying on the automatic
-        # ducking below. Both approaches stay available; this is for people who
-        # would rather decide the levels themselves.
-        outer.Add(wx.StaticText(self, label="Send a bank to its own output"),
-                  0, wx.LEFT | wx.TOP, 10)
-        bank_note = wx.StaticText(self, label=(
-            "Leave a bank on the main output unless you want it on a separate\n"
-            "channel of your mixer. Ducking still works across outputs."))
-        outer.Add(bank_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        # Sending beds to one card and drops to another lets a broadcaster
+        # ride the balance on a physical desk instead of relying on the
+        # automatic ducking. Both stay available; this is for people who would
+        # rather decide the levels themselves.
+        self._label(panel, sizer, "Send a bank to its own output")
+        self._note(panel, sizer,
+                   "Leave a bank on the main output unless you want it on a\n"
+                   "separate channel of your mixer. Ducking still works\n"
+                   "across outputs.")
 
         self.bank_choices = {}
-        bank_grid = wx.FlexGridSizer(C.BANK_COUNT, 2, 6, 10)
-        bank_grid.AddGrowableCol(1, 1)
+        grid = wx.FlexGridSizer(C.BANK_COUNT, 2, 6, 10)
+        grid.AddGrowableCol(1, 1)
         for bank in range(1, C.BANK_COUNT + 1):
-            title = board.bank_name(bank)
-            label = wx.StaticText(self, label=f"{title}")
-            choice = wx.Choice(self, choices=["Main output"] + self.choices[1:])
+            title = self.board.bank_name(bank)
+            choice = wx.Choice(panel, choices=["Main output"] + self.choices[1:])
             # Named for the screen reader, because four identical unlabelled
             # dropdowns in a column are indistinguishable by ear.
             choice.SetName(f"{title} output")
             choice.SetSelection(self._bank_selection(bank))
             self.bank_choices[bank] = choice
-            bank_grid.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
-            bank_grid.Add(choice, 1, wx.EXPAND)
-        outer.Add(bank_grid, 0, wx.EXPAND | wx.ALL, 10)
+            grid.Add(wx.StaticText(panel, label=title), 0,
+                     wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(choice, 1, wx.EXPAND)
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
-        # How much the app says out loud. A screen reader is already reading
-        # every control; this is only about what the app adds on top, which
-        # for someone who knows the board is mostly repetition.
-        outer.Add(wx.StaticText(self, label="Spo&ken feedback from the app"),
-                  0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        self.speech_choice = wx.Choice(self, choices=list(C.SPEECH_LABELS))
-        self.speech_choice.SetName("Spoken feedback from the app")
-        level = getattr(board, "speech_level", C.DEFAULT_SPEECH_LEVEL)
-        self.speech_choice.SetSelection(
-            C.SPEECH_LEVELS.index(level) if level in C.SPEECH_LEVELS else 0)
-        self.speech_choice.SetToolTip(
-            "Everything is the default. The middle setting drops confirmations "
-            "and the bank hints and keeps anything you could not otherwise "
-            "know. Nothing leaves the running commentary to your screen reader "
-            "and the status bar, and still answers a key you press to ask a "
-            "question, such as Ctrl+L for what is playing.")
-        self.speech_choice.Bind(wx.EVT_CHOICE, self._on_speech_level)
-        outer.Add(self.speech_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+    def _build_sound_tab(self):
+        panel, sizer = self._page("Sounds and beds")
 
-        # Speech about playback.
-        self.announce_playback = wx.CheckBox(
-            self, label="&Say the name when a sound starts or stops")
-        self.announce_playback.SetValue(bool(getattr(board, "announce_playback", True)))
-        self.announce_playback.SetToolTip(
-            "Turn this off if you can hear the sound and do not need to be told "
-            "about it. Problems, such as a missing file, are always announced "
-            "unless you have chosen Nothing above.")
-        outer.Add(self.announce_playback, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        self._on_speech_level(None)
+        self.duck_on = wx.CheckBox(
+            panel, label="&Duck the music beds under sounds and drops")
+        self.duck_on.SetValue(bool(self.board.ducking))
+        sizer.Add(self.duck_on, 0, wx.ALL, 10)
 
-        self.duck_on = wx.CheckBox(self, label="&Duck the music beds under sounds and drops")
-        self.duck_on.SetValue(bool(board.ducking))
-        outer.Add(self.duck_on, 0, wx.ALL, 10)
-
-        outer.Add(wx.StaticText(self, label="Duck &depth in decibels"), 0, wx.LEFT, 10)
-        self.duck_db = wx.Slider(self, value=int(round(board.duck_db)), minValue=-24,
-                                 maxValue=0, style=wx.SL_HORIZONTAL)
+        self._label(panel, sizer, "Duck &depth in decibels")
+        self.duck_db = wx.Slider(panel, value=int(round(self.board.duck_db)),
+                                 minValue=-24, maxValue=0,
+                                 style=wx.SL_HORIZONTAL)
         self.duck_db.SetName("Duck depth in decibels")
-        outer.Add(self.duck_db, 0, wx.EXPAND | wx.ALL, 10)
+        sizer.Add(self.duck_db, 0, wx.EXPAND | wx.ALL, 10)
 
-        # The slider was fully draggable while ducking was switched off - a
+        # The slider was fully draggable while ducking was switched off: a
         # control that looks alive and does nothing.
         self.duck_db.Enable(self.duck_on.GetValue())
         self.duck_on.Bind(
@@ -620,81 +666,77 @@ class SettingsDialog(wx.Dialog):
         #
         # Brian Hartgen, on 2.2.1: a bed that eases in cannot be used on air.
         # He cues a bed on its first beat, and 350 ms of ramp eats exactly the
-        # thing he cued. It was a constant; it is a setting now, zero included,
-        # because "play it as it was recorded" is a legitimate answer and there
-        # was no way to ask for it.
-        outer.Add(wx.StaticText(self, label="Music bed fades, in seconds"),
-                  0, wx.LEFT | wx.TOP, 10)
-        fade_note = wx.StaticText(self, label=(
-            "Zero starts and stops a bed exactly where the file does. Sounds and\n"
-            "drops are unaffected - they have never faded."))
-        outer.Add(fade_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        # thing he cued. It was a constant; it is a setting now, zero
+        # included, because "play it as it was recorded" is a legitimate
+        # answer and there was no way to ask for it.
+        self._label(panel, sizer, "Music bed fades, in seconds")
+        self._note(panel, sizer,
+                   "Zero starts and stops a bed exactly where the file does.\n"
+                   "Sounds and drops are unaffected; they have never faded.")
 
-        fade_grid = wx.FlexGridSizer(2, 2, 6, 10)
+        grid = wx.FlexGridSizer(2, 2, 6, 10)
         self.fade_in_ctrl = self._fade_spin(
-            fade_grid, "Fade beds &in, seconds", "Bed fade in, seconds",
-            getattr(board, "bed_fade_in", C.FADE_IN_BED),
-            "How long a bed takes to reach full level. Zero means it starts at "
-            "full level on its first sample.")
+            panel, grid, "Fade beds &in, seconds", "Bed fade in, seconds",
+            getattr(self.board, "bed_fade_in", C.FADE_IN_BED),
+            "How long a bed takes to reach full level. Zero means it starts "
+            "at full level on its first sample.")
         self.fade_out_ctrl = self._fade_spin(
-            fade_grid, "Fade beds ou&t, seconds", "Bed fade out, seconds",
-            getattr(board, "bed_fade_out", C.FADE_OUT_BED),
-            "How long a bed takes to fall away when you stop it. Escape still "
-            "stops everything quickly, whatever this says.")
-        outer.Add(fade_grid, 0, wx.EXPAND | wx.ALL, 10)
+            panel, grid, "Fade beds ou&t, seconds", "Bed fade out, seconds",
+            getattr(self.board, "bed_fade_out", C.FADE_OUT_BED),
+            "How long a bed takes to fall away when you stop it. Escape "
+            "still stops everything quickly, whatever this says.")
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
-        # The playlist crossfade. It also has a box under the running order,
-        # where it is used most - but somebody looking for "how long do songs
-        # overlap" looks in Audio settings, so it is in both and they are two
-        # views of one number.
-        outer.Add(wx.StaticText(self, label="Playlist crossfade"), 0,
-                  wx.LEFT | wx.TOP, 10)
-        crossfade_note = wx.StaticText(self, label=(
-            "How long one song in the playlist overlaps the next. The next\n"
-            "song starts this many seconds before the one playing ends, so\n"
-            "every start time in the running order moves when you change it.\n"
-            "Zero means each song plays right out before the next begins."))
-        outer.Add(crossfade_note, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+    def _build_playlist_tab(self):
+        panel, sizer = self._page("Playlist")
 
-        cross_row = wx.BoxSizer(wx.HORIZONTAL)
-        cross_row.Add(wx.StaticText(self, label="Cross&fade, seconds"), 0,
-                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        # The crossfade also has a box under the running order, where it is
+        # used most, but somebody looking for "how long do songs overlap"
+        # looks in settings. Two views of one number.
+        self._label(panel, sizer, "Crossfade")
+        self._note(panel, sizer,
+                   "How long one song overlaps the next. The next song starts\n"
+                   "this many seconds before the one playing ends, so every\n"
+                   "start time in the running order moves when you change it.\n"
+                   "Zero means each song plays right out before the next.")
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(panel, label="Cross&fade, seconds"), 0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.crossfade_ctrl = wx.SpinCtrlDouble(
-            self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5,
-            initial=float(getattr(board.playlist, "crossfade",
+            panel, min=0.0, max=C.MAX_CROSSFADE, inc=0.5,
+            initial=float(getattr(self.board.playlist, "crossfade",
                                   C.DEFAULT_CROSSFADE)))
         self.crossfade_ctrl.SetDigits(1)
         self.crossfade_ctrl.SetName("Playlist crossfade, seconds")
         self.crossfade_ctrl.SetToolTip(
             "The same box that sits under the running order. A single track "
             "can be given a crossfade of its own from its right-click menu.")
-        cross_row.Add(self.crossfade_ctrl, 0)
-        outer.Add(cross_row, 0, wx.ALL, 10)
+        row.Add(self.crossfade_ctrl, 0)
+        sizer.Add(row, 0, wx.ALL, 10)
 
         # The end of track cue. A sighted presenter watches a clock count
         # down; this is that clock, for anybody who cannot.
-        outer.Add(wx.StaticText(self, label="Before a track ends"), 0,
-                  wx.LEFT | wx.TOP, 10)
-        outer.Add(wx.StaticText(self, label=(
-            "A short beep to tell you a playlist track is nearly over, so you\n"
-            "know when to be ready. You hear it wherever you hear yourself,\n"
-            "which is set in Microphone settings, so with headphones set up\n"
-            "there it stays out of the show.")),
-            0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self._label(panel, sizer, "Before a track ends")
+        self._note(panel, sizer,
+                   "A short beep to tell you a playlist track is nearly over,\n"
+                   "so you know when to be ready. You hear it wherever you\n"
+                   "hear yourself, set on the Microphone tab, so with\n"
+                   "headphones set up there it stays out of the show.")
 
         self.warn_on = wx.CheckBox(
-            self, label="&Beep before a playlist track ends")
+            panel, label="&Beep before a playlist track ends")
         self.warn_on.SetName("Beep before a playlist track ends")
-        self.warn_on.SetValue(bool(getattr(board, "warn_before_end",
+        self.warn_on.SetValue(bool(getattr(self.board, "warn_before_end",
                                            C.DEFAULT_WARN_BEFORE_END)))
-        outer.Add(self.warn_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        sizer.Add(self.warn_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         warn_row = wx.BoxSizer(wx.HORIZONTAL)
-        warn_row.Add(wx.StaticText(self, label="How &many seconds before"), 0,
+        warn_row.Add(wx.StaticText(panel, label="How &many seconds before"), 0,
                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.warn_seconds_ctrl = wx.SpinCtrl(
-            self, min=int(C.MIN_WARN_SECONDS), max=int(C.MAX_WARN_SECONDS),
-            initial=int(round(getattr(board, "warn_seconds",
+            panel, min=int(C.MIN_WARN_SECONDS), max=int(C.MAX_WARN_SECONDS),
+            initial=int(round(getattr(self.board, "warn_seconds",
                                       C.DEFAULT_WARN_SECONDS))))
         self.warn_seconds_ctrl.SetName("Seconds before the end to beep")
         self.warn_seconds_ctrl.SetToolTip(
@@ -702,33 +744,97 @@ class SettingsDialog(wx.Dialog):
             "usual answer. Nothing shorter than this plus a second gets one, "
             "so a short ident does not beep the moment it starts.")
         warn_row.Add(self.warn_seconds_ctrl, 0)
-        outer.Add(warn_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        sizer.Add(warn_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         self.warn_seconds_ctrl.Enable(self.warn_on.GetValue())
         self.warn_on.Bind(
             wx.EVT_CHECKBOX,
             lambda e: (self.warn_seconds_ctrl.Enable(e.IsChecked()), e.Skip()))
 
-        self.status = wx.StaticText(self, label=self._status_text())
-        outer.Add(self.status, 0, wx.ALL, 10)
+    def _build_mic_tab(self):
+        panel, sizer = self._page("Microphone")
 
-        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
-                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
-        self.SetSizerAndFit(outer)
-        self.device.SetFocus()
+        self._label(panel, sizer, "&Microphone")
+        self.mic_choices = ["System default"] + [
+            "%s - %s" % (d["name"], d["hostapi"]) for d in self.mic_devices]
+        self.mic_device = wx.Choice(panel, choices=self.mic_choices)
+        self.mic_device.SetName("Microphone")
+        self.mic_device.SetSelection(self._mic_selection())
+        sizer.Add(self.mic_device, 0, wx.EXPAND | wx.ALL, 10)
 
-    @property
-    def crossfade(self):
-        return round(float(self.crossfade_ctrl.GetValue()), 2)
+        self._note(panel, sizer,
+                   "Ctrl+M turns the microphone on and off. While it is on,\n"
+                   "the beds and the playlist duck out of the way, and they\n"
+                   "come back up the moment you turn it off.")
 
-    def _fade_spin(self, grid, label, name, value, tip):
-        """One labelled fade box, in seconds.
+        self._label(panel, sizer, "&Gain in decibels")
+        self.mic_gain = wx.Slider(
+            panel, value=int(round(self.board.mic_gain_db)),
+            minValue=int(C.MIN_MIC_GAIN_DB), maxValue=int(C.MAX_MIC_GAIN_DB),
+            style=wx.SL_HORIZONTAL)
+        self.mic_gain.SetName("Microphone gain in decibels")
+        self.mic_gain.SetToolTip(
+            "Zero is the microphone as Windows gives it to us. Raise it for a "
+            "quiet headset, lower it for a hot one.")
+        sizer.Add(self.mic_gain, 0, wx.EXPAND | wx.ALL, 10)
 
-        A spin control rather than a slider because these are numbers a
-        broadcaster types - "zero" and "one" are the answers, not a position -
-        and because a screen reader reads a spin control's value back exactly.
-        """
-        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
-        spin = wx.SpinCtrlDouble(self, min=0.0, max=C.MAX_BED_FADE, inc=0.05,
+        self._label(panel, sizer, "Hear yourself thr&ough")
+        self.monitor_choices = ["Same as the soundboard"] + [
+            "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]
+        self.mic_output = wx.Choice(panel, choices=self.monitor_choices)
+        self.mic_output.SetName("Monitor output")
+        self.mic_output.SetSelection(self._monitor_selection())
+        self.mic_output.SetToolTip(
+            "Put monitoring on your headphones and leave the show on the main "
+            "output. The beep before a track ends comes out here too.")
+        sizer.Add(self.mic_output, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.mic_monitor = wx.CheckBox(
+            panel, label="&Hear yourself through the output (headphones only)")
+        self.mic_monitor.SetValue(bool(self.board.mic_monitor))
+        self.mic_monitor.SetToolTip(
+            "On headphones this is how you know you are live. On speakers it "
+            "is a feedback loop, which is why it is off to begin with.")
+        sizer.Add(self.mic_monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        sizer.Add(wx.StaticText(panel, label=self._mic_status_text()), 0,
+                  wx.ALL, 10)
+
+    def _build_speech_tab(self):
+        panel, sizer = self._page("Speech")
+
+        # How much the app says out loud. A screen reader is already reading
+        # every control; this is only about what the app adds on top, which
+        # for somebody who knows the board is mostly repetition.
+        self._label(panel, sizer, "Spo&ken feedback from the app")
+        self.speech_choice = wx.Choice(panel, choices=list(C.SPEECH_LABELS))
+        self.speech_choice.SetName("Spoken feedback from the app")
+        level = getattr(self.board, "speech_level", C.DEFAULT_SPEECH_LEVEL)
+        self.speech_choice.SetSelection(
+            C.SPEECH_LEVELS.index(level) if level in C.SPEECH_LEVELS else 0)
+        self.speech_choice.SetToolTip(
+            "Everything is the default. The middle setting drops confirmations "
+            "and the bank hints and keeps anything you could not otherwise "
+            "know. Nothing leaves the running commentary to your screen reader "
+            "and the status bar, and still answers a key you press to ask a "
+            "question, such as Ctrl+L for what is playing.")
+        self.speech_choice.Bind(wx.EVT_CHOICE, self._on_speech_level)
+        sizer.Add(self.speech_choice, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.announce_playback = wx.CheckBox(
+            panel, label="&Say the name when a sound starts or stops")
+        self.announce_playback.SetValue(
+            bool(getattr(self.board, "announce_playback", True)))
+        self.announce_playback.SetToolTip(
+            "Turn this off if you can hear the sound and do not need to be "
+            "told about it. Problems, such as a missing file, are always "
+            "announced unless you have chosen Nothing above.")
+        sizer.Add(self.announce_playback, 0, wx.ALL, 10)
+        self._on_speech_level(None)
+
+    def _fade_spin(self, panel, grid, label, name, value, tip):
+        grid.Add(wx.StaticText(panel, label=label), 0,
+                 wx.ALIGN_CENTER_VERTICAL)
+        spin = wx.SpinCtrlDouble(panel, min=0.0, max=C.MAX_BED_FADE, inc=0.05,
                                  initial=float(value))
         spin.SetDigits(2)
         spin.SetName(name)
@@ -736,6 +842,7 @@ class SettingsDialog(wx.Dialog):
         grid.Add(spin, 0)
         return spin
 
+    # -------------------------------------------------------- what it says --
     @property
     def bed_fade_in(self):
         return round(float(self.fade_in_ctrl.GetValue()), 2)
@@ -745,12 +852,24 @@ class SettingsDialog(wx.Dialog):
         return round(float(self.fade_out_ctrl.GetValue()), 2)
 
     @property
+    def crossfade(self):
+        return round(float(self.crossfade_ctrl.GetValue()), 2)
+
+    @property
     def warn_before_end(self):
         return bool(self.warn_on.GetValue())
 
     @property
     def warn_seconds(self):
         return float(self.warn_seconds_ctrl.GetValue())
+
+    @property
+    def mic_gain_db(self):
+        return float(self.mic_gain.GetValue())
+
+    @property
+    def mic_monitoring(self):
+        return bool(self.mic_monitor.GetValue())
 
     def _on_speech_level(self, _event):
         """The checkbox only means anything at the chattiest level.
@@ -779,6 +898,15 @@ class SettingsDialog(wx.Dialog):
         return (f"Playing through {describe_device(self.mixer.device)} "
                 f"at {self.mixer.samplerate} hertz.")
 
+    def _mic_status_text(self):
+        if self.mic is None:
+            return "The microphone is off."
+        if self.mic.is_open:
+            return "The microphone is ON, through %s." % self.mic.describe()
+        if self.mic.last_error:
+            return "It would not open last time. %s" % self.mic.last_error
+        return "The microphone is off. Ctrl+M turns it on."
+
     def _audio_running(self):
         return bool(getattr(self.mixer, "is_running", False))
 
@@ -805,14 +933,54 @@ class SettingsDialog(wx.Dialog):
         # same position in the list.
         return 0
 
+    def _mic_selection(self):
+        return self._match(self.mic_devices, self.board.mic_device_name,
+                           self.board.mic_device_hostapi)
+
+    def _monitor_selection(self):
+        return self._match(self.devices, self.board.mic_output_name,
+                           self.board.mic_output_hostapi)
+
+    @staticmethod
+    def _match(devices, name, hostapi):
+        """Where a remembered device sits in the list, or 0 for the default.
+
+        Name and host API first, then name alone: a card that has moved from
+        WASAPI to MME between launches is still the card somebody chose, and
+        falling all the way back to the default would silently pick another.
+        """
+        if not name:
+            return 0
+        for position, device in enumerate(devices, start=1):
+            if device["name"] == name and device["hostapi"] == hostapi:
+                return position
+        for position, device in enumerate(devices, start=1):
+            if device["name"] == name:
+                return position
+        return 0
+
     @property
     def chosen_device(self):
         """(index, name, hostapi). index is None for the system default."""
-        selection = self.device.GetSelection()
+        return self._chosen(self.devices, self.device)
+
+    @property
+    def chosen_mic_device(self):
+        """(index, name, hostapi) for the microphone that was picked."""
+        return self._chosen(self.mic_devices, self.mic_device)
+
+    @property
+    def chosen_monitor_output(self):
+        """(index, name, hostapi) for the output monitoring should use."""
+        return self._chosen(self.devices, self.mic_output)
+
+    @staticmethod
+    def _chosen(devices, control):
+        selection = control.GetSelection()
         if selection <= 0:
             return None, None, None
-        dev = self.devices[selection - 1]
-        return dev["index"], dev["name"], dev["hostapi"]
+        device = devices[selection - 1]
+        return device["index"], device["name"], device["hostapi"]
 
     @property
     def chosen_bank_devices(self):
@@ -825,132 +993,6 @@ class SettingsDialog(wx.Dialog):
             dev = self.devices[selection - 1]
             chosen[bank] = {"name": dev["name"], "hostapi": dev["hostapi"]}
         return chosen
-
-
-class MicSettingsDialog(wx.Dialog):
-    """Which microphone, how loud, and whether you hear yourself."""
-
-    def __init__(self, parent, board, mic):
-        super().__init__(parent, title="Microphone settings")
-        self.board = board
-        self.mic = mic
-        self.devices = input_devices()
-
-        outer = wx.BoxSizer(wx.VERTICAL)
-
-        outer.Add(wx.StaticText(self, label="&Microphone"), 0,
-                  wx.LEFT | wx.TOP, 10)
-        self.choices = ["System default"] + [
-            "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]
-        self.device = wx.Choice(self, choices=self.choices)
-        self.device.SetName("Microphone")
-        self.device.SetSelection(self._current_selection())
-        outer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
-
-        note = wx.StaticText(self, label=(
-            "Ctrl+M turns the microphone on and off. While it is on, the beds\n"
-            "and the playlist duck out of the way, and they come back up the\n"
-            "moment you turn it off."))
-        outer.Add(note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
-        outer.Add(wx.StaticText(self, label="&Gain in decibels"), 0, wx.LEFT, 10)
-        self.gain = wx.Slider(self, value=int(round(board.mic_gain_db)),
-                              minValue=int(C.MIN_MIC_GAIN_DB),
-                              maxValue=int(C.MAX_MIC_GAIN_DB),
-                              style=wx.SL_HORIZONTAL)
-        self.gain.SetName("Microphone gain in decibels")
-        self.gain.SetToolTip(
-            "Zero is the microphone as Windows gives it to us. Raise it for a "
-            "quiet headset, lower it for a hot one.")
-        outer.Add(self.gain, 0, wx.EXPAND | wx.ALL, 10)
-
-        outer.Add(wx.StaticText(self, label="Hear yourself thr&ough"), 0,
-                  wx.LEFT, 10)
-        self.output_choices = ["Same as the soundboard"] + [
-            "%s - %s" % (d["name"], d["hostapi"]) for d in output_devices()]
-        self.output = wx.Choice(self, choices=self.output_choices)
-        self.output.SetName("Monitor output")
-        self.output.SetSelection(self._output_selection())
-        self.output.SetToolTip(
-            "Put monitoring on your headphones and leave the show on the main "
-            "output. Everything an encoder picks up is unaffected by this.")
-        outer.Add(self.output, 0, wx.EXPAND | wx.ALL, 10)
-
-        self.monitor = wx.CheckBox(
-            self, label="&Hear yourself through the output (headphones only)")
-        self.monitor.SetValue(bool(board.mic_monitor))
-        self.monitor.SetToolTip(
-            "On headphones this is how you know you are live. On speakers it "
-            "is a feedback loop, which is why it is off to begin with.")
-        outer.Add(self.monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
-        self.status = wx.StaticText(self, label=self._status_text())
-        outer.Add(self.status, 0, wx.ALL, 10)
-
-        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
-                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
-        self.SetSizerAndFit(outer)
-        self.device.SetFocus()
-
-    def _status_text(self):
-        if self.mic is None:
-            return "The microphone is off."
-        if self.mic.is_open:
-            return "The microphone is ON, through %s." % self.mic.describe()
-        if self.mic.last_error:
-            return "It would not open last time. %s" % self.mic.last_error
-        return "The microphone is off. Ctrl+M turns it on."
-
-    def _current_selection(self):
-        if not self.board.mic_device_name:
-            return 0
-        for position, device in enumerate(self.devices):
-            if (device["name"] == self.board.mic_device_name
-                    and device["hostapi"] == self.board.mic_device_hostapi):
-                return position + 1
-        for position, device in enumerate(self.devices):
-            if device["name"] == self.board.mic_device_name:
-                return position + 1
-        return 0
-
-    @property
-    def chosen_device(self):
-        """(index, name, hostapi) for the microphone that was picked."""
-        position = self.device.GetSelection()
-        if position <= 0:
-            return None, None, None
-        device = self.devices[position - 1]
-        return device["index"], device["name"], device["hostapi"]
-
-    def _output_selection(self):
-        if not self.board.mic_output_name:
-            return 0
-        outputs = output_devices()
-        for position, device in enumerate(outputs):
-            if (device["name"] == self.board.mic_output_name
-                    and device["hostapi"] == self.board.mic_output_hostapi):
-                return position + 1
-        for position, device in enumerate(outputs):
-            if device["name"] == self.board.mic_output_name:
-                return position + 1
-        return 0
-
-    @property
-    def chosen_output(self):
-        """(index, name, hostapi) for the output monitoring should use."""
-        position = self.output.GetSelection()
-        if position <= 0:
-            return None, None, None
-        device = output_devices()[position - 1]
-        return device["index"], device["name"], device["hostapi"]
-
-    @property
-    def gain_db(self):
-        return float(self.gain.GetValue())
-
-    @property
-    def monitoring(self):
-        return bool(self.monitor.GetValue())
 
 
 class DropsLibraryDialog(wx.Dialog):

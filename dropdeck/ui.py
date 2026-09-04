@@ -24,7 +24,7 @@ from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
-                      FeedbackDialog, MicSettingsDialog, SearchDialog,
+                      FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
@@ -850,8 +850,8 @@ class DropDeckFrame(wx.Frame):
         file_menu.AppendSeparator()
         file_menu.Append(ID_RELINK, "&Relink missing sounds...",
                          "Find moved files and point the board at them")
-        file_menu.Append(ID_SETTINGS, "Audio se&ttings...\tCtrl+P",
-                         "Output device and ducking")
+        file_menu.Append(ID_SETTINGS, "&Preferences...\tCtrl+P",
+                         "Output, sounds, playlist, microphone and speech")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "E&xit\tAlt+F4")
         bar.Append(file_menu, "&File")
@@ -2539,14 +2539,20 @@ class DropDeckFrame(wx.Frame):
         return self._mic_open()
 
     def _on_mic_settings(self, _event=None):
-        with MicSettingsDialog(self, self.board, self.mic) as dialog:
-            if dialog.ShowModal() != wx.ID_OK:
-                self.announce_help("Nothing changed")
-                return
-            index, name, hostapi = dialog.chosen_device
-            out_index, out_name, out_hostapi = dialog.chosen_output
-            gain_db = dialog.gain_db
-            monitoring = dialog.monitoring
+        """Ctrl+Shift+M. The same window as Ctrl+P, opened on its tab.
+
+        There were two settings dialogs on two keys, which meant two places to
+        look for one thing. One window with tabs is simpler to describe and
+        simpler to find your way round.
+        """
+        self._on_settings(page=SettingsDialog.PAGE_MIC)
+
+    def _apply_mic_settings(self, dialog):
+        """Move what the Microphone tab says onto the board and the mic."""
+        index, name, hostapi = dialog.chosen_mic_device
+        out_index, out_name, out_hostapi = dialog.chosen_monitor_output
+        gain_db = dialog.mic_gain_db
+        monitoring = dialog.mic_monitoring
 
         changed_input = ((name, hostapi) != (self.board.mic_device_name,
                                              self.board.mic_device_hostapi))
@@ -2572,13 +2578,11 @@ class DropDeckFrame(wx.Frame):
         if changed_input and self._mic_open():
             self.mic.start(device=index)
 
-        self.announce_help(
-            "Microphone %s, gain %+.0f decibels, monitoring %s%s"
-            % (describe_input(index), gain_db,
-               "on" if monitoring else "off",
-               ", through " + describe_device(out_index) if monitoring else ""))
-        self._update_status()
-        self._touch()
+        return ("Microphone %s, gain %+.0f decibels, monitoring %s%s"
+                % (describe_input(index), gain_db,
+                   "on" if monitoring else "off",
+                   ", through " + describe_device(out_index)
+                   if monitoring else ""))
 
     def segue_playlist(self, index):
         """Bring one track up and take what is on air down under it.
@@ -2920,11 +2924,21 @@ class DropDeckFrame(wx.Frame):
         if repaired:
             self._touch()
 
-    def _on_settings(self, _event):
-        with SettingsDialog(self, self.board, self.mixer) as dialog:
+    def _on_settings(self, _event=None, page=None):
+        """Preferences. One window, five tabs, two keys into it.
+
+        ``page`` is which tab it opens on: Ctrl+P lands on Output and
+        Ctrl+Shift+M on Microphone. Everything is applied on OK whichever tab
+        you were looking at, because a settings window that only saves the
+        page you happen to be on is a settings window that loses your work.
+        """
+        with SettingsDialog(self, self.board, self.mixer, mic=self.mic,
+                            page=page) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
                 return
             index, name, hostapi = dialog.chosen_device
+            mic_said = self._apply_mic_settings(dialog)
             bank_devices = dialog.chosen_bank_devices
             self.board.ducking = dialog.duck_on.GetValue()
             self.board.duck_db = float(dialog.duck_db.GetValue())
@@ -2985,7 +2999,7 @@ class DropDeckFrame(wx.Frame):
                 self.announce_help(self._routing_summary())
         else:
             self.warm_cache()
-            self.announce_help("Audio settings saved")
+            self.announce_help("Preferences saved. " + mic_said)
         self._update_status()
         self._touch()
 

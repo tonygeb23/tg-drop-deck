@@ -145,7 +145,7 @@ class PlaylistPanel(wx.Panel):
             "Type a value or use the arrow keys. Zero means each song plays "
             "right out first. A single\n"
             "track can have its own from its right-click menu, and this box "
-            "is in Audio settings too.")),
+            "is in Preferences too.")),
             0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.summary = wx.StaticText(self, label="")

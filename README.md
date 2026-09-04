@@ -46,7 +46,7 @@ And the rest:
 | `Del` | Clear the slot you are on |
 | `F1` | Every shortcut, in a window you can read |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |
-| `Ctrl+P` | Audio output device, ducking and bed fades |
+| `Ctrl+P` | Preferences: output, sounds, playlist, microphone, speech |
 
 ## The four banks
 
@@ -84,7 +84,7 @@ takes you to it. The playlist has its own fader on `F7` and `F8`.
 Save a show as an M3U from the Playlist menu and open it again later, or in
 any other player.
 
-**A beep before a track ends**, on in Audio settings, at however many seconds
+**A beep before a track ends**, on in Preferences, at however many seconds
 you like. The countdown clock a sighted presenter watches. It plays where you
 hear yourself, so it stays out of the show.
 
