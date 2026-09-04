@@ -127,6 +127,32 @@ def selftest():  # noqa: C901
     notes.append("speech: %s" % ("available" if speech.Speaker().available
                                  else "not available (app still runs)"))
 
+    # The MPEG-4 family rides on FFmpeg, bundled through PyAV, and a build
+    # that failed to collect it looks completely normal until somebody adds an
+    # m4a and is told the app cannot play it. Decode a couple of frames rather
+    # than only importing: the import can succeed with the DLLs missing.
+    from dropdeck import audiofile
+    if not audiofile.has_fallback():
+        problems.append("no decoder for m4a, aac, wma or opus in this build. "
+                        "PyAV did not get collected")
+    else:
+        try:
+            av = audiofile.av_module()
+            if av is None:
+                raise RuntimeError("PyAV is here but will not import")
+            notes.append("extra formats: FFmpeg %s, %d in total"
+                         % (".".join(str(n) for n in av.library_versions
+                                     ["libavcodec"]),
+                            len(audiofile.supported_extensions())))
+        except Exception as exc:
+            problems.append("PyAV is in the build but unusable: %r" % exc)
+    try:
+        import mutagen                                   # noqa: F401
+        notes.append("tags: mutagen available, so artist and title are read")
+    except Exception:
+        problems.append("no mutagen, so the playlist would fall back to file "
+                        "names for every track")
+
     app = wx.App(redirect=False)
     frame = DropDeckFrame()
     notes.append("window: %s" % frame.GetTitle())

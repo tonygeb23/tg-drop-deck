@@ -91,6 +91,14 @@ NOTES = {
               "website, because a screen reader either skips one or says the "
               "words em dash, and neither is what the sentence meant. Nothing "
               "you press has changed."),
+    "2.6.0": ("The playlist is rebuilt. Your screen reader now says whether a "
+              "track is ticked, Enter plays from the row you are on, and the "
+              "artist and title come out of the file's tags. The crossfade "
+              "lands on the music instead of the silence at the end of an "
+              "MP3. m4a files play. You can save a running order as an M3U "
+              "and open it again. There is a beep before a track ends if you "
+              "want one. Audio settings is now Preferences, on tabs, with "
+              "the microphone in it."),
 }
 
 
