@@ -452,13 +452,127 @@ mixer.stop_all(fade_out=0.0)
 mixer.close()
 
 
+
+# ---------------------------------------------------------------------------
+print("\nThe playlist fader is a monitor fader")
+# ---------------------------------------------------------------------------
+
+# Tony, 4 September 2026: "if I adjust playlist volume, can you only have it
+# adjust like a monitor, it still plays out at 100% to the stream. just so we
+# can adjust our volume for output for the program so we can hear our screen
+# readers and navigate."
+#
+# This is what a fader on a desk does, and it is the only way to turn the
+# music down enough to hear a screen reader without taking it off the air.
+
+
+def settle(mixer, bus, frames=8192, block=1024):
+    """Run past the glide, then measure a block. The fader walks to its new
+    level over VOLUME_GLIDE rather than jumping, so measuring the first block
+    after a change measures the ramp and not the level."""
+    for _ in range(frames // block):
+        mixer.render(block)
+    bus.reset()
+    out = mixer.render(block)
+    return out, bus.read(block)
+
+
+mixer = Mixer(open_stream=False, samplerate=RATE)
+bus = AirBus(RATE)
+mixer.air_tap = bus
+mixer.set_playlist_gain(1.0)
+mixer.play_samples(C.PLAYLIST_SLOT if hasattr(C, "PLAYLIST_SLOT") else 70,
+                   tone(RATE * 30, 440.0), bus=C.BUS_PLAYLIST)
+heard, air = settle(mixer, bus)
+full_heard = float(np.abs(heard).max())
+full_air = float(np.abs(air).max())
+check("at full, what you hear and what goes out are the same",
+      abs(full_heard - full_air) < 0.01, (round(full_heard, 3),
+                                          round(full_air, 3)))
+
+mixer.set_playlist_gain(0.25)
+heard, air = settle(mixer, bus)
+quiet_heard = float(np.abs(heard).max())
+quiet_air = float(np.abs(air).max())
+check("turning it down turns down what you hear",
+      quiet_heard < full_heard * 0.4, round(quiet_heard, 3))
+check("and does NOT turn down what goes out",
+      abs(quiet_air - full_air) < 0.01, round(quiet_air, 3))
+check("the ratio is the fader, so it is the fader doing it and not a fade",
+      0.2 < quiet_heard / max(1e-9, quiet_air) < 0.3,
+      round(quiet_heard / max(1e-9, quiet_air), 3))
+
+# The case that rules out the lazy implementation. Scaling the on air block
+# back up by one over the fader looks equivalent and is not: at zero there is
+# nothing left to scale.
+mixer.set_playlist_gain(0.0)
+heard, air = settle(mixer, bus)
+check("with the fader shut, you hear nothing",
+      float(np.abs(heard).max()) < 1e-4, float(np.abs(heard).max()))
+check("and the listener still gets it at full level",
+      abs(float(np.abs(air).max()) - full_air) < 0.01,
+      round(float(np.abs(air).max()), 3))
+check("which is the whole point: turn the music right down, stay on air",
+      goertzel(air[:1024, 0], 440.0) > 0.02,
+      round(goertzel(air[:1024, 0], 440.0), 4))
+
+mixer.set_playlist_gain(0.8)
+mixer.playlist_monitor_only = False
+heard, air = settle(mixer, bus)
+check("turned off, it goes back to an ordinary fader",
+      abs(float(np.abs(heard).max()) - float(np.abs(air).max())) < 0.01,
+      (round(float(np.abs(heard).max()), 3), round(float(np.abs(air).max()), 3)))
+mixer.playlist_monitor_only = True
+mixer.stop_all(fade_out=0.0)
+mixer.render(512)
+
+# It is only the playlist. A sound effect fader is a real fader, because a
+# drop you fire at half level is one you meant to fire at half level.
+bus.reset()
+mixer.set_sfx_gain(0.3)
+mixer.play_samples(0, tone(RATE * 5, 660.0), bus=C.BUS_SFX)
+heard, air = settle(mixer, bus)
+check("the sound effects fader still changes both, as it always did",
+      abs(float(np.abs(heard).max()) - float(np.abs(air).max())) < 0.01,
+      (round(float(np.abs(heard).max()), 3), round(float(np.abs(air).max()), 3)))
+mixer.stop_all(fade_out=0.0)
+mixer.render(512)
+mixer.close()
+
+# And with nothing streaming at all, the fader behaves exactly as before.
+mixer = Mixer(open_stream=False, samplerate=RATE)
+mixer.set_playlist_gain(1.0)
+mixer.play_samples(70, tone(RATE * 10, 440.0), bus=C.BUS_PLAYLIST)
+for _ in range(8):
+    mixer.render(1024)
+loud = float(np.abs(mixer.render(1024)).max())
+mixer.set_playlist_gain(0.25)
+for _ in range(8):
+    mixer.render(1024)
+soft = float(np.abs(mixer.render(1024)).max())
+check("off air, F7 and F8 turn the playlist down the way they always have",
+      soft < loud * 0.4, (round(loud, 3), round(soft, 3)))
+mixer.stop_all(fade_out=0.0)
+mixer.close()
+
+# The setting is remembered.
+from dropdeck.board import Board            # noqa: E402
+
+board = Board()
+check("it is on out of the box, because that is what a desk does",
+      board.playlist_monitor_only is True)
+board.playlist_monitor_only = False
+kept = os.path.join(tempfile.mkdtemp(), "fader.json")
+board.save(kept)
+check("and turning it off survives a save and a load",
+      Board.load(kept).playlist_monitor_only is False)
+
 # ---------------------------------------------------------------------------
 print("\nThe app around it")
 # ---------------------------------------------------------------------------
 
 import wx                                                    # noqa: E402
 
-from dropdeck.board import Board                              # noqa: E402
 from dropdeck.dialogs import SettingsDialog                   # noqa: E402
 from dropdeck.ui import (ID_STREAM_STATUS, ID_STREAM_TOGGLE,  # noqa: E402
                          DropDeckFrame)

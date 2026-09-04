@@ -119,8 +119,10 @@ NOTES = {
               "playlist and the microphone, but not a preview or the beep "
               "before a track ends. If the network struggles the stream "
               "loses audio and what you hear does not, and it reconnects on "
-              "its own. Set it up under On air, and nothing goes out until "
-              "you press Ctrl+B."),
+              "its own. While you are on air, F7 and F8 become a monitor "
+              "fader: turn the playlist down to hear your screen reader and "
+              "listeners still get it at full level. Set it up under On air, "
+              "and nothing goes out until you press Ctrl+B."),
 }
 
 

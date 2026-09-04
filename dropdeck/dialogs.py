@@ -935,6 +935,18 @@ class SettingsDialog(wx.Dialog):
             "playing, taken from the file.")
         sizer.Add(self.stream_titles, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
+        self.playlist_monitor_only = wx.CheckBox(
+            panel, label="F7 and F8 change what &I hear, not what goes out")
+        self.playlist_monitor_only.SetValue(
+            bool(self.board.playlist_monitor_only))
+        self.playlist_monitor_only.SetToolTip(
+            "On, the playlist fader is a monitor control: turn the music down "
+            "to hear your screen reader and listeners still get it at full "
+            "level. Off, it is an ordinary fader and what you hear is what "
+            "goes out.")
+        sizer.Add(self.playlist_monitor_only, 0, wx.LEFT | wx.RIGHT | wx.TOP,
+                  10)
+
         self.stream_public = wx.CheckBox(
             panel, label="&List this stream in public directories")
         self.stream_public.SetValue(bool(self.board.stream_public))

@@ -457,6 +457,12 @@ PUTTING THE SHOW ON THE INTERNET
   Icecast, a Liquidsoap harbor and SHOUTcast all work. For SHOUTcast put in
   the port your listeners use; the app works out the one a source needs.
 
+  F7 and F8 become a MONITOR fader while you are on air. Turn the playlist
+  down to hear your screen reader and your listeners still get it at full
+  level, right down to silence in the room. F3 to F6 are ordinary faders: a
+  drop you fire at half level is one you meant to fire at half level. There is
+  a switch for this in Set up streaming if you would rather it changed both.
+
   If the connection drops it gets itself back and tells you. If the network
   cannot keep up the STREAM loses audio and your own sound carries on, which
   is the right way round, and Ctrl+Shift+B says whether that has happened.

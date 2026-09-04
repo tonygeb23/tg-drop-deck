@@ -108,6 +108,11 @@ The microphone goes out whenever it is open, whether or not you are hearing
 yourself. Those are different questions, and a presenter on speakers monitors
 nothing and is still on air.
 
+`F7` and `F8` become a monitor fader while you are on air: turn the playlist
+down to hear your screen reader and your listeners still get it at full level.
+The other faders change both, because a drop fired at half level was meant to
+be at half level.
+
 Encoding and the network run on their own thread, so a bad connection costs
 the stream and never your own audio. It reconnects by itself, `Ctrl+Shift+B`
 says what it is doing, and listeners see the artist and title from your

@@ -525,6 +525,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_sfx_gain(self.board.sfx_volume)
         self.mixer.set_bed_gain(self.board.bed_volume)
         self.mixer.set_playlist_gain(self.board.playlist_volume)
+        self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
         # The microphone shares the mixers' duck bus, which is what makes
@@ -1661,7 +1662,13 @@ class DropDeckFrame(wx.Frame):
         elif which == "playlist":
             self.mixer.set_playlist_gain(self.mixer.playlist_gain + step)
             self.board.playlist_volume = self.mixer.playlist_gain
-            self.announce(f"Playlist volume {percent(self.mixer.playlist_gain)}")
+            said = f"Playlist volume {percent(self.mixer.playlist_gain)}"
+            if self.streaming() and self.board.playlist_monitor_only:
+                # Worth saying while live. Turning the music down and not
+                # knowing whether the listeners heard it is the sort of
+                # doubt that ruins a show.
+                said += ", what you hear only"
+            self.announce(said)
         else:
             self.mixer.set_bed_gain(self.mixer.bed_gain + step)
             self.board.bed_volume = self.mixer.bed_gain
@@ -3056,6 +3063,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.ducking = board.ducking
         self.mixer.duck_db = board.duck_db
         self.mixer.set_playlist_gain(board.playlist_volume)
+        self.mixer.playlist_monitor_only = board.playlist_monitor_only
         self.mixer.bed_fade_in = board.bed_fade_in
         self.mixer.bed_fade_out = board.bed_fade_out
         self._sync_warning()
@@ -3324,9 +3332,12 @@ class DropDeckFrame(wx.Frame):
             self.board.stream_public = stream["public"]
             self.board.stream_mic = dialog.stream_mic.GetValue()
             self.board.stream_titles = dialog.stream_titles.GetValue()
+            self.board.playlist_monitor_only = (
+                dialog.playlist_monitor_only.GetValue())
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
+        self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
         # Beds already in flight keep the fade they started with - a voice owns
         # its envelope - so this takes effect from the next press.
         self.mixer.bed_fade_in = self.board.bed_fade_in

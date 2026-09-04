@@ -175,6 +175,10 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+        #: F7 and F8 change what you hear and not what goes out. On, because
+        #: that is what a fader on a desk does and it is the only way to turn
+        #: the music down to hear a screen reader without taking it off air.
+        self.playlist_monitor_only = True
         self.last_sound_dir = ""
         #: Where running orders were last saved or opened. Its own, because a
         #: show's M3U and a show's sounds are rarely in the same folder.
@@ -381,6 +385,7 @@ class Board:
             "stream_public": bool(self.stream_public),
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
+            "playlist_monitor_only": bool(self.playlist_monitor_only),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -456,6 +461,8 @@ class Board:
         board.stream_public = bool(data.get("stream_public", False))
         board.stream_mic = bool(data.get("stream_mic", True))
         board.stream_titles = bool(data.get("stream_titles", True))
+        board.playlist_monitor_only = bool(
+            data.get("playlist_monitor_only", True))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")

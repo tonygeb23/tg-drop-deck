@@ -167,6 +167,19 @@ class Mixer:
         self._cue_tone = None
         self._cue_frames = 0
 
+        #: Where the playlist fader actually is, as opposed to where it has
+        #: been asked to go. It glides, the same way ducking does, because a
+        #: gain that jumps between blocks clicks.
+        self._playlist_level = C.DEFAULT_PLAYLIST_VOLUME
+
+        #: The playlist fader changes what you hear and not what goes out.
+        #: Tony, 4 September 2026: "I adjust the playlist volume and it turned
+        #: it down on air, too, that should only be for the program only".
+        #: He is describing a monitor fader, which is what a desk has: you
+        #: pull the music down in your own ears to hear your screen reader,
+        #: and the listener hears no such thing.
+        self.playlist_monitor_only = True
+
         self._duck = 1.0
         self.peak = 0.0
         self.underruns = 0
@@ -268,7 +281,12 @@ class Mixer:
         if fade_out is None:
             fade_out = self.bed_fade_out if bus == C.BUS_BED else C.FADE_OUT_SFX
 
-        gain = self.bus_gain(bus) * db_to_gain(trim_db)
+        # The playlist fader is applied per block in render() rather than
+        # baked into the voice, so that the same rendered block can go to the
+        # speakers turned down and to the stream at full level. A voice can
+        # only be rendered once, so this is the only place the two can differ.
+        level = 1.0 if bus == C.BUS_PLAYLIST else self.bus_gain(bus)
+        gain = level * db_to_gain(trim_db)
         common = dict(slot_index=slot_index, gain=gain, loop=loop, name=name,
                       fade_in=fade_in, fade_out=fade_out, rate=self.samplerate,
                       bus=bus)
@@ -396,6 +414,10 @@ class Mixer:
         gain = max(0.0, min(1.0, gain))
         setattr(self, {C.BUS_SFX: "sfx_gain", C.BUS_BED: "bed_gain",
                        C.BUS_PLAYLIST: "playlist_gain"}[bus], gain)
+        if bus == C.BUS_PLAYLIST:
+            # Nothing to push. render() reads playlist_gain every block, which
+            # is what lets the fader be a monitor control.
+            return gain
         with self._lock:
             for voice in self._voices:
                 if voice.bus == bus:
@@ -452,6 +474,25 @@ class Mixer:
         self._duck = new
         return ramp[:, None]
 
+    def _playlist_ramp(self, frames):
+        """Where the playlist fader should sit this block.
+
+        The same shape as _duck_ramp, and for the same reason: a gain that
+        steps between blocks is an audible click, so it walks there over
+        VOLUME_GLIDE instead.
+        """
+        target = self.playlist_gain
+        if abs(self._playlist_level - target) < 1e-6:
+            self._playlist_level = target
+            return target
+        step = frames / float(max(1, int(C.VOLUME_GLIDE * self.samplerate)))
+        delta = target - self._playlist_level
+        move = min(abs(delta), step) * (1.0 if delta > 0 else -1.0)
+        new = self._playlist_level + move
+        ramp = np.linspace(self._playlist_level, new, frames, dtype=np.float32)
+        self._playlist_level = new
+        return ramp[:, None]
+
     def render(self, frames):
         """Mix one block. Public so tests can run the whole engine silently."""
         mix = np.zeros((frames, CHANNELS), dtype=np.float32)
@@ -462,15 +503,24 @@ class Mixer:
             voices = list(self._voices)
         if voices:
             duck = self._duck_ramp(frames, voices)
+            fader = self._playlist_ramp(frames)
             for voice in voices:
                 block = voice.render(frames, duck)
-                mix += block
                 # A voice can only be rendered once, because rendering moves
                 # it along. So the on air sum is built here beside the one
                 # going to the speakers rather than by a second pass over the
                 # same voices, which would play everything twice as fast.
-                if air is not None and voice.bus not in C.OFF_AIR_BUSES:
-                    air += block
+                if voice.bus == C.BUS_PLAYLIST:
+                    # The one bus whose fader is a monitor control: turned
+                    # down in the room, full level to the listener.
+                    mix += block * fader
+                    if air is not None:
+                        air += (block if self.playlist_monitor_only
+                                else block * fader)
+                else:
+                    mix += block
+                    if air is not None and voice.bus not in C.OFF_AIR_BUSES:
+                        air += block
         else:
             self._duck = 1.0
             self.duck_bus.publish(self.key, False)
@@ -780,6 +830,15 @@ class MixerGroup:
     @property
     def playlist_gain(self):
         return self.primary.playlist_gain
+
+    @property
+    def playlist_monitor_only(self):
+        return self.primary.playlist_monitor_only
+
+    @playlist_monitor_only.setter
+    def playlist_monitor_only(self, value):
+        for mixer in self._mixers.values():
+            mixer.playlist_monitor_only = bool(value)
 
     def set_playlist_gain(self, gain):
         for mixer in self._mixers.values():

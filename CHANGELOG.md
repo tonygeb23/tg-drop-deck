@@ -21,6 +21,12 @@ hearing yourself. Being heard and hearing yourself were the same switch
 before, and they are not the same question: a presenter on speakers monitors
 nothing and is still on air.
 
+**The playlist fader is a monitor fader.** While you are on air, `F7` and
+`F8` change what you hear and not what goes out, so you can pull the music
+right down to hear your screen reader and navigate while listeners carry on
+hearing it at full level. The other faders change both. There is a switch in
+Set up streaming if you want the old behaviour.
+
 **The show comes first.** Encoding and the network run on their own thread. If
 the connection cannot keep up, the stream loses audio and what you hear does
 not, which is the right way round. Ctrl+Shift+B tells you if it happened.
