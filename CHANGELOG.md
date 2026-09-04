@@ -14,6 +14,10 @@ Switching is refused while you are on air; come off first.
 with its own fade, and says which it replaced. Two beds together is two
 pieces of music fighting. Sound effects and drops still overlap.
 
+**And a bed never plays under the playlist.** Both are music. Starting a
+playlist track fades the bed out, and a bed will not start over a running
+playlist; stop the playlist first.
+
 **Every box in every dialog says what it is.** Slot properties had four text
 boxes with no name at all, and every spin control was named on its wrapper
 rather than on the box Tab actually lands on, so a screen reader landing

@@ -126,7 +126,8 @@ NOTES = {
     "2.9.0": ("You can stream in AAC now, as well as MP3 and Ogg Opus, and "
               "you can save more than one station and switch between them "
               "from the On air menu. Only one music bed plays at a time: "
-              "starting another takes the one before it down. And every box "
+              "starting another takes the one before it down, and a bed no "
+              "longer plays under the playlist. And every box "
               "in every dialog now says what it is when you tab onto it, "
               "which four of them did not."),
 }
