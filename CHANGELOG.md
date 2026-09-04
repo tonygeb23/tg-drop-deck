@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.9.0, 4 September 2026
+
+**AAC.** Stream in AAC as well as MP3 and Ogg Opus. Brian Hartgen asked for
+it: "you may want to consider streaming using AAC, which is what we do."
+
+**More than one station.** Save as many servers as you like. Preferences has
+a picker with Save this station and Forget it, and the On air menu lists them
+under Station, so switching is one menu rather than four boxes of retyping.
+Switching is refused while you are on air; come off first.
+
+**Only one music bed at a time.** Starting a bed takes the one before it down
+with its own fade, and says which it replaced. Two beds together is two
+pieces of music fighting. Sound effects and drops still overlap.
+
+**Every box in every dialog says what it is.** Slot properties had four text
+boxes with no name at all, and every spin control was named on its wrapper
+rather than on the box Tab actually lands on, so a screen reader landing
+there heard "edit". Both fixed, and `tools/check_labels.py` now walks every
+dialog in tab order so it cannot come back.
+
+
 ## 2.8.0, 4 September 2026
 
 ### Put the show on the internet

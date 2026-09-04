@@ -123,6 +123,12 @@ NOTES = {
               "fader: turn the playlist down to hear your screen reader and "
               "listeners still get it at full level. Set it up under On air, "
               "and nothing goes out until you press Ctrl+B."),
+    "2.9.0": ("You can stream in AAC now, as well as MP3 and Ogg Opus, and "
+              "you can save more than one station and switch between them "
+              "from the On air menu. Only one music bed plays at a time: "
+              "starting another takes the one before it down. And every box "
+              "in every dialog now says what it is when you tab onto it, "
+              "which four of them did not."),
 }
 
 
