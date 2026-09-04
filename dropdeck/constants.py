@@ -305,7 +305,15 @@ THE PLAYLIST - a running order that cues itself
                             the playlist's.
   Playlist menu             Add files, drops every so many songs, crossfade
                             length, tick or untick everything, next,
-                            previous, stop, clear
+                            previous, stop, save, open, clear
+
+SAVING A RUNNING ORDER
+  Playlist menu, Save the running order, writes it as an M3U playlist file.
+  Open a running order loads one back in place of what is there.
+  M3U because every player opens one, so a saved show can be checked in VLC
+  or handed to somebody else. Drops, ticks and per-track crossfades are kept
+  in comments this app reads back and other players ignore.
+  Drag an M3U onto the running order to ADD it instead of replacing.
 
 YOUR DROPS LIBRARY
   Playlist menu, Drops library. Put the idents and stingers you use over and

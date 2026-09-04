@@ -40,6 +40,7 @@ import os
 import wx
 
 from . import constants as C
+from . import m3u
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
                     ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
                     ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE, ID_PL_ROW_STOP,
@@ -395,7 +396,15 @@ class PlaylistPanel(wx.Panel):
 
     # --------------------------------------------------------------- input --
     def add_paths(self, paths, where="added", at=None):
-        """Put files in, say what happened, and leave the list on the first."""
+        """Put files in, say what happened, and leave the list on the first.
+
+        A playlist file among them is expanded rather than refused: dragging
+        an M3U onto the running order means "put that show in", and there is
+        no reading of it that means anything else.
+        """
+        playlists = [p for p in paths if m3u.is_playlist_file(p)]
+        if playlists:
+            return self.add_from_playlist_files(playlists, at=at)
         playable = self.playlist.playable(paths)
         if not playable:
             self.frame.announce(
@@ -413,6 +422,34 @@ class PlaylistPanel(wx.Panel):
                 added[0].display_name if len(added) == 1
                 else "First is %s, last is %s"
                 % (added[0].display_name, added[-1].display_name)))
+        self.frame.playlist_changed()
+        return added
+
+    def add_from_playlist_files(self, paths, at=None):
+        """Put the contents of one or more M3U files in, at ``at``.
+
+        Adds rather than replaces. Playlist menu, Open a running order, is the
+        one that replaces; dropping a file onto a list has always meant add.
+        """
+        added = []
+        for path in paths:
+            entries, _crossfade = self.frame._read_playlist_file(path)
+            if not entries:
+                continue
+            landed = self.playlist.add_entries(
+                entries, at=None if at is None else at + len(added))
+            added.extend(landed)
+        if not added:
+            self.frame.announce("Nothing in that playlist this app can play")
+            return []
+        first = at if at is not None else len(self.playlist) - len(added)
+        self.refresh(keep=first)
+        missing = sum(1 for t in added if t.is_missing)
+        self.frame.announce_help(
+            "%d %s added from the playlist%s"
+            % (len(added), "track" if len(added) == 1 else "tracks",
+               ". %d file%s missing" % (missing, "" if missing == 1 else "s")
+               if missing else ""))
         self.frame.playlist_changed()
         return added
 

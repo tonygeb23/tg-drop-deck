@@ -8,6 +8,7 @@ everything that happens says so out loud.
 from __future__ import annotations
 
 import ctypes
+import datetime
 import os
 import threading
 
@@ -19,6 +20,7 @@ from . import appicon
 from . import constants as C
 from . import feedback
 from . import globalhotkeys
+from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
@@ -93,6 +95,8 @@ ID_FEEDBACK = wx.ID_HIGHEST + 49
 ID_DONATE = wx.ID_HIGHEST + 50
 ID_USER_GUIDE = wx.ID_HIGHEST + 51
 ID_PL_GOTO_PLAYING = wx.ID_HIGHEST + 52
+ID_PL_SAVE = wx.ID_HIGHEST + 53
+ID_PL_OPEN = wx.ID_HIGHEST + 54
 
 #: The two things this window can be showing.
 VIEW_BOARD, VIEW_PLAYLIST = 0, 1
@@ -911,7 +915,7 @@ class DropDeckFrame(wx.Frame):
                   "Put a particular file in front of the item you are on")
         pl.Append(ID_PL_LIBRARY, "Drops li&brary...",
                   "The idents and stingers Alt+D reaches for")
-        pl.Append(ID_PL_DROP_EVERY, "Insert a drop &every so many songs...")
+        pl.Append(ID_PL_DROP_EVERY, "Insert a drop every so man&y songs...")
         pl.AppendSeparator()
         pl.Append(ID_PL_CHECK_ALL, "Tic&k every track",
                   "Everything in the running order will play")
@@ -919,7 +923,7 @@ class DropDeckFrame(wx.Frame):
                   "Nothing plays until you tick it again. Space toggles one")
         pl.AppendSeparator()
         pl.Append(ID_PL_PLAY, "Play &from here\tCtrl+Shift+Enter")
-        pl.Append(ID_PL_GOTO_PLAYING, "Go t&o what is on air\tCtrl+Shift+L",
+        pl.Append(ID_PL_GOTO_PLAYING, "Go to w&hat is on air\tCtrl+Shift+L",
                   "Put the cursor on the track that is playing")
         pl.Append(ID_PL_NEXT, "&Next track")
         pl.Append(ID_PL_PREV, "Pre&vious track")
@@ -927,6 +931,14 @@ class DropDeckFrame(wx.Frame):
         pl.AppendSeparator()
         pl.Append(ID_PL_CROSSFADE, "&Crossfade between tracks",
                   "Go to the crossfade box in the playlist view")
+        pl.AppendSeparator()
+        # A show is worth keeping. M3U rather than a format of our own, so
+        # the file opens in VLC, on a phone, or in whatever the studio runs.
+        pl.Append(ID_PL_SAVE, "Sav&e the running order...",
+                  "Write this running order to an M3U playlist file")
+        pl.Append(ID_PL_OPEN, "&Open a running order...",
+                  "Load an M3U playlist file in place of this one")
+        pl.AppendSeparator()
         pl.Append(ID_PL_CLEAR, "Clear the running or&der")
         pl.AppendSeparator()
         self.mic_item = pl.AppendCheckItem(
@@ -1028,6 +1040,10 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_mic(), id=ID_MIC_TOGGLE)
         self.Bind(wx.EVT_MENU, self._on_mic_settings, id=ID_MIC_SETTINGS)
         self.Bind(wx.EVT_MENU, self._on_crossfade, id=ID_PL_CROSSFADE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.save_playlist_file(),
+                  id=ID_PL_SAVE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.open_playlist_file(),
+                  id=ID_PL_OPEN)
         self.Bind(wx.EVT_MENU, self._on_clear_playlist, id=ID_PL_CLEAR)
         self.Bind(wx.EVT_MENU, lambda _e: self._nudge("playlist", -1),
                   id=ID_VOL_PL_DOWN)
@@ -2178,6 +2194,125 @@ class DropDeckFrame(wx.Frame):
                 % (track.display_name,
                    format_duration(chosen) or "not at all"))
         self.playlist_changed(relabel=False)
+
+    # --------------------------------------------------- running orders ----
+    #
+    # A board is the show's furniture and saves itself. A running order is the
+    # show, and people want to keep those: last Tuesday's, the Christmas one,
+    # the two hours that were ready before the guest cancelled. They go out as
+    # M3U so the file is worth something outside this app as well as inside
+    # it, and so a co-presenter can open one without installing anything.
+
+    def _playlist_file_dialog(self, saving):
+        """The Open or Save dialog for a running order. Returns a path or None."""
+        style = (wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) if saving else (
+            wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        default = ""
+        if saving:
+            # Dated, because the thing people save is "the show I have just
+            # built", and the date is what tells two of them apart a month
+            # later. Colons are not allowed in a file name, so no time.
+            default = "Running order %s.m3u" % datetime.date.today().isoformat()
+        with wx.FileDialog(
+                self,
+                "Save the running order" if saving else "Open a running order",
+                defaultDir=self.board.last_playlist_dir or "",
+                defaultFile=default, wildcard=m3u.WILDCARD,
+                style=style) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing saved" if saving
+                                   else "Nothing opened")
+                return None
+            return dialog.GetPath()
+
+    def save_playlist_file(self):
+        """Write the running order out as an M3U."""
+        if not len(self.board.playlist):
+            self.announce("There is nothing in the running order to save")
+            return False
+        path = self._playlist_file_dialog(saving=True)
+        if not path:
+            return False
+        if not os.path.splitext(path)[1]:
+            path += ".m3u"
+        try:
+            count = m3u.save(path, self.board.playlist)
+        except OSError as exc:
+            wx.MessageBox("That running order could not be saved.\n\n%s" % exc,
+                          "Could not save", wx.OK | wx.ICON_ERROR, self)
+            self.announce("Could not save the running order")
+            return False
+        self.board.last_playlist_dir = os.path.dirname(path)
+        self._touch()
+        self.announce("Saved %d %s to %s"
+                      % (count, "item" if count == 1 else "items",
+                         os.path.basename(path)))
+        return True
+
+    def open_playlist_file(self, path=None):
+        """Load an M3U in place of the running order.
+
+        Replaces rather than appends, the same way File, Open does with a
+        board. Dragging or pasting a playlist file onto the list adds to the
+        end instead, because that is what dragging things onto a list means.
+        """
+        existing = len(self.board.playlist)
+        if existing and wx.MessageBox(
+                "Replace the running order with the one in this file?\n\n"
+                "The %d %s in it now will be taken out. Save it first if you "
+                "want to keep it."
+                % (existing, "item" if existing == 1 else "items"),
+                "Open a running order", wx.YES_NO | wx.ICON_QUESTION,
+                self) != wx.YES:
+            self.announce_help("Nothing opened")
+            return False
+        if path is None:
+            path = self._playlist_file_dialog(saving=False)
+        if not path:
+            return False
+        entries, crossfade = self._read_playlist_file(path)
+        if entries is None:
+            return False
+        self.stop_playlist(quiet=True)
+        self.board.playlist.clear()
+        self.player.index = -1
+        added = self.board.playlist.add_entries(entries)
+        if crossfade is not None:
+            self.board.playlist.crossfade = crossfade
+        self.board.last_playlist_dir = os.path.dirname(path)
+        self.playlist_panel.refresh(keep=0)
+        self.show_view(VIEW_PLAYLIST)
+        self.playlist_panel.focus_list()
+        self._say_opened(path, added)
+        self.playlist_changed()
+        return True
+
+    def _read_playlist_file(self, path):
+        """Parse one, and say so rather than failing quietly. (None, None) on
+        anything that will not open."""
+        try:
+            return m3u.load(path)
+        except OSError as exc:
+            wx.MessageBox("That playlist could not be opened.\n\n%s" % exc,
+                          "Could not open", wx.OK | wx.ICON_ERROR, self)
+            self.announce("Could not open that playlist")
+            return None, None
+
+    def _say_opened(self, path, added):
+        """What came in, and what did not. Missing files are the usual case
+        with a playlist somebody else wrote, and relink is what fixes them."""
+        if not added:
+            self.announce(
+                "Nothing in %s this app can play" % os.path.basename(path))
+            return
+        missing = sum(1 for t in added if t.is_missing)
+        self.announce(
+            "Opened %s. %d %s%s"
+            % (os.path.basename(path), len(added),
+               "item" if len(added) == 1 else "items",
+               ". %d file%s missing, File then Relink missing sounds will look "
+               "for them" % (missing, "" if missing == 1 else "s")
+               if missing else ""))
 
     def _on_clear_playlist(self, _event=None):
         count = len(self.board.playlist)

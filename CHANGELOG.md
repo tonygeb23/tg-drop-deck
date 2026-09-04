@@ -2,108 +2,89 @@
 
 ## 2.6.0, 3 September 2026
 
-The playlist, rebuilt around Brian Hartgen's report. He recorded a show with
-the soundboard and called it an absolute joy, then took the playlist apart.
-Eight things. This is all eight.
+The playlist, rebuilt around Brian Hartgen's report. All eight of his points.
 
-### The running order is a proper list now
+### The running order
 
 **Your screen reader says whether a track is ticked.** That was the
 deal-breaker. The old control was a wxCheckListBox, which on Windows is a list
-box with a tick painted on it: MSAA never knew the tick was there, so nothing
-was announced when you arrowed through and nothing was announced when you
-pressed Space. It is a list view with real check boxes now, and Windows
-announces them without any help from the app.
+box with a tick painted on it: MSAA never knew the tick was there. It is a list
+view with real check boxes now.
 
-**Six columns instead of one sentence.** Title, artist, song or drop, length,
-when it starts, and its own crossfade if you have given it one. Each one is a
-cell your screen reader can read on its own.
+**Six columns**: title, artist, song or drop, length, when it starts, and its
+own crossfade if you have given it one. Each is a cell a screen reader reads on
+its own.
 
-**The artist and the title come out of the file's tags.** Not the file name.
-A file with no tags still falls back to its name, and a track you have renamed
-yourself still wins over both.
+**Artist and title come from the file's tags**, not the file name.
 
-**No more numbers in front of every row, so first letter navigation works.**
-Press T and you land on the next title starting with T, the way any Windows
-list works. In a three hour running order that is the only way to find
-anything. The position is still announced, because a list item always
-announces its position.
+**No numbers in front of the rows, so first letter navigation works.** Press T
+and you land on the next title starting with T.
 
-**Enter plays from the item you are on.** It never did. A list box on a frame
-never receives Return at all, so the handler that was there was never called.
+**Enter plays from the item you are on.** It never did: a list box on a frame
+never receives Return.
 
 **"Starts at" always has a value.** The first track said "starts at" and then
-stopped, because zero seconds formatted as nothing. It says "at the top".
+stopped. It says "at the top".
 
-**A row no longer says "skipped".** The tick box says it, and the app saying
-it too was two announcements for one keystroke.
+**A row no longer says "skipped".** The tick box says it.
 
 ### The crossfade
 
 **You can type into the crossfade box.** The pads are on bare digits and a
-frame's keyboard map is consulted before whatever has focus, so every digit
-you typed fired a sound instead of going into the box. The pad keys now stand
-down while a text box has focus, and every key with a modifier still works:
-Ctrl+V still pastes and Escape still stops everything.
+frame's keyboard map is read before the control with focus, so every digit went
+to a pad. The pad keys stand down while a text box has focus. Everything with a
+modifier still works.
 
-**The crossfade is a crossfade.** Two things were wrong.
+**The crossfade is a crossfade.** The cue used to be taken from the file's last
+sample, and an MP3 carries a second or two of silence there, so most of a three
+second crossfade happened inside it. The end of the music is measured now, once,
+in the background. And the incoming track came up from nothing; it comes in at
+level and the outgoing one rides down under it.
 
-The cue was taken from the file's last sample. An MP3 routinely carries a
-second or two of digital silence at the end, so most of a three second
-crossfade happened inside that silence: the outgoing song finished, and the
-incoming one was left coming up on its own. The end of the music is now
-measured, once, in the background, and the cue is taken from there.
+**Spots butt up against the song behind them.** A fifth of a second of overlap,
+always, even with the crossfade at zero.
 
-And the incoming track ramped up from nothing. It comes in at level now and
-the outgoing one rides down under it, which is what a segue is on the radio.
-
-**Spots butt up against the song behind them.** A drop with no crossfade used
-to wait for its own last sample, then for the next file to open, and you heard
-the gap. There is a fifth of a second of overlap now, always.
-
-**The output rounds off instead of sawing itself flat.** Two songs at once are
-louder than one. Where the sum went over full scale it used to be clipped
-square, which crackles; the top of the wave is bent now instead.
+**The output rounds off instead of clipping square** where two songs sum past
+full scale.
 
 ### Knowing what is on air
 
-Brian asked for these at the end, as things that could come later. They are
-here.
+- The window title carries the playing track.
+- `Ctrl+L` says which of how many, and how much is left. It answers at every
+  speech level, including Nothing, because a key that only answers questions
+  has to answer them.
+- `Ctrl+Shift+L` puts the cursor on the track that is on air.
 
-- The window title carries the track that is playing.
-- `Ctrl+L` says which of how many it is and how much of it is left.
-- `Ctrl+Shift+L` puts the cursor on the track that is on the air.
+### Saving a show
 
-### m4a, and everything else Apple and Windows produce
+**Playlist menu, Save the running order.** It writes an M3U, so the file opens
+in VLC, on a phone, or in whatever the studio runs. Open a running order loads
+one back. Drops, ticks and per track crossfades are kept in comments this app
+reads and other players ignore.
 
-**The app takes m4a files.** It took none at all before: libsndfile, which
-does all the decoding here, has no MPEG-4 support, so an m4a was refused at
-the door. FFmpeg is bundled now and picks up what libsndfile will not:
-`m4a`, `m4b`, `mp4`, `aac`, `wma`, `opus`, `webm` and more. The download is
-about 26 MB bigger for it. Everything that already worked still goes through
-libsndfile, which is faster.
+Paths in the playlist's own folder are written relative, so the folder can be
+moved. A track whose file has gone comes back in its place, marked missing, for
+File, Relink missing sounds.
+
+Dragging an M3U onto the running order adds it to the end instead of replacing.
+
+### m4a
+
+**The app takes m4a files.** It took none before: libsndfile has no MPEG-4
+support. FFmpeg is bundled now and picks up `m4a`, `m4b`, `mp4`, `aac`, `wma`,
+`opus`, `webm` and more. About 26 MB bigger for it.
 
 ### Also fixed
 
-**`Ctrl+L` answers even with Spoken feedback set to Nothing.** It did not, and
-it was doing what it was told: at that level the app says nothing and leaves
-the commentary to your screen reader. That is right for a running commentary
-and wrong for a key whose only job is to answer a question, because `Ctrl+L`
-has no other effect, so a silent one is a broken key rather than a quiet one.
-The setting's wording says so now. Everything else at that level is unchanged.
+Writing the tick boxes from the running order counted as you ticking them, so
+every refresh wrote the status bar and marked the board unsaved. The first
+refresh happens before the window has a status bar: five errors a launch.
 
-Writing the tick boxes from the running order counted as you having ticked
-them, so every refresh wrote the status bar and marked the board unsaved, and
-the first refresh of all happens before the window has a status bar to write
-to: five errors on every launch with a playlist in the board.
+The pad labels stopped being refreshed the moment the playlist went on air. The
+refresh walked every playing slot, and the playlist's decks are numbered above
+the eighty pads, so it raised from inside a timer every quarter second.
 
-The pad labels stopped being refreshed the moment the playlist went on air.
-The refresh walked every slot the mixer was playing, and the playlist's two
-decks are numbered above the eighty pads, so it raised on one of them from
-inside a timer and went on raising it every quarter of a second.
-
-Delete pressed inside the crossfade box removed a track from the running
-order. It does nothing now.
+Delete pressed inside the crossfade box removed a track. It does nothing now.
 
 
 ## 2.5.2, 2 September 2026

@@ -81,6 +81,9 @@ between songs, one at a time or after every so many, and a **drops library** on
 `Ctrl+L` says what is on air and how much of it is left, and `Ctrl+Shift+L`
 takes you to it. The playlist has its own fader on `F7` and `F8`.
 
+Save a show as an M3U from the Playlist menu and open it again later, or in
+any other player.
+
 It plays `wav`, `mp3`, `m4a`, `flac`, `ogg`, `wma`, `aac`, `opus` and more, so
 an iTunes or Apple Music library goes straight in.
 
@@ -140,8 +143,8 @@ Land on any button and press `Space`. An empty slot opens a file browser; a
 full one plays. Right-click, or press the Applications key, for rename, level,
 looping, hotkey and clear.
 
-WAV, MP3, FLAC, OGG and AIFF all work. Files are referenced where they sit, 
-nothing is copied, so if you later move your sound library, **File → Relink
+WAV, MP3, M4A, FLAC, OGG, WMA and more all work. Files are referenced where
+they sit, nothing is copied, so if you later move your sound library, **File → Relink
 missing sounds** points a whole board at the new folder in one go.
 
 Coming from The Tony Gebhard Show Soundboard? **File → Import an old soundboard

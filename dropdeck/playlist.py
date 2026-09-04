@@ -47,9 +47,13 @@ def format_cue(seconds):
     """
     if seconds is None:
         return ""
-    if seconds < 0.5:
+    # Under a second is the top of the show. So is anything format_duration
+    # rounds away to nothing, or to "0 sec", which is a start time nobody
+    # means and a screen reader reads as a number that went wrong.
+    if seconds < 1.0:
         return "at the top"
-    return format_duration(seconds) or "at the top"
+    text = format_duration(seconds)
+    return "at the top" if text in ("", "0 sec") else text
 
 
 def _clean_crossfade(value, fallback=None):
@@ -394,6 +398,65 @@ class Playlist:
             track = self._make(path, kind=kind, crossfade=crossfade)
             if track is not None:
                 added.append(track)
+        if not added:
+            return []
+        if at is None or at >= len(self.tracks):
+            self.tracks.extend(added)
+        else:
+            at = max(0, at)
+            self.tracks[at:at] = added
+        return added
+
+    def add_entries(self, entries, at=None):
+        """Put items in from a playlist file. Returns the tracks that went in.
+
+        Not ``add``, and deliberately: ``add`` throws away anything that is
+        not a playable file on this machine right now, which is what you want
+        from a paste and exactly what you do not want from a saved running
+        order. A show whose music has moved has to come back with its missing
+        tracks still in it, in the right order, so File, Relink missing sounds
+        can go and find them. Dropping them silently would leave somebody
+        rebuilding a two hour order by hand.
+        """
+        added = []
+        for entry in entries:
+            path = (entry.get("filepath") or "").strip()
+            if not path:
+                continue
+            here = os.path.exists(path)
+            if here and not self.playable([path]):
+                continue          # a real file, but not one this app can play
+            kind = (C.TRACK_DROP if str(entry.get("kind", "")).lower() == "drop"
+                    else C.TRACK_SONG)
+            track = Track(filepath=path, kind=kind,
+                          crossfade=_clean_crossfade(entry.get("crossfade")),
+                          enabled=str(entry.get("enabled", "1")) != "0")
+            if here:
+                # Measured, because the file is the truth and the number in a
+                # playlist file was written by something else.
+                try:
+                    track.duration = probe(path)[0]
+                except Exception:
+                    track.duration = None
+                try:
+                    found = audiofile.tags(path)
+                except Exception:
+                    found = {}
+                # The file's own tags first, then whatever the playlist file
+                # said. An M3U exported by something with a better library
+                # than the file itself has is worth keeping.
+                track.artist = found.get("artist") or entry.get("artist") or ""
+                track.title = found.get("title") or entry.get("title") or ""
+            else:
+                # Nothing to measure. Keep what the file said so the row can
+                # still be read out and recognised.
+                try:
+                    track.duration = float(entry["duration"])
+                except (KeyError, TypeError, ValueError):
+                    track.duration = None
+                track.artist = entry.get("artist") or ""
+                track.title = entry.get("title") or ""
+            added.append(track)
         if not added:
             return []
         if at is None or at >= len(self.tracks):

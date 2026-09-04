@@ -537,6 +537,144 @@ check("a playlist saved by an older version simply has it to measure",
       is None)
 
 # ---------------------------------------------------------------------------
+print("\nSaving a running order as M3U")
+#
+# Tony, 3 September 2026: "in the event people need to save playlists of their
+# shows". M3U rather than a format of this app's own, so the file is worth
+# something in VLC, on a phone and in the studio as well as in here.
+
+from dropdeck import m3u
+
+drop_file = tone(os.path.join(tmp, "Station ident.wav"), 1.5, 990)
+frame.board.playlist.clear()
+panel.refresh()
+panel.add_paths(songs)
+frame.board.playlist.insert_drop(drop_file, at=1)
+frame.board.playlist.set_enabled(2, False)
+frame.board.playlist[3].crossfade = 4.0
+frame.board.playlist[0].artist = "Motörhead"
+frame.board.playlist[0].title = "Ace of Spades"
+frame.board.playlist.crossfade = 2.5
+panel.refresh()
+
+saved = os.path.join(tmp, "My Show.m3u")
+count = m3u.save(saved, frame.board.playlist)
+check("every item goes into the file", count == len(frame.board.playlist), count)
+written = open(saved, encoding="utf-8").read()
+check("it is an extended M3U, so other players show the names",
+      written.startswith("#EXTM3U") and "#EXTINF:" in written,
+      written.splitlines()[:2])
+check("the artist and title go on the EXTINF line, the way players expect",
+      "Motörhead - Ace of Spades" in written)
+check("and the file is UTF-8 with no byte order mark",
+      open(saved, "rb").read(3) != b"\xef\xbb\xbf"
+      and "Motörhead" in written)
+check("a track in the playlist's own folder is written relative, so the "
+      "folder can be moved",
+      "\n" + os.path.basename(songs[0]) in written.replace("\r\n", "\n"),
+      [l for l in written.splitlines() if not l.startswith("#")])
+
+entries, crossfade = m3u.load(saved)
+check("the playlist's crossfade comes back with it", crossfade == 2.5, crossfade)
+back = Playlist(crossfade=crossfade)
+added = back.add_entries(entries)
+check("and every item does", len(added) == len(frame.board.playlist), len(added))
+check("in the same order",
+      [t.title_text for t in back] == [t.title_text for t in frame.board.playlist],
+      [t.title_text for t in back])
+check("a drop comes back a drop", back[1].is_drop and not back[0].is_drop,
+      [t.kind for t in back])
+check("an unticked track comes back unticked",
+      [t.enabled for t in back] == [t.enabled for t in frame.board.playlist],
+      [t.enabled for t in back])
+check("and a track with its own crossfade keeps it",
+      back[3].crossfade == 4.0 and back[0].crossfade is None,
+      [t.crossfade for t in back])
+
+# It has to stay an ordinary M3U for everything else.
+plain = [line for line in written.splitlines() if line and not line.startswith("#")]
+check("everything this app adds is on a comment line, so other players "
+      "just see a list of files", len(plain) == len(frame.board.playlist),
+      plain)
+
+# Somebody else's playlist, in the shapes they really turn up in.
+BS = chr(92)
+foreign = os.path.join(tmp, "from another player.m3u")
+with open(foreign, "w", encoding="utf-8") as handle:
+    handle.write("#EXTM3U\r\n# a note from whatever wrote this\r\n\r\n"
+                 "#EXTINF:213,Abba - Dancing Queen\r\n"
+                 + os.path.basename(songs[1]) + "\r\n"
+                 "file:///" + songs[2].replace(BS, "/").replace(" ", "%20") + "\r\n"
+                 "http://stream.example.com/live\r\n")
+entries, crossfade = m3u.load(foreign)
+check("a plain M3U with no crossfade in it leaves ours alone",
+      crossfade is None, crossfade)
+check("a relative path resolves against the playlist's own folder",
+      entries[0]["filepath"] == os.path.normpath(songs[1]), entries[0])
+check("a file URL is a path too", entries[1]["filepath"] == os.path.normpath(songs[2]),
+      entries[1])
+check("and a web stream is left out rather than added as a broken file",
+      len(entries) == 2, [e["filepath"] for e in entries])
+check("the artist and title it carried are used when the file has no tags",
+      entries[0].get("artist") == "Abba", entries[0])
+
+# A show whose music has moved must come back with the gaps in it.
+moved = os.path.join(tmp, "gone.m3u")
+with open(moved, "w", encoding="utf-8") as handle:
+    handle.write("#EXTM3U\n#EXTINF:200,Someone - A Song That Moved\n"
+                 + os.path.join(tmp, "not here at all.mp3") + "\n")
+entries, _ = m3u.load(moved)
+lost = Playlist()
+lost.add_entries(entries)
+check("a missing file still takes its place in the order",
+      len(lost) == 1 and lost[0].is_missing, len(lost))
+check("with the name the playlist file gave it, so the row can be read",
+      lost[0].title_text == "A Song That Moved", lost[0].title_text)
+check("and its row says the file is gone",
+      "file missing" in " ".join(lost[0].columns(3.0, cue=None)),
+      lost[0].columns(3.0, cue=None))
+
+# The app end: the menu replaces, dragging one in adds.
+real_box = wx.MessageBox
+import dropdeck.ui as _ui
+_ui.wx.MessageBox = lambda *a, **k: wx.YES
+try:
+    before = len(frame.board.playlist)
+    panel.add_paths([saved], where="dropped")
+    check("dragging a playlist file in ADDS it to the end",
+          len(frame.board.playlist) == before * 2, len(frame.board.playlist))
+    frame.open_playlist_file(path=saved)
+    check("and Open a running order REPLACES what was there",
+          len(frame.board.playlist) == before, len(frame.board.playlist))
+    check("saying what came in",
+          "Opened" in frame.speaker.last_message, frame.speaker.last_message)
+    check("and the crossfade comes with it",
+          frame.board.playlist.crossfade == 2.5, frame.board.playlist.crossfade)
+    check("the ticks come back too",
+          [panel.is_ticked(i) for i in range(panel.row_count())]
+          == [t.enabled for t in frame.board.playlist],
+          [panel.is_ticked(i) for i in range(panel.row_count())])
+finally:
+    _ui.wx.MessageBox = real_box
+
+check("the board remembers where running orders go",
+      frame.board.last_playlist_dir == os.path.dirname(saved),
+      frame.board.last_playlist_dir)
+check("m3u and m3u8 are both recognised",
+      m3u.is_playlist_file("x.m3u") and m3u.is_playlist_file("X.M3U8")
+      and not m3u.is_playlist_file("x.mp3"))
+
+# Nothing to save is said, not silently done.
+frame.board.playlist.clear()
+panel.refresh()
+frame.speaker.last_message = None
+check("saving an empty running order says so rather than writing a stub",
+      frame.save_playlist_file() is False
+      and "nothing in the running order" in frame.speaker.last_message.lower(),
+      frame.speaker.last_message)
+
+
+# ---------------------------------------------------------------------------
 try:
     frame.stop_background_work()
 except Exception:

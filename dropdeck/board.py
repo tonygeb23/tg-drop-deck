@@ -115,6 +115,9 @@ class Board:
         #: so it has to be something the user turned on deliberately.
         self.global_hotkeys_on = False
         self.last_sound_dir = ""
+        #: Where running orders were last saved or opened. Its own, because a
+        #: show's M3U and a show's sounds are rarely in the same folder.
+        self.last_playlist_dir = ""
         #: Devices are remembered by name, because indices move around when
         #: something is plugged in or unplugged.
         self.device_name = None
@@ -289,6 +292,7 @@ class Board:
             "announce_playback": bool(self.announce_playback),
             "speech_level": self.speech_level,
             "last_sound_dir": self.last_sound_dir,
+            "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
         }
 
@@ -344,6 +348,7 @@ class Board:
                 board.bank_names[bank] = value.strip()[:C.MAX_BANK_NAME]
         board.global_hotkeys_on = bool(data.get("global_hotkeys_on", False))
         board.last_sound_dir = data.get("last_sound_dir") or ""
+        board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")
         board.device_hostapi = data.get("device_hostapi")
         board.announce_playback = bool(data.get("announce_playback", True))
