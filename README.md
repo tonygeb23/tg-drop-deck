@@ -100,6 +100,19 @@ your headphones and the show does not.
 
 Nothing opens your microphone but you pressing `Ctrl+M`.
 
+## Finding a sound by ear
+
+The window that opens when you assign a sound has a **Play each sound as I
+reach it** box on it, `Alt+P`. Every sound plays once as you arrow onto it and
+stops when you move on, so you can find the right one by listening instead of
+by reading forty file names.
+
+## Twenty slots, or fewer
+
+A bank ships with twenty. **Sounds, Remove this slot from the board** takes one
+off, and removing one never moves the others: take slot 5 away and 6 is still
+on the 6 key. Nothing is lost, and Put a removed slot back brings it again.
+
 ## A folder on one key
 
 **Sounds → Assign a folder** points a slot at a whole folder instead of one

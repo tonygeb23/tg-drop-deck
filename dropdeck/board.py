@@ -130,6 +130,9 @@ class Board:
         #: for turning up in a live show is not a feature.
         self.warn_before_end = C.DEFAULT_WARN_BEFORE_END
         self.warn_seconds = C.DEFAULT_WARN_SECONDS
+        #: Whether the sound browser auditions each file as you reach it.
+        #: Remembered, because somebody who wants it wants it every time.
+        self.preview_sounds = False
         self.last_sound_dir = ""
         #: Where running orders were last saved or opened. Its own, because a
         #: show's M3U and a show's sounds are rarely in the same folder.
@@ -199,6 +202,15 @@ class Board:
         start = (bank - 1) * C.SLOTS_PER_BANK
         return self.slots[start:start + C.SLOTS_PER_BANK]
 
+    def visible_slots(self, bank):
+        """The slots in this bank that are still on the board."""
+        return [slot for slot in self.bank_slots(bank) if not slot.hidden]
+
+    def hidden_slots(self, bank=None):
+        """The slots that have been taken off, in one bank or the whole board."""
+        slots = self.bank_slots(bank) if bank else self.slots
+        return [slot for slot in slots if slot.hidden]
+
     @property
     def assigned_count(self):
         return sum(1 for s in self.slots if s.is_assigned)
@@ -215,10 +227,12 @@ class Board:
         """Slots whose name or filename contains ``query``, in board order."""
         needle = (query or "").strip().lower()
         if not needle:
-            return [s for s in self.slots if s.is_assigned]
+            return [s for s in self.slots if s.is_assigned and not s.hidden]
         found = []
         for slot in self.slots:
-            if not slot.is_assigned:
+            # A removed slot is not offered. Jumping to a pad that is not on
+            # the board lands the cursor nowhere.
+            if not slot.is_assigned or slot.hidden:
                 continue
             haystack = f"{slot.display_name} {os.path.basename(slot.filepath or '')}".lower()
             if needle in haystack:
@@ -309,6 +323,7 @@ class Board:
             "speech_level": self.speech_level,
             "warn_before_end": bool(self.warn_before_end),
             "warn_seconds": float(self.warn_seconds),
+            "preview_sounds": bool(self.preview_sounds),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -368,6 +383,7 @@ class Board:
         board.warn_before_end = bool(data.get("warn_before_end",
                                               C.DEFAULT_WARN_BEFORE_END))
         board.warn_seconds = _warn_seconds(data.get("warn_seconds"))
+        board.preview_sounds = bool(data.get("preview_sounds", False))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")

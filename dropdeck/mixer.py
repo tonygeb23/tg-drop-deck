@@ -306,6 +306,22 @@ class Mixer:
             self.last_error = str(exc)
             return None
 
+    def play_preview(self, path, trim_db=0.0):
+        """Audition one file. Whatever was being auditioned stops first.
+
+        On its own slot and its own bus, so stopping it cannot touch a sound
+        that is on air, and so it neither ducks the beds nor gets ducked. You
+        are choosing a sound here, not playing one out.
+        """
+        self.stop_preview()
+        return self.play(C.PREVIEW_SLOT, path, bus=C.BUS_PREVIEW,
+                         trim_db=trim_db, fade_in=0.0, fade_out=0.04,
+                         name="preview")
+
+    def stop_preview(self):
+        return self.stop_slot(C.PREVIEW_SLOT, fade_out=0.04,
+                              also_releasing=True)
+
     def stop_slot(self, slot_index, fade_out=None, also_releasing=False):
         """Fade out every voice belonging to one slot.
 
@@ -354,6 +370,9 @@ class Mixer:
 
     # ------------------------------------------------------------- levels ----
     def bus_gain(self, bus):
+        if bus == C.BUS_PREVIEW:
+            # The sound fader, so a preview sounds like the pad will sound.
+            return self.sfx_gain
         if bus == C.BUS_CUE:
             # Its own level, and no fader. A cue you have turned the sound
             # down on is a cue you will miss, and turning the sound down is
@@ -681,6 +700,17 @@ class MixerGroup:
         for mixer in self._mixers.values():
             mixer.monitor_source = None
         self.monitor_mixer.monitor_source = source
+
+    def play_preview(self, path, trim_db=0.0):
+        """Auditioning goes to the ordinary output, not the monitor one.
+
+        A preview is the sound you are about to put on a pad, so you want to
+        hear it the way it will be heard.
+        """
+        return self.primary.play_preview(path, trim_db=trim_db)
+
+    def stop_preview(self):
+        return sum(m.stop_preview() for m in self._mixers.values())
 
     def play_cue(self):
         """Out of the monitor output, which is where the presenter is.

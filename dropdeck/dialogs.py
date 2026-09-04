@@ -10,6 +10,7 @@ import os
 
 import wx
 
+from . import audiofile
 from . import constants as C
 from . import feedback
 from .micinput import input_devices
@@ -373,6 +374,7 @@ class TrimDialog(wx.Dialog):
         self.SetSizerAndFit(outer)
         self.slider.SetFocus()
 
+
     @property
     def trim_db(self):
         return float(self.slider.GetValue())
@@ -445,11 +447,29 @@ class SlotPropertiesDialog(wx.Dialog):
         caption("&File")
         self.file_readout = self._readout(outer, self._file_text())
 
+        # Taking the slot off the board. Here as well as in the two menus,
+        # because properties is where somebody looks for what a pad is and
+        # whether it should be there at all. It is a request rather than the
+        # deed: the frame does it, the same as everything else on this dialog,
+        # which is what keeps Cancel meaning what it says.
+        self.remove_wanted = False
+        remove = wx.Button(self, label="Re&move this slot from the board")
+        remove.SetToolTip(
+            "Take this pad off the board. It keeps its sound and its keys, "
+            "nothing else moves, and Sounds, Put a removed slot back brings "
+            "it again.")
+        remove.Bind(wx.EVT_BUTTON, self._on_remove)
+        outer.Add(remove, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
                   0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizerAndFit(outer)
         self.name_field.SetFocus()
         self.name_field.SelectAll()
+
+    def _on_remove(self, _event):
+        self.remove_wanted = True
+        self.EndModal(wx.ID_OK)
 
     # ------------------------------------------------------------ building --
     def _readout(self, sizer, value):
@@ -1181,14 +1201,333 @@ def ask_text(parent, prompt, title, value=""):
     return dialog
 
 
-def audio_file_dialog(parent, start_dir="", title="Choose a sound"):
-    """Shared open dialog, remembering where the user was last time."""
-    with wx.FileDialog(parent, title, wildcard=C.AUDIO_WILDCARD,
-                       defaultDir=start_dir if os.path.isdir(start_dir) else "",
-                       style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
-        if dialog.ShowModal() != wx.ID_OK:
+class SoundBrowserDialog(wx.Dialog):
+    """Find a sound by listening to it rather than by reading its name.
+
+    Tony, 4 September 2026: "could I press alt P P to turn on preview mode,
+    so, when I arrow to a sound, it plays it once... just making it easier to
+    be exact with finding sounds". Anybody who has a folder called Stings with
+    forty files in it knows why: the names do not tell you which is which, and
+    assigning, pressing, hearing, clearing and assigning again is four steps
+    per guess.
+
+    It is this app's own browser rather than the Windows one, and not for
+    want of trying. The native dialog cannot report what is highlighted:
+    wxPython does not expose SetExtraControlCreator, and without it
+    GetCurrentlySelectedFilename returns an empty string on Windows every time
+    it is asked. Measured, not assumed. **Browse with Windows** is still on
+    this dialog for typing a path or reaching a network share.
+
+    The preview waits a moment before it plays. The screen reader is saying
+    the file name at the instant you arrow onto it, and a sound landing on top
+    of that takes the name away, which is the opposite of the point.
+    """
+
+    #: Column numbers, so nothing here counts on its fingers.
+    COL_NAME, COL_KIND = 0, 1
+
+    def __init__(self, parent, start_dir="", title="Choose a sound",
+                 frame=None):
+        super().__init__(parent, title=title,
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = frame
+        self.board = getattr(frame, "board", None)
+        self.mixer = getattr(frame, "mixer", None)
+        self.chosen = None
+        self._rows = []
+        self.folder = start_dir if os.path.isdir(start_dir) else _home_folder()
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        outer.Add(wx.StaticText(self, label=(
+            "Arrow through the list. Enter opens a folder or chooses a sound.\n"
+            "Backspace goes up one folder. Turn on preview and each sound "
+            "plays as you reach it.")), 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Folder"), 0, wx.LEFT | wx.TOP, 10)
+        self.folder_box = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        self.folder_box.SetName("Folder")
+        self.folder_box.SetToolTip(
+            "Type a folder and press Enter to go there.")
+        outer.Add(self.folder_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        outer.Add(wx.StaticText(self, label="&Sounds and folders"), 0,
+                  wx.LEFT | wx.TOP, 10)
+        self.list = wx.ListCtrl(
+            self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+            size=self.FromDIP(wx.Size(520, 300)))
+        self.list.SetName("Sounds and folders")
+        self.list.InsertColumn(self.COL_NAME, "Name", width=self.FromDIP(340))
+        self.list.InsertColumn(self.COL_KIND, "Type", width=self.FromDIP(140))
+        outer.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        # The preview switch. A real check box, so it has a mnemonic, a state
+        # a screen reader reads back, and somewhere obvious to find it.
+        self.preview = wx.CheckBox(
+            self, label="&Play each sound as I reach it")
+        self.preview.SetName("Play each sound as I reach it")
+        self.preview.SetValue(bool(getattr(self.board, "preview_sounds", False)))
+        self.preview.SetToolTip(
+            "Alt+P. Each sound plays once when you land on it, and stops when "
+            "you move on. It comes out of your ordinary output at the sound "
+            "volume, so it sounds the way the pad will sound.")
+        outer.Add(self.preview, 0, wx.ALL, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler, tip in (
+                ("&Up one folder", self._on_up, "Go to the folder above this one"),
+                ("&Browse with Windows...", self._on_native,
+                 "Open the ordinary Windows file window, for typing a path or "
+                 "reaching a network drive")):
+            button = wx.Button(self, label=label)
+            button.SetToolTip(tip)
+            button.Bind(wx.EVT_BUTTON, handler)
+            row.Add(button, 0, wx.RIGHT, 6)
+        outer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizerAndFit(outer)
+
+        # Landing on a row starts the clock; the clock is what plays it.
+        self._preview_timer = wx.Timer(self)
+        self._stop_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_preview_due, self._preview_timer)
+        self.Bind(wx.EVT_TIMER, self._on_preview_over, self._stop_timer)
+
+        self.list.Bind(wx.EVT_LIST_ITEM_FOCUSED, self._on_moved)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_moved)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._activate())
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.folder_box.Bind(wx.EVT_TEXT_ENTER, self._on_typed_folder)
+        self.preview.Bind(wx.EVT_CHECKBOX, self._on_preview_toggled)
+        self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+        self._fill()
+        self.list.SetFocus()
+
+    # -------------------------------------------------------------- filling --
+    def _fill(self, land_on=None):
+        """Read the folder into the list. Folders first, then sounds."""
+        self._stop_preview()
+        folders, files = [], []
+        try:
+            for name in sorted(os.listdir(self.folder), key=str.lower):
+                full = os.path.join(self.folder, name)
+                if os.path.isdir(full):
+                    folders.append((name, full, True))
+                elif audiofile.is_supported(name):
+                    files.append((name, full, False))
+        except OSError as exc:
+            wx.MessageBox("That folder cannot be read.\n\n%s" % exc,
+                          "Cannot open the folder", wx.OK | wx.ICON_ERROR, self)
+
+        rows = []
+        parent = os.path.dirname(self.folder.rstrip("\\/"))
+        if parent and parent != self.folder and os.path.isdir(parent):
+            # A row rather than only a button: going up is the commonest move
+            # in here and it should be reachable without leaving the list.
+            rows.append(("Up one folder", parent, True))
+        rows.extend(folders)
+        rows.extend(files)
+        self._rows = rows
+
+        self.list.Freeze()
+        try:
+            self.list.DeleteAllItems()
+            for index, (name, full, is_dir) in enumerate(rows):
+                self.list.InsertItem(index, name)
+                self.list.SetItem(index, self.COL_KIND,
+                                  "Folder" if is_dir else
+                                  os.path.splitext(full)[1].lstrip(".").upper()
+                                  + " sound")
+        finally:
+            self.list.Thaw()
+
+        self.folder_box.ChangeValue(self.folder)
+        if rows:
+            where = 0
+            if land_on:
+                for index, (_n, full, _d) in enumerate(rows):
+                    if os.path.normcase(full) == os.path.normcase(land_on):
+                        where = index
+                        break
+            self.list.Select(where)
+            self.list.Focus(where)
+        self._say_count(len(folders), len(files))
+
+    def _say_count(self, folders, files):
+        if self.frame is None:
+            return
+        self.frame.announce_help(
+            "%s. %d sound%s, %d folder%s"
+            % (os.path.basename(self.folder.rstrip("\\/")) or self.folder,
+               files, "" if files == 1 else "s",
+               folders, "" if folders == 1 else "s"))
+
+    # ---------------------------------------------------------- the cursor --
+    def _current(self):
+        """(name, path, is_folder) for the row the cursor is on, or None."""
+        index = self.list.GetFocusedItem()
+        if index == wx.NOT_FOUND or not (0 <= index < len(self._rows)):
             return None
-        return dialog.GetPath()
+        return self._rows[index]
+
+    def _on_moved(self, event):
+        event.Skip()
+        # Whatever was playing belongs to the row you have just left.
+        self._stop_preview()
+        if not self.preview.GetValue():
+            return
+        current = self._current()
+        if current is None or current[2]:
+            return
+        self._preview_timer.Start(C.PREVIEW_DELAY_MS, oneShot=True)
+
+    def _on_preview_due(self, _event):
+        current = self._current()
+        if current is None or current[2] or self.mixer is None:
+            return
+        try:
+            self.mixer.play_preview(current[1])
+        except Exception:
+            return                  # a file that will not open is not a crash
+        self._stop_timer.Start(int(C.PREVIEW_MAX_SECONDS * 1000), oneShot=True)
+
+    def _on_preview_over(self, _event):
+        self._stop_preview()
+
+    def _stop_preview(self):
+        self._preview_timer.Stop()
+        self._stop_timer.Stop()
+        if self.mixer is not None:
+            try:
+                self.mixer.stop_preview()
+            except Exception:
+                pass
+
+    def _on_preview_toggled(self, event):
+        event.Skip()
+        if self.board is not None:
+            self.board.preview_sounds = bool(self.preview.GetValue())
+        if self.preview.GetValue():
+            self._on_moved(_Dummy())
+        else:
+            self._stop_preview()
+
+    # --------------------------------------------------------------- input --
+    def _on_key(self, event):
+        code = event.GetKeyCode()
+        if code == wx.WXK_BACK or (event.AltDown() and code == wx.WXK_UP):
+            self._on_up(None)
+            return
+        event.Skip()
+
+    def _activate(self):
+        """Enter, or a double click. Open a folder, or take a sound."""
+        current = self._current()
+        if current is None:
+            return
+        if current[2]:
+            self._go(current[1], land_on=self.folder)
+            return
+        self._choose(current[1])
+
+    def _go(self, folder, land_on=None):
+        if not os.path.isdir(folder):
+            return
+        self.folder = os.path.abspath(folder)
+        self._fill(land_on=land_on)
+        self.list.SetFocus()
+
+    def _on_up(self, _event):
+        parent = os.path.dirname(self.folder.rstrip("\\/"))
+        if parent and parent != self.folder and os.path.isdir(parent):
+            self._go(parent, land_on=self.folder)
+        elif self.frame is not None:
+            self.frame.announce("That is the top of this drive")
+
+    def _on_typed_folder(self, event):
+        event.Skip()
+        typed = self.folder_box.GetValue().strip().strip('"')
+        if os.path.isdir(typed):
+            self._go(typed)
+        elif os.path.isfile(typed) and audiofile.is_supported(typed):
+            self._choose(typed)
+        elif self.frame is not None:
+            self.frame.announce("There is no folder called that")
+
+    def _on_ok(self, event):
+        current = self._current()
+        if current is not None and current[2]:
+            # OK on a folder means open it, which is what pressing Enter on it
+            # does. Closing the dialog with a folder as the answer would hand
+            # the caller something it cannot play.
+            self._activate()
+            return
+        if current is None:
+            event.Skip()
+            return
+        self._choose(current[1])
+
+    def _choose(self, path):
+        self._stop_preview()
+        self.chosen = path
+        self.EndModal(wx.ID_OK)
+
+    def _on_native(self, _event):
+        """The ordinary Windows window, for a path you would rather type."""
+        self._stop_preview()
+        with wx.FileDialog(self, "Choose a sound", wildcard=C.AUDIO_WILDCARD,
+                           defaultDir=self.folder,
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                self._choose(dialog.GetPath())
+
+    def _on_close(self, event):
+        self._stop_preview()
+        event.Skip()
+
+    def EndModal(self, code):
+        self._stop_preview()
+        return super().EndModal(code)
+
+
+class _Dummy:
+    """A stand-in for an event, for the one place that calls a handler."""
+
+    def Skip(self):
+        pass
+
+
+def _home_folder():
+    for candidate in (os.path.expanduser("~\\Music"), os.path.expanduser("~")):
+        if os.path.isdir(candidate):
+            return candidate
+    return os.getcwd()
+
+
+def audio_file_dialog(parent, start_dir="", title="Choose a sound", frame=None):
+    """Shared open dialog, remembering where the user was last time.
+
+    This app's own browser, so a sound can be auditioned while you look for
+    it. Falls back to the Windows one if anything at all goes wrong building
+    it: choosing a file is not something to lose over a preview.
+    """
+    try:
+        with SoundBrowserDialog(parent, start_dir, title,
+                                frame=frame or parent) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            return dialog.chosen
+    except Exception:
+        with wx.FileDialog(parent, title, wildcard=C.AUDIO_WILDCARD,
+                           defaultDir=start_dir if os.path.isdir(start_dir) else "",
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            return dialog.GetPath()
 
 
 class FeedbackDialog(wx.Dialog):

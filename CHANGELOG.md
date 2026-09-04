@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.7.0, 4 September 2026
+
+### Find a sound by listening to it
+
+The window that opens when you assign a sound is this app's own now, with a
+**Play each sound as I reach it** box on it, `Alt+P`. Turn it on and every
+sound plays once as you arrow onto it, and stops the moment you move on. It
+waits a beat first so your screen reader gets the name out before the sound
+starts.
+
+Enter opens a folder or takes the sound you are on, Backspace goes up one, and
+**Browse with Windows** opens the ordinary file window for typing a path or
+reaching a network drive.
+
+It is this app's own window and not for want of trying the other way. The
+native Windows dialog cannot tell a program what is highlighted in it, so
+there was no way to know which sound to play.
+
+### A bank does not have to have twenty slots
+
+**Sounds menu, Remove this slot from the board.** Also on the right-click menu
+and as a button in Properties. Want ten instead of twenty? Remove 11 to 20.
+
+Removing one never moves the others. Take slot 5 away and 6 is still on the 6
+key, because that map is years of muscle memory. The slot keeps its sound, its
+name and both its hotkeys while it is off the board, so nothing asks whether
+you are sure. Put a removed slot back, or Put this bank's slots back, both in
+the Sounds menu.
+
+The last slot in a bank will not go. A bank with nothing in it has nothing to
+come back to.
+
+
 ## 2.6.0, 3 September 2026
 
 The playlist, rebuilt around Brian Hartgen's report. All eight of his points.

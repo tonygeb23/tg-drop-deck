@@ -68,6 +68,12 @@ class Slot:
     loop: bool = field(default=False)
     #: Per-slot trim in decibels, so one loud sound can be tamed on its own.
     trim_db: float = 0.0
+    #: Taken off the board. The slot keeps everything it had, including its
+    #: sound and its hotkeys, and can be put back; it simply is not shown and
+    #: its key does nothing. Removing one NEVER renumbers the others, because
+    #: the digit map is muscle memory: take slot 5 away and 6 is still on the
+    #: 6 key.
+    hidden: bool = False
     #: How many playable sounds are in this slot's folder, when ``filepath`` is
     #: a folder rather than a file. Saved so the label is right before the first
     #: scan, which then corrects it. ``None`` for an ordinary slot.
@@ -260,6 +266,7 @@ class Slot:
             "loop": bool(self.loop),
             "trim_db": float(self.trim_db),
             "folder_count": self.folder_count,
+            "hidden": bool(self.hidden),
         }
 
     @classmethod
@@ -277,6 +284,7 @@ class Slot:
             loop=bool(data.get("loop", bank_for_index(index) == C.LOOPING_BANK)),
             trim_db=float(data.get("trim_db", 0.0) or 0.0),
             folder_count=_maybe_int(data.get("folder_count")),
+            hidden=bool(data.get("hidden", False)),
         )
 
     def clear(self) -> None:

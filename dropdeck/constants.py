@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -112,6 +112,11 @@ BUS_SFX, BUS_BED, BUS_PLAYLIST = "sfx", "bed", "playlist"
 #: you especially need to hear a cue while you are talking, and a beep that
 #: pushed the music down would be worse than the beep.
 BUS_CUE = "cue"
+#: Auditioning a file in the sound browser. On the sound fader, so it sounds
+#: like the pad will sound, but neither ducking nor ducked: you are choosing a
+#: sound, not putting one out, and a preview that pushed the beds down would
+#: be heard by everybody listening.
+BUS_PREVIEW = "preview"
 
 VOLUME_STEP = 0.05
 #: How long a fader move takes to land, in seconds. A glide, not a fade: it is
@@ -187,6 +192,19 @@ CUE_LEVEL_DB = -14.0
 #: Where the pip plays. Above the eighty pads and above the two playlist
 #: decks, for the same reason they are: the mixer needs no special case.
 CUE_SLOT = TOTAL_SLOTS + 2
+#: And where a preview plays. Its own slot, so stopping one is one call and
+#: cannot touch anything else.
+PREVIEW_SLOT = TOTAL_SLOTS + 3
+
+#: How long after the cursor settles before a preview starts, in
+#: milliseconds. Not zero: the screen reader is saying the file name at that
+#: moment, and a sound landing on top of it takes the name away. Long enough
+#: to let the name out, short enough that it still feels like arrowing.
+PREVIEW_DELAY_MS = 400
+#: Anything longer than this is auditioned from the start and stopped when you
+#: move on, rather than played out. Nobody wants four minutes of a song while
+#: they look for the next file.
+PREVIEW_MAX_SECONDS = 25.0
 
 #: How often the player is asked whether a cue is due, in milliseconds. A
 #: crossfade landing within a twentieth of a second is inaudible; the 250 ms
@@ -286,6 +304,24 @@ BANK NAMES
   A name is yours and saves with the board. Renaming bank 3 does not stop it
   being the looping bank, and renaming bank 4 does not stop it taking your
   own hotkeys. Those are what the keys do, not what the tab says.
+
+FINDING A SOUND BY EAR
+  The window that opens when you assign a sound is this app's own, and it has
+  a Play each sound as I reach it box on it, Alt+P. Turn it on and every
+  sound plays once as you arrow onto it, and stops when you move on.
+  It waits a moment first, so your screen reader gets the name out before the
+  sound starts.
+  Enter opens a folder or takes the sound you are on. Backspace goes up one.
+  Browse with Windows opens the ordinary file window if you would rather type
+  a path or reach a network drive.
+
+HOW MANY SLOTS A BANK HAS
+  Twenty, until you say otherwise. Sounds menu, Remove this slot from the
+  board, or the same on the right-click menu, or the button in Properties.
+  Removing one NEVER moves the others: take slot 5 away and 6 is still on the
+  6 key. The slot keeps its sound, its name and its hotkeys while it is off.
+  Sounds menu, Put a removed slot back, or Put this bank's slots back.
+  Want ten instead of twenty? Remove 11 to 20.
 
 A FOLDER INSTEAD OF A FILE
   Sounds menu, or right-click a button, then Assign a folder.

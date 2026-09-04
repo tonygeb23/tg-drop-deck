@@ -97,6 +97,9 @@ ID_USER_GUIDE = wx.ID_HIGHEST + 51
 ID_PL_GOTO_PLAYING = wx.ID_HIGHEST + 52
 ID_PL_SAVE = wx.ID_HIGHEST + 53
 ID_PL_OPEN = wx.ID_HIGHEST + 54
+ID_REMOVE_SLOT = wx.ID_HIGHEST + 55
+ID_RESTORE_SLOT = wx.ID_HIGHEST + 56
+ID_RESTORE_ALL_SLOTS = wx.ID_HIGHEST + 57
 
 #: The two things this window can be showing.
 VIEW_BOARD, VIEW_PLAYLIST = 0, 1
@@ -440,19 +443,44 @@ class BankPage(wx.Panel):
         self.hint = wx.StaticText(self, label=C.BANK_HINTS[bank])
         outer.Add(self.hint, 0, wx.ALL, 8)
 
-        grid = wx.GridSizer(rows=5, cols=4, gap=wx.Size(6, 6))
+        # All twenty are built, and the removed ones are hidden rather than
+        # left out. Two reasons: `buttons` stays twenty long, so a slot's
+        # number is still its position in it, and putting one back is showing
+        # a button rather than rebuilding the page under the user's fingers.
+        self.grid = wx.GridSizer(rows=5, cols=4, gap=wx.Size(6, 6))
         self.buttons = []
         for slot in frame.board.bank_slots(bank):
             button = SoundButton(self, slot, frame)
             self.buttons.append(button)
-            grid.Add(button, 0, wx.EXPAND)
-        outer.Add(grid, 1, wx.EXPAND | wx.ALL, 8)
+            self.grid.Add(button, 0, wx.EXPAND)
+        outer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 8)
         self.SetSizer(outer)
+        self.refresh_visibility()
 
         # wx.StaticText never wraps unless told to. Bank 3's hint needs about
         # 1400 px and does not get it even maximised, so the end of the
         # sentence was simply cut off.
         self.Bind(wx.EVT_SIZE, self._on_size)
+
+    def refresh_visibility(self):
+        """Show the slots that are on the board and hide the rest.
+
+        Hidden through the SIZER as well as the window, or the grid keeps a
+        hole where the button was and the ones after it do not move up.
+        """
+        for button in self.buttons:
+            wanted = not button.slot.hidden
+            if button.IsShown() != wanted:
+                button.Show(wanted)
+            self.grid.Show(button, wanted, recursive=True)
+        self.Layout()
+
+    def first_visible(self):
+        """A button somebody can actually land on, or None if the bank is empty."""
+        for button in self.buttons:
+            if not button.slot.hidden:
+                return button
+        return None
 
     def _on_size(self, event):
         width = self.GetClientSize().width - self.FromDIP(20)
@@ -869,6 +897,16 @@ class DropDeckFrame(wx.Frame):
                       "Name, level and both hotkeys for this sound, in one place")
         sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDel")
         sounds.AppendSeparator()
+        # Twenty slots a bank is what it ships with, not what everybody wants.
+        # Removing one keeps its sound and its keys and simply takes it off
+        # the board, and it never renumbers anything else.
+        sounds.Append(ID_REMOVE_SLOT, "Re&move this slot from the board",
+                      "Take this pad off the board. Nothing else moves, and "
+                      "you can put it back")
+        sounds.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...",
+                      "Choose one of the slots you have taken off this bank")
+        sounds.Append(ID_RESTORE_ALL_SLOTS, "Put this bank's sl&ots back")
+        sounds.AppendSeparator()
         sounds.Append(ID_SEARCH, "&Search sounds...\tCtrl+F", "Find a sound by name")
         sounds.Append(ID_WHATS_PLAYING, "&What is playing\tCtrl+L")
         sounds.Append(ID_DUCK, "&Ducking on or off\tCtrl+D")
@@ -1057,6 +1095,11 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("clear"), id=ID_CLEAR_FOCUSED)
         self.Bind(wx.EVT_MENU, lambda _e: self._focused_action("properties"),
                   id=ID_PROPERTIES)
+        self.Bind(wx.EVT_MENU, lambda _e: self.remove_slot(), id=ID_REMOVE_SLOT)
+        self.Bind(wx.EVT_MENU, lambda _e: self.restore_slot(),
+                  id=ID_RESTORE_SLOT)
+        self.Bind(wx.EVT_MENU, lambda _e: self.restore_all_slots(),
+                  id=ID_RESTORE_ALL_SLOTS)
         self.Bind(wx.EVT_MENU, self._on_search, id=ID_SEARCH)
         self.Bind(wx.EVT_MENU, self._on_whats_playing, id=ID_WHATS_PLAYING)
         self.Bind(wx.EVT_MENU, self._on_toggle_duck, id=ID_DUCK)
@@ -1493,6 +1536,13 @@ class DropDeckFrame(wx.Frame):
         if not 0 <= index < C.TOTAL_SLOTS:
             return
         slot = self.board[index]
+        if slot.hidden:
+            # Taken off the board. Its key does nothing, which is the point of
+            # having taken it off, but silence with no explanation reads as a
+            # broken key.
+            self.note("%s %d has been removed from the board"
+                      % (slot.bank_short, slot.number))
+            return
 
         if not slot.is_assigned:
             self.assign_sound(slot)
@@ -1627,6 +1677,107 @@ class DropDeckFrame(wx.Frame):
             playing = self.mixer.is_playing(slot.index)
         button.refresh(playing)
 
+    # ------------------------------------------------ how many slots there are
+    #
+    # Twenty a bank is what the app ships with, not what everybody wants. Tony,
+    # 4 September 2026: "if someone only wants 10 slots, they can have only 10
+    # instead of 20. making it less cluster."
+    #
+    # Removing one hides it and NEVER renumbers the rest. That is the whole
+    # design: the digit map is years of muscle memory, so taking slot 5 away
+    # has to leave 6 on the 6 key. The slot keeps its sound, its name and both
+    # its hotkeys, and putting it back brings all of that with it, which is
+    # why nothing here asks whether you are sure.
+
+    def remove_slot(self, slot=None):
+        """Take one pad off the board. Nothing is lost and nothing moves."""
+        slot = slot or self._focused_slot()
+        if slot is None:
+            self.announce("Move to a sound button first")
+            return False
+        if slot.hidden:
+            return False
+        if len(self.board.visible_slots(slot.bank)) <= 1:
+            self.announce("That is the last slot in this bank. A bank with "
+                          "nothing in it would have nothing to come back to")
+            return False
+        # Move off it first: focus on a window about to be hidden goes
+        # nowhere, and a screen reader is then standing on nothing.
+        following = self._neighbour_of(slot)
+        slot.hidden = True
+        self.mixer.stop_slot(slot.index, fade_out=C.FADE_OUT_SFX)
+        page = self.pages[slot.bank]
+        page.refresh_visibility()
+        if following is not None:
+            following.SetFocus()
+        self.announce_help(
+            "%s %d removed. %d slot%s left in %s"
+            % (slot.bank_short, slot.number,
+               len(self.board.visible_slots(slot.bank)),
+               "" if len(self.board.visible_slots(slot.bank)) == 1 else "s",
+               self.board.bank_name(slot.bank)))
+        self._touch()
+        return True
+
+    def _neighbour_of(self, slot):
+        """The button to land on once ``slot`` goes. The next one, or the one
+        before it if it was the last."""
+        page = self.pages[slot.bank]
+        others = [button for button in page.buttons
+                  if not button.slot.hidden and button.slot is not slot]
+        if not others:
+            return None
+        after = [b for b in others if b.slot.number > slot.number]
+        return after[0] if after else others[-1]
+
+    def restore_slot(self, bank=None):
+        """Put one back, chosen from the ones taken off this bank."""
+        bank = bank or self._current_bank()
+        gone = self.board.hidden_slots(bank)
+        if not gone:
+            self.announce("No slots have been removed from %s"
+                          % self.board.bank_name(bank))
+            return False
+        labels = ["%d. %s" % (slot.number, slot.display_name) for slot in gone]
+        with wx.SingleChoiceDialog(
+                self, "Which slot would you like back?\n\n"
+                "It comes back where it was, with whatever was on it.",
+                "Put a slot back", labels) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return False
+            slot = gone[dialog.GetSelection()]
+        return self._restore(slot)
+
+    def _restore(self, slot):
+        slot.hidden = False
+        page = self.pages[slot.bank]
+        page.refresh_visibility()
+        self._sync_button(slot)
+        self._button_for(slot).SetFocus()
+        self.announce_help("%s %d is back" % (slot.bank_short, slot.number))
+        self._touch()
+        return True
+
+    def restore_all_slots(self, bank=None):
+        """Put every removed slot in this bank back."""
+        bank = bank or self._current_bank()
+        gone = self.board.hidden_slots(bank)
+        if not gone:
+            self.announce("Every slot in %s is already on the board"
+                          % self.board.bank_name(bank))
+            return 0
+        for slot in gone:
+            slot.hidden = False
+        self.pages[bank].refresh_visibility()
+        for slot in gone:
+            self._sync_button(slot)
+        self.announce_help("%d slot%s back in %s"
+                           % (len(gone), "" if len(gone) == 1 else "s",
+                              self.board.bank_name(bank)))
+        self._touch()
+        return len(gone)
+
     def _focused_action(self, action):
         # Not while somebody is typing. Delete and F2 reach here from the menu
         # bar's own accelerators, which no swapping of the frame's table can
@@ -1655,8 +1806,9 @@ class DropDeckFrame(wx.Frame):
          "properties": self.slot_properties}[action](slot)
 
     def assign_sound(self, slot):
-        path = audio_file_dialog(self, self.board.last_sound_dir,
-                                 f"Choose a sound for {slot.bank_short} {slot.number}")
+        path = audio_file_dialog(
+            self, self.board.last_sound_dir,
+            f"Choose a sound for {slot.bank_short} {slot.number}", frame=self)
         if not path:
             self.announce_help("Nothing chosen")
             return
@@ -1780,6 +1932,11 @@ class DropDeckFrame(wx.Frame):
                 self.announce_help("Properties closed, nothing changed")
                 return
             chosen = dialog.result
+            remove_wanted = dialog.remove_wanted
+        if remove_wanted:
+            # Everything else on the dialog is moot: the pad is coming off.
+            self.remove_slot(slot)
+            return
 
         changes = []
         name = chosen["name"]
@@ -1973,9 +2130,11 @@ class DropDeckFrame(wx.Frame):
         if view == VIEW_PLAYLIST:
             self.playlist_panel.focus_list()
         else:
-            slot = self.board[
-                (self._current_bank() - 1) * C.SLOTS_PER_BANK]
-            self._button_for(slot).SetFocus()
+            # The first slot of the bank may have been taken off the board,
+            # and focus on a hidden window goes nowhere at all.
+            button = self.pages[self._current_bank()].first_visible()
+            if button is not None:
+                button.SetFocus()
         self.announce(self._view_summary(view))
 
     def show_view_playlist(self):
@@ -2054,7 +2213,8 @@ class DropDeckFrame(wx.Frame):
 
     def _choose_drop(self, title):
         """A file for a drop. Returns a path, or None."""
-        return audio_file_dialog(self, self.board.last_sound_dir, title)
+        return audio_file_dialog(self, self.board.last_sound_dir, title,
+                                 frame=self)
 
     def insert_playlist_drop(self):
         """One drop, in front of whatever the list is sitting on."""
@@ -2737,6 +2897,10 @@ class DropDeckFrame(wx.Frame):
             menu.AppendSeparator()
             menu.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter")
             menu.Append(ID_CLEAR_FOCUSED, "&Clear slot")
+        menu.AppendSeparator()
+        menu.Append(ID_REMOVE_SLOT, "Re&move this slot from the board")
+        if self.board.hidden_slots(slot.bank):
+            menu.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...")
 
         self._context_slot = slot
         try:
