@@ -45,6 +45,26 @@ def load_audio(path, target_rate):
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
+def cue_tone(rate):
+    """One short pip, made rather than loaded.
+
+    Generated so there is no file to ship, no file to lose and nothing to
+    license. Shaped at both ends over a few milliseconds: a sine that starts
+    and stops at full amplitude is a click with a tone in the middle of it.
+    """
+    frames = max(1, int(C.CUE_TONE_SECONDS * rate))
+    t = np.arange(frames, dtype=np.float32) / float(rate)
+    wave = np.sin(2.0 * np.pi * C.CUE_TONE_HZ * t).astype(np.float32)
+    edge = max(1, int(C.CUE_TONE_EDGE * rate))
+    if frames > 2 * edge:
+        ramp = np.linspace(0.0, 1.0, edge, dtype=np.float32)
+        wave[:edge] *= ramp
+        wave[-edge:] *= ramp[::-1]
+    wave *= db_to_gain(C.CUE_LEVEL_DB)
+    return np.ascontiguousarray(np.tile(wave[:, None], (1, CHANNELS)),
+                                dtype=np.float32)
+
+
 class _Ring:
     """A thread-safe queue of audio blocks that hands out exact frame counts."""
 

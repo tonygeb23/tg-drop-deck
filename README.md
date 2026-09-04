@@ -84,6 +84,10 @@ takes you to it. The playlist has its own fader on `F7` and `F8`.
 Save a show as an M3U from the Playlist menu and open it again later, or in
 any other player.
 
+**A beep before a track ends**, on in Audio settings, at however many seconds
+you like. The countdown clock a sighted presenter watches. It plays where you
+hear yourself, so it stays out of the show.
+
 It plays `wav`, `mp3`, `m4a`, `flac`, `ogg`, `wma`, `aac`, `opus` and more, so
 an iTunes or Apple Music library goes straight in.
 

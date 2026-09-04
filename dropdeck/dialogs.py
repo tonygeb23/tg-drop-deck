@@ -671,6 +671,43 @@ class SettingsDialog(wx.Dialog):
         cross_row.Add(self.crossfade_ctrl, 0)
         outer.Add(cross_row, 0, wx.ALL, 10)
 
+        # The end of track cue. A sighted presenter watches a clock count
+        # down; this is that clock, for anybody who cannot.
+        outer.Add(wx.StaticText(self, label="Before a track ends"), 0,
+                  wx.LEFT | wx.TOP, 10)
+        outer.Add(wx.StaticText(self, label=(
+            "A short beep to tell you a playlist track is nearly over, so you\n"
+            "know when to be ready. You hear it wherever you hear yourself,\n"
+            "which is set in Microphone settings, so with headphones set up\n"
+            "there it stays out of the show.")),
+            0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        self.warn_on = wx.CheckBox(
+            self, label="&Beep before a playlist track ends")
+        self.warn_on.SetName("Beep before a playlist track ends")
+        self.warn_on.SetValue(bool(getattr(board, "warn_before_end",
+                                           C.DEFAULT_WARN_BEFORE_END)))
+        outer.Add(self.warn_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        warn_row = wx.BoxSizer(wx.HORIZONTAL)
+        warn_row.Add(wx.StaticText(self, label="How &many seconds before"), 0,
+                     wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.warn_seconds_ctrl = wx.SpinCtrl(
+            self, min=int(C.MIN_WARN_SECONDS), max=int(C.MAX_WARN_SECONDS),
+            initial=int(round(getattr(board, "warn_seconds",
+                                      C.DEFAULT_WARN_SECONDS))))
+        self.warn_seconds_ctrl.SetName("Seconds before the end to beep")
+        self.warn_seconds_ctrl.SetToolTip(
+            "How long before a track's music stops the beep sounds. Ten is a "
+            "usual answer. Nothing shorter than this plus a second gets one, "
+            "so a short ident does not beep the moment it starts.")
+        warn_row.Add(self.warn_seconds_ctrl, 0)
+        outer.Add(warn_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        self.warn_seconds_ctrl.Enable(self.warn_on.GetValue())
+        self.warn_on.Bind(
+            wx.EVT_CHECKBOX,
+            lambda e: (self.warn_seconds_ctrl.Enable(e.IsChecked()), e.Skip()))
+
         self.status = wx.StaticText(self, label=self._status_text())
         outer.Add(self.status, 0, wx.ALL, 10)
 
@@ -706,6 +743,14 @@ class SettingsDialog(wx.Dialog):
     @property
     def bed_fade_out(self):
         return round(float(self.fade_out_ctrl.GetValue()), 2)
+
+    @property
+    def warn_before_end(self):
+        return bool(self.warn_on.GetValue())
+
+    @property
+    def warn_seconds(self):
+        return float(self.warn_seconds_ctrl.GetValue())
 
     def _on_speech_level(self, _event):
         """The checkbox only means anything at the chattiest level.

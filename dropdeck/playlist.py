@@ -684,12 +684,19 @@ class PlaylistPlayer:
     often enough that the answer is never more than a tick late.
     """
 
-    def __init__(self, mixer, playlist, on_change=None):
+    def __init__(self, mixer, playlist, on_change=None, on_warning=None):
         self.mixer = mixer
         self.playlist = playlist
         #: Called with no arguments whenever the playing item changes, so a UI
         #: can relabel. Never called from inside the audio callback.
         self.on_change = on_change
+        #: Called once per track, this many seconds before its music stops.
+        #: A sighted presenter watches a clock; this is that clock. The player
+        #: does the arithmetic and says when; what it sounds like is somebody
+        #: else's business.
+        self.on_warning = on_warning
+        self.warn_seconds = 0.0
+        self._warned = False
         self.index = -1
         self.playing = False
         self.last_error = None
@@ -750,6 +757,7 @@ class PlaylistPlayer:
         self.index = index
         self._voice = voice
         self.playing = True
+        self._warned = False
         if self.on_change:
             self.on_change()
         return voice
@@ -830,6 +838,26 @@ class PlaylistPlayer:
         self.stop(fade_out=0.05, quiet=True)
         return self._start(target) is not None
 
+    def _check_warning(self, end, voice):
+        """Fire the end of track cue, once, when the time comes.
+
+        Nothing is warned about that is barely longer than the warning: a nine
+        second ident with a ten second warning would beep the moment it
+        started, which tells the presenter nothing and is just a noise.
+        """
+        if self._warned or not self.on_warning:
+            return
+        seconds = float(self.warn_seconds or 0.0)
+        if seconds <= 0 or not end or end <= seconds + 1.0:
+            return
+        if voice.position_seconds < end - seconds:
+            return
+        self._warned = True
+        try:
+            self.on_warning()
+        except Exception:
+            pass          # a cue that fails must not stop the show
+
     def _hand_over(self, following):
         """Start the next item and let the current one ride down under it.
 
@@ -898,6 +926,7 @@ class PlaylistPlayer:
         # Where the music stops, which is not the same as where the file
         # stops. A track nobody has measured yet behaves as it always did.
         end = track.playable_end
+        self._check_warning(end, voice)
         if not end:
             return False
         overlap = self.playlist.handover_at(self.index)

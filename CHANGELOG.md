@@ -55,6 +55,18 @@ full scale.
   has to answer them.
 - `Ctrl+Shift+L` puts the cursor on the track that is on air.
 
+### A beep before a track ends
+
+**Audio settings, Ctrl+P.** Turn it on, set how many seconds, ten by default.
+A short pip tells you a playlist track is nearly over. It is the countdown
+clock a sighted presenter watches.
+
+It plays out of the monitor output, the one Microphone settings picks, so with
+headphones set up there it stays out of the show. It is not ducked and it
+ducks nothing, because the moment you most need it is while you are talking.
+Off until you turn it on, and a track shorter than the warning does not get
+one.
+
 ### Saving a show
 
 **Playlist menu, Save the running order.** It writes an M3U, so the file opens

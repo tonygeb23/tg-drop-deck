@@ -1876,7 +1876,9 @@ class DropDeckFrame(wx.Frame):
 
     def _start_player(self):
         self.player = PlaylistPlayer(self.mixer, self.board.playlist,
-                                     on_change=self._playlist_moved)
+                                     on_change=self._playlist_moved,
+                                     on_warning=self._playlist_warning)
+        self._sync_warning()
         # Only runs while something is playing. A fiftieth of a second is
         # inaudible on a crossfade; the 250 ms pad timer would have put a
         # handover a quarter of a second out.
@@ -1891,6 +1893,37 @@ class DropDeckFrame(wx.Frame):
             self._player_timer.Stop()
         if not self.player.playing:
             self._player_timer.Stop()
+
+    def _sync_warning(self):
+        """Push the end of track cue setting onto the player."""
+        player = getattr(self, "player", None)
+        if player is None:
+            return
+        player.warn_seconds = (float(self.board.warn_seconds)
+                               if self.board.warn_before_end else 0.0)
+
+    def _playlist_warning(self):
+        """A track is nearly over. Pip, and put it in the status bar.
+
+        Out of the monitor output, which is the presenter's headphones when
+        one is set and the ordinary output when it is not. It is a cue for the
+        person running the show, so it has no business on the stream.
+
+        Not spoken. The whole point of a pip is that it lands in a gap between
+        words without taking one, which a sentence read out over the song
+        would not.
+        """
+        if not self.board.warn_before_end:
+            return
+        try:
+            self.mixer.play_cue()
+        except Exception as exc:                  # pragma: no cover
+            self.note("The end of track cue would not play: %s" % exc)
+            return
+        track = self.player.current
+        self.note("%d seconds left%s"
+                  % (int(round(self.board.warn_seconds)),
+                     " of %s" % track.display_name if track else ""))
 
     def _playlist_moved(self):
         """The player changed item. Say what is on, do NOT rewrite the rows.
@@ -2797,6 +2830,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_playlist_gain(board.playlist_volume)
         self.mixer.bed_fade_in = board.bed_fade_in
         self.mixer.bed_fade_out = board.bed_fade_out
+        self._sync_warning()
         self.stop_playlist(quiet=True)
         self.player.playlist = board.playlist
         self.player.index = -1
@@ -2898,6 +2932,8 @@ class DropDeckFrame(wx.Frame):
             self.board.speech_level = dialog.speech_level
             self.board.bed_fade_in = dialog.bed_fade_in
             self.board.bed_fade_out = dialog.bed_fade_out
+            self.board.warn_before_end = dialog.warn_before_end
+            self.board.warn_seconds = dialog.warn_seconds
             self.board.playlist.crossfade = dialog.crossfade
 
         self.mixer.ducking = self.board.ducking
@@ -2906,6 +2942,7 @@ class DropDeckFrame(wx.Frame):
         # its envelope - so this takes effect from the next press.
         self.mixer.bed_fade_in = self.board.bed_fade_in
         self.mixer.bed_fade_out = self.board.bed_fade_out
+        self._sync_warning()
         # The crossfade has two boxes now - one here and one under the running
         # order - and they are two views of one number. Whichever was used, the
         # other has to show it, or the app has two answers to one question.

@@ -675,6 +675,152 @@ check("saving an empty running order says so rather than writing a stub",
 
 
 # ---------------------------------------------------------------------------
+print("\nA beep before a track ends")
+#
+# Tony, 3 September 2026: "when there is 10 seconds left, or however many
+# someone wants to set, of a track that's currently playing in the playlist,
+# it can make a beep to give a warning. this can either be on or off." It is
+# the countdown clock a sighted presenter watches.
+
+from dropdeck.engine import cue_tone
+from dropdeck.mixer import Mixer as _Mixer
+
+pip = cue_tone(RATE)
+check("the pip is made rather than shipped as a file",
+      len(pip) == int(C.CUE_TONE_SECONDS * RATE) and pip.shape[1] == 2,
+      pip.shape)
+check("it starts and ends at silence, so it is a pip and not a click",
+      abs(float(pip[0][0])) < 1e-6 and abs(float(pip[-1][0])) < 1e-6,
+      (float(pip[0][0]), float(pip[-1][0])))
+check("at the level it says it is",
+      abs(float(np.abs(pip).max()) - 10 ** (C.CUE_LEVEL_DB / 20.0)) < 0.01,
+      float(np.abs(pip).max()))
+
+# When it goes off, measured against where the music stops.
+long_song = tone(os.path.join(tmp, "eight seconds.wav"), 8.0, 220.0)
+after = tone(os.path.join(tmp, "the one after.wav"), 4.0, 330.0)
+cued = Playlist(crossfade=0.0)
+cued.add([long_song, after])
+for track in cued:
+    track.read_metadata()
+box = _Mixer(open_stream=False, samplerate=RATE)
+box.playlist_gain = 1.0
+box.ducking = True                        # on, to prove the pip is not ducked
+fired = []
+player = PlaylistPlayer(box, cued, on_warning=box.play_cue)
+player.on_warning = lambda: (fired.append(round(player.position, 2)),
+                             box.play_cue())
+player.warn_seconds = 3.0
+player.play()
+window = int(0.02 * RATE)
+heard = []
+for i in range(int(9.0 * RATE / window)):
+    out = box.render(window)
+    player.tick()
+    if level_of(out, C.CUE_TONE_HZ) > 0.02:
+        heard.append(round(i * window / RATE, 2))
+check("it goes off the set number of seconds before the music stops",
+      len(fired) == 1 and abs(fired[0] - 5.0) < 0.1, fired)
+check("once, not once a tick", len(fired) == 1, len(fired))
+check("and it is really audible in the output",
+      heard and abs(heard[0] - 5.0) < 0.1, heard[:1])
+check("for as long as it is supposed to be",
+      heard and abs((heard[-1] - heard[0]) - C.CUE_TONE_SECONDS) < 0.05,
+      (heard[0], heard[-1]) if heard else None)
+box.close()
+
+# A short item does not get one. A nine second ident with a ten second
+# warning would beep the moment it started.
+short = Playlist(crossfade=0.0)
+short.add([tone(os.path.join(tmp, "an ident.wav"), 3.5, 550.0)])
+for track in short:
+    track.read_metadata()
+box = _Mixer(open_stream=False, samplerate=RATE)
+missed = []
+quick = PlaylistPlayer(box, short, on_warning=lambda: missed.append(1))
+quick.warn_seconds = 10.0
+quick.play()
+for _ in range(int(4.0 * RATE / window)):
+    box.render(window)
+    quick.tick()
+check("a track shorter than the warning gets no beep", not missed, missed)
+box.close()
+
+# Off means off.
+box = _Mixer(open_stream=False, samplerate=RATE)
+silent = []
+off = PlaylistPlayer(box, cued, on_warning=lambda: silent.append(1))
+off.warn_seconds = 0.0
+off.play()
+for _ in range(int(9.0 * RATE / window)):
+    box.render(window)
+    off.tick()
+check("and zero seconds means it never goes off at all", not silent, silent)
+box.close()
+
+# It must not duck the music, and must not be ducked under a drop.
+box = _Mixer(open_stream=False, samplerate=RATE)
+box.ducking = True
+box.bed_gain = 1.0
+box.play(0, tone(os.path.join(tmp, "a bed.wav"), 5.0, 200.0),
+         is_bed=True, loop=True)
+for _ in range(40):
+    box.render(512)
+before_pip = float(np.abs(box.render(2048)).max())
+box.play_cue()
+for _ in range(3):
+    box.render(512)
+during_pip = float(np.abs(box.render(2048)).max())
+check("the pip does not push the music down the way a drop does",
+      during_pip >= before_pip * 0.95, (before_pip, during_pip))
+check("and it is on a fader of its own, not the sound one",
+      box.bus_gain(C.BUS_CUE) == 1.0, box.bus_gain(C.BUS_CUE))
+box.close()
+
+# The setting, and the board.
+frame.board.warn_before_end = True
+frame.board.warn_seconds = 7.0
+frame._sync_warning()
+check("turning it on puts the number on the player",
+      frame.player.warn_seconds == 7.0, frame.player.warn_seconds)
+frame.board.warn_before_end = False
+frame._sync_warning()
+check("and turning it off takes it away",
+      frame.player.warn_seconds == 0.0, frame.player.warn_seconds)
+check("it ships off, so nobody gets a beep in a live show they did not ask "
+      "for", C.DEFAULT_WARN_BEFORE_END is False)
+
+from dropdeck.dialogs import SettingsDialog
+frame.board.warn_before_end = True
+frame.board.warn_seconds = 15.0
+settings = SettingsDialog(frame, frame.board, frame.mixer)
+check("the settings dialog names both controls for a screen reader",
+      settings.warn_on.GetName() == "Beep before a playlist track ends"
+      and settings.warn_seconds_ctrl.GetName()
+      == "Seconds before the end to beep")
+check("and opens on what the board says",
+      settings.warn_before_end is True and settings.warn_seconds == 15.0,
+      (settings.warn_before_end, settings.warn_seconds))
+check("the seconds box is live while the beep is on",
+      settings.warn_seconds_ctrl.IsEnabled())
+settings.warn_on.SetValue(False)
+event = wx.CommandEvent(wx.wxEVT_CHECKBOX, settings.warn_on.GetId())
+event.SetInt(0)
+settings.warn_on.GetEventHandler().ProcessEvent(event)
+check("and greyed out when it is off, rather than lying",
+      not settings.warn_seconds_ctrl.IsEnabled())
+check("the seconds cannot be set to something silly",
+      settings.warn_seconds_ctrl.GetMin() == int(C.MIN_WARN_SECONDS)
+      and settings.warn_seconds_ctrl.GetMax() == int(C.MAX_WARN_SECONDS))
+settings.Destroy()
+
+check("F1 help explains it", "beep" in C.KEYBOARD_HELP.lower()
+      and "Microphone settings" in C.KEYBOARD_HELP)
+frame.board.warn_before_end = False
+frame._sync_warning()
+
+
+# ---------------------------------------------------------------------------
 try:
     frame.stop_background_work()
 except Exception:

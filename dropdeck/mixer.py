@@ -16,8 +16,8 @@ import numpy as np
 import sounddevice as sd
 
 from . import constants as C
-from .engine import (CHANNELS, MemoryVoice, StreamVoice, db_to_gain, load_audio,
-                     probe)
+from .engine import (CHANNELS, MemoryVoice, StreamVoice, cue_tone, db_to_gain,
+                     load_audio, probe)
 
 #: Decoded audio we keep around so a repeat press is instant. Short sounds only.
 _CACHE_BUDGET_BYTES = 256 * 1024 * 1024
@@ -153,6 +153,10 @@ class Mixer:
         #: read(frames) that never blocks will do; see micinput.MicInput.
         self.monitor_source = None
 
+        #: The pip, made once per samplerate. See play_cue.
+        self._cue_tone = None
+        self._cue_frames = 0
+
         self._duck = 1.0
         self.peak = 0.0
         self.underruns = 0
@@ -271,6 +275,37 @@ class Mixer:
             self._voices.append(voice)
         return voice
 
+    def play_samples(self, slot_index, data, *, bus=None, gain=1.0,
+                     fade_in=0.0, fade_out=0.01, name=""):
+        """Play audio that is already in memory, at the rate this mixer runs.
+
+        For sounds this app makes rather than reads: the end of track pip is
+        the only one so far. Nothing here touches the decode cache, because
+        there is no file to cache.
+        """
+        voice = MemoryVoice(
+            data, slot_index=slot_index, gain=float(gain), loop=False,
+            name=name, fade_in=fade_in, fade_out=fade_out,
+            rate=self.samplerate, bus=bus or C.BUS_CUE)
+        with self._lock:
+            self._voices.append(voice)
+        return voice
+
+    def play_cue(self):
+        """The end of track pip. Returns the Voice, or None if it will not."""
+        try:
+            if self._cue_tone is None or len(self._cue_tone) != self._cue_frames:
+                self._cue_tone = cue_tone(self.samplerate)
+                self._cue_frames = len(self._cue_tone)
+            # Only ever one. Pressing on through a second one landing on top
+            # of the first would be a rattle, not a cue.
+            self.stop_slot(C.CUE_SLOT, fade_out=0.01, also_releasing=True)
+            return self.play_samples(C.CUE_SLOT, self._cue_tone,
+                                     bus=C.BUS_CUE, name="end of track")
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
     def stop_slot(self, slot_index, fade_out=None, also_releasing=False):
         """Fade out every voice belonging to one slot.
 
@@ -319,6 +354,11 @@ class Mixer:
 
     # ------------------------------------------------------------- levels ----
     def bus_gain(self, bus):
+        if bus == C.BUS_CUE:
+            # Its own level, and no fader. A cue you have turned the sound
+            # down on is a cue you will miss, and turning the sound down is
+            # the first thing anybody does while they are talking.
+            return 1.0
         return {C.BUS_SFX: self.sfx_gain,
                 C.BUS_BED: self.bed_gain,
                 C.BUS_PLAYLIST: self.playlist_gain}.get(bus, self.sfx_gain)
@@ -641,6 +681,16 @@ class MixerGroup:
         for mixer in self._mixers.values():
             mixer.monitor_source = None
         self.monitor_mixer.monitor_source = source
+
+    def play_cue(self):
+        """Out of the monitor output, which is where the presenter is.
+
+        The same output the microphone is monitored on, for the same reason:
+        it is what the person running the show hears and what the show does
+        not go to. With no separate monitor output set it is the ordinary
+        output, which is what somebody with one sound card wants.
+        """
+        return self.monitor_mixer.play_cue()
 
     def set_monitor_device(self, device):
         """Move monitoring to another output, opening it if need be."""

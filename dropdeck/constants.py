@@ -108,6 +108,10 @@ MAX_BANK_NAME = 32
 #: The three faders. A voice sits on exactly one of them, which decides both
 #: its level and how ducking treats it - see engine.Voice.is_ducked/is_loud.
 BUS_SFX, BUS_BED, BUS_PLAYLIST = "sfx", "bed", "playlist"
+#: A cue for the presenter, not part of the show. Neither ducked nor ducking:
+#: you especially need to hear a cue while you are talking, and a beep that
+#: pushed the music down would be worse than the beep.
+BUS_CUE = "cue"
 
 VOLUME_STEP = 0.05
 #: How long a fader move takes to land, in seconds. A glide, not a fade: it is
@@ -150,6 +154,39 @@ SEGUE_LEAD = 0.20
 #: clicking. Brian Hartgen: "The song is playing out in full and the second
 #: one is fading in. That is not crossfading."
 SEGUE_FADE_IN = 0.03
+
+# --------------------------------------------------- the end of a track ---
+#
+# A sighted presenter watches a clock count down. This is that clock. Tony,
+# 3 September 2026: "when there is 10 seconds left, or however many someone
+# wants to set, of a track that's currently playing in the playlist, it can
+# make a beep to give a warning."
+#
+# It goes to the MONITOR output, which is the presenter's headphones when one
+# is set in Microphone settings and the ordinary output when it is not. A cue
+# is for the person running the show and has no business on the stream, and
+# monitoring is the route this app already has for exactly that.
+#
+# Off until somebody turns it on. A beep nobody asked for, appearing in a live
+# show, is not a feature.
+DEFAULT_WARN_BEFORE_END = False
+DEFAULT_WARN_SECONDS = 10.0
+MIN_WARN_SECONDS = 3.0
+MAX_WARN_SECONDS = 60.0
+
+#: One pip. A thousand hertz because that is the tone every studio line up and
+#: every talkback panel uses, so it does not sound like part of the music.
+#: Short, and shaped at both ends so it is a pip rather than a click.
+CUE_TONE_HZ = 1000.0
+CUE_TONE_SECONDS = 0.16
+CUE_TONE_EDGE = 0.01
+#: How loud, in decibels below full scale. Loud enough to hear over a song,
+#: quiet enough not to make anybody jump at two in the morning.
+CUE_LEVEL_DB = -14.0
+
+#: Where the pip plays. Above the eighty pads and above the two playlist
+#: decks, for the same reason they are: the mixer needs no special case.
+CUE_SLOT = TOTAL_SLOTS + 2
 
 #: How often the player is asked whether a cue is due, in milliseconds. A
 #: crossfade landing within a twentieth of a second is inaudible; the 250 ms
@@ -306,6 +343,15 @@ THE PLAYLIST - a running order that cues itself
   Playlist menu             Add files, drops every so many songs, crossfade
                             length, tick or untick everything, next,
                             previous, stop, save, open, clear
+
+A BEEP BEFORE A TRACK ENDS
+  Audio settings, Ctrl+P. Turn it on and set how many seconds, ten by
+  default. A short pip tells you a playlist track is nearly over, which is
+  the countdown clock a sighted presenter watches.
+  You hear it wherever you hear yourself, set in Microphone settings, so
+  with headphones set up there it stays out of the show.
+  It is off until you turn it on, and a track shorter than the warning does
+  not get one.
 
 SAVING A RUNNING ORDER
   Playlist menu, Save the running order, writes it as an M3U playlist file.

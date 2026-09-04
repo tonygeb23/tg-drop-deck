@@ -18,6 +18,17 @@ from .slot import Slot
 FORMAT_VERSION = 2
 
 
+def _warn_seconds(value):
+    """How long before the end to beep, off disk. Clamped, never rejected."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return C.DEFAULT_WARN_SECONDS
+    if seconds != seconds:               # NaN
+        return C.DEFAULT_WARN_SECONDS
+    return max(C.MIN_WARN_SECONDS, min(C.MAX_WARN_SECONDS, seconds))
+
+
 def _fade(value, fallback):
     """A bed fade off disk, in seconds, or ``fallback`` if it is not a number.
 
@@ -114,6 +125,11 @@ class Board:
         #: are on this app owns those combinations across the whole machine,
         #: so it has to be something the user turned on deliberately.
         self.global_hotkeys_on = False
+        #: The end of track cue: whether it beeps, and how long before the
+        #: end. Off until somebody asks for it, because a beep nobody asked
+        #: for turning up in a live show is not a feature.
+        self.warn_before_end = C.DEFAULT_WARN_BEFORE_END
+        self.warn_seconds = C.DEFAULT_WARN_SECONDS
         self.last_sound_dir = ""
         #: Where running orders were last saved or opened. Its own, because a
         #: show's M3U and a show's sounds are rarely in the same folder.
@@ -291,6 +307,8 @@ class Board:
             "bank_devices": {str(k): v for k, v in self.bank_devices.items()},
             "announce_playback": bool(self.announce_playback),
             "speech_level": self.speech_level,
+            "warn_before_end": bool(self.warn_before_end),
+            "warn_seconds": float(self.warn_seconds),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -347,6 +365,9 @@ class Board:
             if 1 <= bank <= C.BANK_COUNT and isinstance(value, str) and value.strip():
                 board.bank_names[bank] = value.strip()[:C.MAX_BANK_NAME]
         board.global_hotkeys_on = bool(data.get("global_hotkeys_on", False))
+        board.warn_before_end = bool(data.get("warn_before_end",
+                                              C.DEFAULT_WARN_BEFORE_END))
+        board.warn_seconds = _warn_seconds(data.get("warn_seconds"))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")
