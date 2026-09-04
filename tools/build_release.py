@@ -127,6 +127,11 @@ def build_executable():
         "--collect-all", "soxr",
         "--collect-all", "accessible_output2",
         "--collect-all", "sounddevice",
+        # PyAV carries FFmpeg's DLLs in a folder of its own beside the
+        # package, which PyInstaller finds only when told to collect the lot.
+        # It is what plays an m4a; without it that whole family is refused.
+        "--collect-all", "av",
+        "--collect-all", "mutagen",
         # Only the tools need these. Leaving them out saves about 60 MB.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",

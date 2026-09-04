@@ -1,5 +1,99 @@
 # Changelog
 
+## 2.6.0, 3 September 2026
+
+The playlist, rebuilt around Brian Hartgen's report. He recorded a show with
+the soundboard and called it an absolute joy, then took the playlist apart.
+Eight things. This is all eight.
+
+### The running order is a proper list now
+
+**Your screen reader says whether a track is ticked.** That was the
+deal-breaker. The old control was a wxCheckListBox, which on Windows is a list
+box with a tick painted on it: MSAA never knew the tick was there, so nothing
+was announced when you arrowed through and nothing was announced when you
+pressed Space. It is a list view with real check boxes now, and Windows
+announces them without any help from the app.
+
+**Six columns instead of one sentence.** Title, artist, song or drop, length,
+when it starts, and its own crossfade if you have given it one. Each one is a
+cell your screen reader can read on its own.
+
+**The artist and the title come out of the file's tags.** Not the file name.
+A file with no tags still falls back to its name, and a track you have renamed
+yourself still wins over both.
+
+**No more numbers in front of every row, so first letter navigation works.**
+Press T and you land on the next title starting with T, the way any Windows
+list works. In a three hour running order that is the only way to find
+anything. The position is still announced, because a list item always
+announces its position.
+
+**Enter plays from the item you are on.** It never did. A list box on a frame
+never receives Return at all, so the handler that was there was never called.
+
+**"Starts at" always has a value.** The first track said "starts at" and then
+stopped, because zero seconds formatted as nothing. It says "at the top".
+
+**A row no longer says "skipped".** The tick box says it, and the app saying
+it too was two announcements for one keystroke.
+
+### The crossfade
+
+**You can type into the crossfade box.** The pads are on bare digits and a
+frame's keyboard map is consulted before whatever has focus, so every digit
+you typed fired a sound instead of going into the box. The pad keys now stand
+down while a text box has focus, and every key with a modifier still works:
+Ctrl+V still pastes and Escape still stops everything.
+
+**The crossfade is a crossfade.** Two things were wrong.
+
+The cue was taken from the file's last sample. An MP3 routinely carries a
+second or two of digital silence at the end, so most of a three second
+crossfade happened inside that silence: the outgoing song finished, and the
+incoming one was left coming up on its own. The end of the music is now
+measured, once, in the background, and the cue is taken from there.
+
+And the incoming track ramped up from nothing. It comes in at level now and
+the outgoing one rides down under it, which is what a segue is on the radio.
+
+**Spots butt up against the song behind them.** A drop with no crossfade used
+to wait for its own last sample, then for the next file to open, and you heard
+the gap. There is a fifth of a second of overlap now, always.
+
+**The output rounds off instead of sawing itself flat.** Two songs at once are
+louder than one. Where the sum went over full scale it used to be clipped
+square, which crackles; the top of the wave is bent now instead.
+
+### Knowing what is on air
+
+Brian asked for these at the end, as things that could come later. They are
+here.
+
+- The window title carries the track that is playing.
+- `Ctrl+L` says which of how many it is and how much of it is left.
+- `Ctrl+Shift+L` puts the cursor on the track that is on the air.
+
+### m4a, and everything else Apple and Windows produce
+
+**The app takes m4a files.** It took none at all before: libsndfile, which
+does all the decoding here, has no MPEG-4 support, so an m4a was refused at
+the door. FFmpeg is bundled now and picks up what libsndfile will not:
+`m4a`, `m4b`, `mp4`, `aac`, `wma`, `opus`, `webm` and more. The download is
+about 26 MB bigger for it. Everything that already worked still goes through
+libsndfile, which is faster.
+
+### Also fixed
+
+The pad labels stopped being refreshed the moment the playlist went on air.
+The refresh walked every slot the mixer was playing, and the playlist's two
+decks are numbered above the eighty pads, so it raised on one of them from
+inside a timer and went on raising it every quarter of a second.
+
+Delete pressed inside the crossfade box removed a track from the running
+order. It does nothing now.
+
+
 ## 2.5.2, 2 September 2026
 
 Text only. Nothing you press has changed.

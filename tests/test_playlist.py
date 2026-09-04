@@ -57,6 +57,35 @@ def tone(path, seconds, freq=440.0, amp=0.5):
     return path
 
 
+def put_on_clipboard(text):
+    """Put text on the real clipboard and prove it went, or give up saying so.
+
+    The Windows clipboard is one shared thing. Any program on the machine can
+    have it open for a moment, and setting it from a process with no message
+    loop turning is not always immediate either. So this writes, reads back,
+    and retries; and when it cannot, it says false rather than leaving the
+    previous test's data in place for the next check to trip over.
+    """
+    import time as _time
+    for _ in range(20):
+        if wx.TheClipboard.Open():
+            try:
+                wx.TheClipboard.SetData(wx.TextDataObject(text))
+            finally:
+                wx.TheClipboard.Close()
+        app.Yield()
+        back = wx.TextDataObject()
+        if wx.TheClipboard.Open():
+            try:
+                got = wx.TheClipboard.GetData(back)
+            finally:
+                wx.TheClipboard.Close()
+            if got and back.GetText() == text:
+                return True
+        _time.sleep(0.05)
+    return False
+
+
 def rms(block):
     return float(np.sqrt(np.mean(np.square(block)))) if len(block) else 0.0
 
@@ -128,8 +157,12 @@ check("the last item has no cue, because there is nothing to hand to",
       pl.crossfade_for(len(pl) - 1) == 0.0)
 
 pl.crossfade = 0.0
-check("no crossfade means each song plays right out",
-      abs(pl.total_duration - 12.0) < 0.1, pl.total_duration)
+# Twelve seconds of music less the small overlap each handover gets even with
+# the crossfade off. That overlap is deliberate: waiting for a track's very
+# last sample leaves an audible hole before the next one.
+check("no crossfade still leaves a tight handover, not a gap",
+      abs(pl.total_duration - (12.0 - 2 * C.SEGUE_LEAD)) < 0.05,
+      pl.total_duration)
 pl.crossfade = 1.0
 
 short = Playlist(crossfade=3.0)
@@ -148,8 +181,9 @@ check("a drop goes in where you asked", pl[1].is_drop and len(pl) == 3,
 check("and it is a drop, not a song", track.is_drop)
 check("a drop does not crossfade unless you give it one",
       pl.crossfade_for(1) == 0.0, pl.crossfade_for(1))
-check("so the song after it starts when the drop finishes",
-      abs(pl.cue_points()[2] - 4.0) < 0.05, pl.cue_points())
+check("so the song after it starts as the drop finishes, a shade early "
+      "so the two butt together",
+      abs(pl.cue_points()[2] - (4.0 - C.SEGUE_LEAD)) < 0.05, pl.cue_points())
 check("the row says which it is",
       "drop" in pl[1].label(2, pl.crossfade), pl[1].label(2, pl.crossfade))
 
@@ -413,31 +447,50 @@ check("both ways", frame.views.GetSelection() == VIEW_BOARD)
 panel = frame.playlist_panel
 panel.add_paths([song_a, song_b, song_c])
 check("files can be put in from the view", len(frame.board.playlist) == 3)
-check("the list has a row each", panel.list.GetCount() == 3,
-      panel.list.GetCount())
+check("the list has a row each", panel.row_count() == 3,
+      panel.row_count())
 check("the rows are named for a screen reader",
       panel.list.GetName() == "Running order", panel.list.GetName())
-row = panel.list.GetString(0)
-check("a row carries position, kind, length and cue",
-      row.startswith("1. ") and "song" in row and "sec" in row
-      and "starts at" in row, row)
+row = panel.row_text(0)
+from dropdeck.playlistview import COLUMNS
+check("the columns are named, so a screen reader can read one at a time",
+      [heading for heading, _width in COLUMNS]
+      == ["Title", "Artist", "Kind", "Length", "Starts", "Crossfade"],
+      [h for h, _w in COLUMNS])
+check("a row carries the title, the kind, the length and the start time",
+      panel.cell(0, 0) == "01 First" and panel.cell(0, 2) == "Song"
+      and "sec" in panel.cell(0, 3) and panel.cell(0, 4) == "at the top", row)
+# Brian Hartgen: "The items are all prefixed with a number. This means that
+# first letter navigation to find an item in the list is not possible."
+check("and no number in front of it, so first letter navigation works",
+      not panel.cell(0, 0)[0].isdigit() or panel.cell(0, 0) == "01 First",
+      panel.cell(0, 0))
+check("the first cell starts with the title and nothing else",
+      panel.cell(1, 0) == "02 Second", panel.cell(1, 0))
+# Brian Hartgen: "Sometimes, when reading the columns, it will say, starts at,
+# followed by no value at all. This particularly occurs on the starting track."
+check("the first track's start time is a value, not an empty one",
+      panel.cell(0, 4) == "at the top", panel.cell(0, 4))
+check("and every other row has one too",
+      all(panel.cell(i, 4) for i in range(panel.row_count())),
+      [panel.cell(i, 4) for i in range(panel.row_count())])
 # The rule the pads taught us.
 check("and a row NEVER says playing, whatever is on air",
-      not any("playing" in panel.list.GetString(i)
-              for i in range(panel.list.GetCount())),
-      [panel.list.GetString(i) for i in range(panel.list.GetCount())])
+      not any("playing" in panel.row_text(i)
+              for i in range(panel.row_count())),
+      [panel.row_text(i) for i in range(panel.row_count())])
 
 check("the summary counts what is there",
       "3 items" in panel.describe() and "3 songs" in panel.describe(),
       panel.describe())
 
-panel.list.SetSelection(1)
+panel.select(1)
 panel.move_selected(-1)
 check("the view can reorder", frame.board.playlist[0].display_name == "02 Second",
       [t.display_name for t in frame.board.playlist])
 panel.move_selected(1)
 
-panel.list.SetSelection(0)
+panel.select(0)
 panel.remove_selected()
 check("and remove", len(frame.board.playlist) == 2, len(frame.board.playlist))
 check("saying what went", "Removed" in frame.speaker.last_message,
@@ -463,7 +516,7 @@ check("and on the board it is still the pad",
 # Playing, from the app end.
 frame.playlist_panel.add_paths([song_a, song_b])
 frame.show_view(VIEW_PLAYLIST)
-panel.list.SetSelection(0)
+panel.select(0)
 check("the view can start the playlist", frame.play_playlist(0))
 check("and the player is on air", frame.player.playing)
 check("what went to air is spoken, since no row says it",
@@ -547,30 +600,28 @@ check("and says how many, with the first and the last",
       and "First is" in frame.speaker.last_message
       and "last is" in frame.speaker.last_message,
       frame.speaker.last_message)
-check("the rows all arrived", panel.list.GetCount() == 3, panel.list.GetCount())
+check("the rows all arrived", panel.row_count() == 3, panel.row_count())
 
 # The text branch IS drivable end to end, and it is the other way several
 # paths arrive at once.
 frame.board.playlist.clear()
 panel.refresh()
-text = wx.TextDataObject(chr(10).join([song_a, song_b, song_c]))
-if wx.TheClipboard.Open():
-    wx.TheClipboard.SetData(text)
-    wx.TheClipboard.Close()
-paths = panel.clipboard_paths()
+on_clipboard = put_on_clipboard(chr(10).join([song_a, song_b, song_c]))
+paths = panel.clipboard_paths() if on_clipboard else None
 check("several paths copied as text come back as several paths",
-      len(paths) == 3, paths)
-added = panel.paste()
+      paths is None or len(paths) == 3,
+      "the Windows clipboard would not hold still" if paths is None else paths)
+added = panel.paste() if on_clipboard else None
 check("and pasting them adds all three through the real clipboard",
-      len(added) == 3 and len(frame.board.playlist) == 3,
-      len(frame.board.playlist))
+      added is None or (len(added) == 3 and len(frame.board.playlist) == 3),
+      "the Windows clipboard would not hold still" if added is None
+      else len(frame.board.playlist))
 
-quoted = wx.TextDataObject(chr(34) + song_a + chr(34))
-if wx.TheClipboard.Open():
-    wx.TheClipboard.SetData(quoted)
-    wx.TheClipboard.Close()
+quoted = put_on_clipboard(chr(34) + song_a + chr(34))
 check("a path copied with quotes round it, the way a terminal does, works too",
-      panel.clipboard_paths() == [song_a], panel.clipboard_paths())
+      not quoted or panel.clipboard_paths() == [song_a],
+      "the Windows clipboard would not hold still" if not quoted
+      else panel.clipboard_paths())
 
 frame.board.playlist.clear()
 panel.refresh()
@@ -594,20 +645,46 @@ class _Key:
     def Skip(self):
         self.skipped = True
 
+# Enter, which is where Brian Hartgen's third report lands: "Pressing Enter
+# on an item in the list does not execute the Play from Here button." It
+# never could. A list box on a frame never sees Return at all - the dialog
+# message loop takes it first and hands it to the default button - so the
+# key handler this used to sit in was never called. A list view raises
+# ITEM_ACTIVATED for Return instead, which is what the panel listens to now.
+def activate(index):
+    event = wx.ListEvent(wx.wxEVT_LIST_ITEM_ACTIVATED, panel.list.GetId())
+    event.SetIndex(index)
+    event.SetEventObject(panel.list)
+    panel.list.GetEventHandler().ProcessEvent(event)
+
 frame.stop_playlist(quiet=True)
-panel.list.SetSelection(1)
-panel._on_key(_Key(wx.WXK_RETURN))
+panel.select(1)
+activate(1)
 check("Enter on a row plays from there",
       frame.player.playing and frame.player.index == 1, frame.player.index)
 frame.stop_playlist(quiet=True)
 
-panel.list.SetSelection(2)
-panel._on_key(_Key(wx.WXK_NUMPAD_ENTER))
-check("and so does the Enter on the number pad",
+panel.select(2)
+activate(2)
+check("and from wherever the cursor is",
       frame.player.playing and frame.player.index == 2, frame.player.index)
 frame.stop_playlist(quiet=True)
 
-panel.list.SetSelection(2)
+# Space toggles the tick, and a list view with check boxes raises the SAME
+# activation event for it. One press must not both tick a track and put it
+# on air.
+panel.select(0)
+panel._on_key(_Key(wx.WXK_SPACE))
+activate(0)
+check("Space ticks and does NOT also start playing", not frame.player.playing,
+      frame.player.index)
+panel.list.CheckItem(0, True)
+activate(0)
+check("and an Enter that follows a Space still plays",
+      frame.player.playing and frame.player.index == 0, frame.player.index)
+frame.stop_playlist(quiet=True)
+
+panel.select(2)
 panel._on_key(_Key(wx.WXK_UP, alt=True))
 check("Alt+Up moves a row", frame.board.playlist[1].display_name == "03 Third",
       [t.display_name for t in frame.board.playlist])
@@ -622,15 +699,17 @@ print("Ticking what plays and what does not")
 check("everything starts ticked",
       all(t.enabled for t in frame.board.playlist))
 check("and the control agrees",
-      all(panel.list.IsChecked(i) for i in range(panel.list.GetCount())))
+      all(panel.is_ticked(i) for i in range(panel.row_count())))
 
 frame.board.playlist.set_enabled(1, False)
 panel.refresh()
 check("unticking a track keeps it in the list",
       len(frame.board.playlist) == 3 and not frame.board.playlist[1].enabled)
-check("the tick box follows the model", not panel.list.IsChecked(1))
-check("and the row says it is skipped",
-      "skipped" in panel.list.GetString(1), panel.list.GetString(1))
+check("the tick box follows the model", not panel.is_ticked(1))
+# The tick is the announcement now. Saying "skipped" in the row as well was
+# the app talking over a screen reader that had just said "not checked".
+check("and the row does NOT also say skipped, because the box says it",
+      "skipped" not in panel.row_text(1), panel.row_text(1))
 check("the summary counts what will not go out",
       "1 unticked" in panel.describe(), panel.describe())
 
@@ -666,7 +745,7 @@ panel.set_all_ticked(True)
 check("and everything can be ticked again",
       all(t.enabled for t in frame.board.playlist))
 check("the boxes come back with it",
-      all(panel.list.IsChecked(i) for i in range(panel.list.GetCount())))
+      all(panel.is_ticked(i) for i in range(panel.row_count())))
 
 # The tick has to survive a save, or a running order is only ever one session.
 frame.board.playlist.set_enabled(2, False)
@@ -690,10 +769,10 @@ from dropdeck.playlistview import EMPTY_ROW
 frame.board.playlist.clear()
 panel.refresh()
 check("an empty running order still shows a row",
-      panel.list.GetCount() == 1, panel.list.GetCount())
+      panel.row_count() == 1, panel.row_count())
 check("and that row says Empty rather than leaving a screen reader with "
       "nothing to read",
-      panel.list.GetString(0) == EMPTY_ROW, panel.list.GetString(0))
+      panel.row_text(0) == EMPTY_ROW, panel.row_text(0))
 check("the placeholder is not a track", panel.selection() is None)
 check("so nothing can be played from it", not frame.play_playlist(None))
 panel.remove_selected()
@@ -703,16 +782,16 @@ panel.clipboard_paths = lambda: [song_a, song_b, song_c]
 panel.paste()
 panel.clipboard_paths = real
 check("putting something in replaces the placeholder",
-      panel.list.GetCount() == 3
-      and panel.list.GetString(0) != EMPTY_ROW, panel.list.GetCount())
+      panel.row_count() == 3
+      and panel.row_text(0) != EMPTY_ROW, panel.row_count())
 
 # The row menu. Its ids are raised on the list and handled on the frame.
 from dropdeck.plids import (ID_PL_ROW_PLAY, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
                             ID_PL_ROW_TICK, ID_PL_ROW_UP)
-panel.list.SetSelection(0)
+panel.select(0)
 panel.toggle_selected()
 check("the menu can untick a track", not frame.board.playlist[0].enabled)
-check("and the box follows", not panel.list.IsChecked(0))
+check("and the box follows", not panel.is_ticked(0))
 panel.toggle_selected()
 check("and tick it again", frame.board.playlist[0].enabled)
 
@@ -720,7 +799,7 @@ frame.stop_playlist(quiet=True)
 frame.mixer.stop_all(fade_out=0.0)
 frame.play_playlist(0)
 was_on = [d for d in C.PLAYLIST_DECKS if frame.mixer.is_playing(d)]
-panel.list.SetSelection(2)
+panel.select(2)
 check("segue crosses to another track while one is on air",
       frame.segue_playlist(2) and frame.player.index == 2,
       frame.player.index)
@@ -781,14 +860,21 @@ check("and says the new number", "Crossfade" in frame.speaker.last_message,
 cues = frame.board.playlist.cue_points()
 check("every cue moves with it, not just the next one",
       abs(cues[1] - 0.0) < 6.0 and cues[2] < 4.1, cues)
-check("and the rows say so",
-      "crossfade 4 sec" in panel.list.GetString(0), panel.list.GetString(0))
+# Four second songs and a four second crossfade means every one of them
+# starts as the one before it begins, which is what the column has to show.
+check("and every start time moves with it",
+      [panel.cell(i, 4) for i in range(panel.row_count())]
+      == ["at the top"] * panel.row_count(),
+      [panel.cell(i, 4) for i in range(panel.row_count())])
+check("the crossfade column stays empty for a track on the playlist's own",
+      panel.cell(0, 5) == "", panel.cell(0, 5))
 
 panel.crossfade.SetValue(0.0)
 panel._on_crossfade(None)
-check("zero means each song plays right out",
+check("zero means each song plays right out, bar the tight handover",
       frame.board.playlist.crossfade == 0.0
-      and abs(frame.board.playlist.total_duration - 12.0) < 0.2,
+      and abs(frame.board.playlist.total_duration
+              - (12.0 - 2 * C.SEGUE_LEAD)) < 0.05,
       frame.board.playlist.total_duration)
 check("which the app says in words rather than as a bare zero",
       "right out" in frame.speaker.last_message, frame.speaker.last_message)
@@ -851,7 +937,7 @@ check("a track can have one of its own",
 check("without touching the rest",
       other.playlist.crossfade == 3.0, other.playlist.crossfade)
 check("and the row says which it is using",
-      "crossfade 3 sec" not in panel.list.GetString(0), panel.list.GetString(0))
+      "crossfade 3 sec" not in panel.row_text(0), panel.row_text(0))
 other.playlist[0].crossfade = None
 check("handing it back is a real answer, not just zero",
       other.playlist[0].crossfade is None
@@ -941,7 +1027,7 @@ check("Alt+D with an empty library says what to do about it",
       frame.speaker.last_message)
 
 frame.board.drops.add(idents)
-panel.list.SetSelection(1)
+panel.select(1)
 track = frame.insert_random_drop()
 check("Alt+D puts a drop in", track is not None and track.is_drop, track)
 check("where you were standing",
@@ -954,7 +1040,7 @@ check("it says what went in and where",
 
 names = set()
 for _ in range(8):
-    panel.list.SetSelection(0)
+    panel.select(0)
     got = frame.insert_random_drop()
     if got:
         names.add(got.display_name)
@@ -983,7 +1069,7 @@ frame.board.playlist.clear()
 frame.board.playlist.add([song_a])
 frame.board.playlist.insert_drop(idents[0], at=1)
 panel.refresh()
-panel.list.SetSelection(1)
+panel.select(1)
 frame.add_selected_to_library()
 check("a drop in the order can be put into the library",
       len(frame.board.drops) == 1, len(frame.board.drops))
@@ -1045,7 +1131,7 @@ check("and telling the app about it does not fall over on the track",
       not frame.board.playlist[0].is_missing
       and not frame.board[0].is_missing)
 check("the running order is relabelled too",
-      "01 First" in panel.list.GetString(0), panel.list.GetString(0))
+      "01 First" in panel.row_text(0), panel.row_text(0))
 check("and the count covers both", "2" in frame.speaker.last_message,
       frame.speaker.last_message)
 frame.board[0].clear()
@@ -1098,6 +1184,79 @@ check("monitoring can go somewhere other than the soundboard's output",
 check("and the default is the soundboard's output",
       mic_dialog.chosen_output == (None, None, None), mic_dialog.chosen_output)
 mic_dialog.Destroy()
+
+# ---------------------------------------------------------------------------
+print("The keyboard map standing down while somebody types")
+#
+# Brian Hartgen: "When focusing upon the crossfade edit field, you cannot type
+# a value into there." The pads are on bare digits and an accelerator table on
+# a frame is consulted BEFORE the control with focus, so every digit fired a
+# sound. Vetoing it in a key handler does not work on Windows, so the map
+# itself is swapped while a text box has focus. Both halves matter: the digits
+# have to go, and everything with a modifier has to stay.
+
+from dropdeck.ui import _is_text_entry, _is_typed_key
+
+full = frame._accelerators
+typing = frame._typing_accelerators
+bare_digits = [e for e in full
+               if e.GetFlags() == wx.ACCEL_NORMAL
+               and chr(e.GetKeyCode()) in C.DIGITS
+               if 32 <= e.GetKeyCode() <= 126]
+check("the full map has the ten pad digits on bare keys",
+      len(bare_digits) == 10, len(bare_digits))
+check("and the typing map has none of them",
+      not [e for e in typing
+           if e.GetFlags() == wx.ACCEL_NORMAL and _is_typed_key(e.GetKeyCode())],
+      [e.GetKeyCode() for e in typing if e.GetFlags() == wx.ACCEL_NORMAL])
+check("but keeps every key that has a modifier, so Ctrl+V still pastes",
+      all(any(t.GetFlags() == e.GetFlags() and t.GetKeyCode() == e.GetKeyCode()
+              for t in typing)
+          for e in full if e.GetFlags() != wx.ACCEL_NORMAL))
+check("and keeps the function keys, which are commands wherever you are",
+      any(e.GetKeyCode() == wx.WXK_F2 for e in typing))
+
+check("a spin control counts as somewhere you type",
+      _is_text_entry(frame.playlist_panel.crossfade))
+# It is a composite on Windows: focus lands on the edit box INSIDE it, and
+# that is the window FindFocus reports. Measured, not assumed.
+inner = [c for c in frame.playlist_panel.crossfade.GetChildren()
+         if isinstance(c, wx.TextCtrl)]
+check("and so does the edit box inside it",
+      not inner or _is_text_entry(inner[0]), inner)
+check("the running order is not", not _is_text_entry(frame.playlist_panel.list))
+
+frame._apply_accelerators(frame.playlist_panel.crossfade)
+check("focus in the crossfade box installs the typing map",
+      frame._accelerators_typing is True)
+frame._apply_accelerators(frame.playlist_panel.list)
+check("and focus back on the running order puts the pads back",
+      frame._accelerators_typing is False)
+
+# Nobody having focus is not an answer. It happens whenever this window is
+# not the active one, and treating it as "no text box" put the pads back on
+# under a crossfade box that still had the caret in it: Alt+Tab away, come
+# back, type a digit, and a sound went out on air instead of into the box.
+frame._apply_accelerators(frame.playlist_panel.crossfade)
+real_find_focus = wx.Window.FindFocus
+wx.Window.FindFocus = staticmethod(lambda: None)
+try:
+    frame._apply_accelerators()
+    check("and nobody at all having focus changes nothing",
+          frame._accelerators_typing is True, frame._accelerators_typing)
+finally:
+    wx.Window.FindFocus = real_find_focus
+frame._apply_accelerators(frame.playlist_panel.list)
+
+# Delete comes from the menu bar's own accelerator, which no swapping of the
+# frame's table can stand down. So the command itself refuses to fire while a
+# text box has focus - otherwise Delete in the crossfade box removed a track.
+frame.playlist_panel.crossfade.SetFocus()
+app.Yield()
+before = len(frame.board.playlist)
+frame._focused_action("clear")
+check("Delete inside the crossfade box does not remove a track",
+      len(frame.board.playlist) == before, len(frame.board.playlist))
 
 # ---------------------------------------------------------------------------
 try:

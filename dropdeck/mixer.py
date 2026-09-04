@@ -63,6 +63,28 @@ def describe_device(device):
         return "unknown device"
 
 
+def _soft_clip(mix):
+    """Round off anything past the threshold instead of chopping it square.
+
+    A crossfade sums two full level songs, and two full level songs are louder
+    than one. The old answer was np.clip, which is a right angle: the moment
+    the sum goes over, the waveform is sawn flat and what you hear is a crackle
+    on every loud beat of the overlap. This bends the top instead. Everything
+    below the threshold is untouched, so quiet material is bit for bit what it
+    was, and nothing can ever leave here past full scale.
+
+    In place, and only called on a block that actually needs it.
+    """
+    knee = 1.0 - C.SOFT_CLIP_FROM
+    over = np.abs(mix) > C.SOFT_CLIP_FROM
+    if not over.any():
+        return
+    values = mix[over]
+    signs = np.sign(values)
+    excess = (np.abs(values) - C.SOFT_CLIP_FROM) / knee
+    mix[over] = signs * (C.SOFT_CLIP_FROM + knee * np.tanh(excess))
+
+
 class DuckBus:
     """Which outputs currently have something loud on them.
 
@@ -386,8 +408,8 @@ class Mixer:
 
         peak = float(np.abs(mix).max()) if frames else 0.0
         self.peak = peak
-        if peak > 1.0:
-            np.clip(mix, -1.0, 1.0, out=mix)
+        if peak > C.SOFT_CLIP_FROM:
+            _soft_clip(mix)
 
         if any(v.finished for v in voices):
             self._reap()

@@ -14,13 +14,13 @@ import threading
 from collections import deque
 
 import numpy as np
-import soundfile as sf
 import soxr
 
+from . import audiofile
 from . import constants as C
+from .audiofile import CHANNELS, to_stereo as _to_stereo
 
-CHANNELS = 2
-_DTYPE = "float32"
+_DTYPE = audiofile.DTYPE
 
 #: How far ahead a streaming voice reads, in seconds. Enough to ride out a
 #: sluggish disk without making the first block late.
@@ -34,26 +34,12 @@ def db_to_gain(db):
 
 def probe(path):
     """Duration, samplerate and channel count, without decoding the audio."""
-    info = sf.info(path)
-    duration = info.frames / float(info.samplerate) if info.samplerate else 0.0
-    return duration, info.samplerate, info.channels
-
-
-def _to_stereo(block):
-    """Force any channel count to stereo, cheaply and predictably."""
-    if block.ndim == 1:
-        block = block[:, None]
-    if block.shape[1] == 1:
-        return np.repeat(block, 2, axis=1)
-    if block.shape[1] > 2:
-        return np.ascontiguousarray(block[:, :2])
-    return block
+    return audiofile.probe(path)
 
 
 def load_audio(path, target_rate):
     """Decode a whole file to stereo float32 at the rate the mixer runs at."""
-    data, rate = sf.read(path, dtype=_DTYPE, always_2d=True)
-    data = _to_stereo(data)
+    data, rate = audiofile.read_all(path)
     if rate != target_rate and len(data):
         data = soxr.resample(data, rate, target_rate)
     return np.ascontiguousarray(data, dtype=np.float32)
@@ -117,6 +103,15 @@ class Voice:
         self._gain = 0.0 if fade_in > 0 else float(gain)
         self._fade_in_frames = max(1, int(fade_in * rate))
         self._fade_out_frames = max(1, int(fade_out * rate))
+        #: A fader move, which is not a fade. See set_gain.
+        self._glide_frames = max(1, int(C.VOLUME_GLIDE * rate))
+        #: How long the move in progress has to take, and how far it has to
+        #: travel. Both are set wherever the target is set, rather than being
+        #: guessed from which direction the gain is going: a fade in, a fade
+        #: out and somebody nudging the volume key are three different moves
+        #: that all look the same from inside _ramp.
+        self._ramp_frames = self._fade_in_frames
+        self._ramp_span = abs(self._target - self._gain)
         self._releasing = False
         self._frames_played = 0
 
@@ -124,8 +119,13 @@ class Voice:
         """Move the gain toward its target across this block."""
         if self._gain == self._target:
             return self._gain
-        span = self._fade_out_frames if self._target < self._gain else self._fade_in_frames
-        step = frames / float(span)
+        # The step is a fraction of the distance THIS move has to cover, not
+        # a fraction of full scale. Without that, a fade on a fader sitting at
+        # eighty per cent finished in eighty per cent of the time it was asked
+        # for, so a three second crossfade was really two and a half and the
+        # number in the box was not the number you heard.
+        distance = self._ramp_span or abs(self._target - self._gain)
+        step = distance * frames / float(max(1, self._ramp_frames))
         delta = self._target - self._gain
         move = min(abs(delta), step) * (1.0 if delta > 0 else -1.0)
         new = self._gain + move
@@ -133,16 +133,29 @@ class Voice:
         self._gain = new
         return ramp[:, None]
 
+    def _aim(self, target, frames):
+        """Head for a new gain, over this many frames."""
+        self._target = float(target)
+        self._ramp_frames = max(1, int(frames))
+        self._ramp_span = abs(self._target - self._gain)
+
     def set_gain(self, gain):
+        """A fader moved. Glide to it, do not fade to it.
+
+        A bed's fade out is most of a second, and that is right for stopping a
+        bed and wrong for a keypress on the volume: holding F5 down would
+        crawl. A few tens of milliseconds is enough to keep a step from
+        clicking, which is all a fader move needs.
+        """
         if not self._releasing:
-            self._target = float(gain)
+            self._aim(gain, self._glide_frames)
 
     def release(self, fade_out=None):
         """Fade out and finish. Calling it twice is harmless."""
         if fade_out is not None:
             self._fade_out_frames = max(1, int(fade_out * self.rate))
         self._releasing = True
-        self._target = 0.0
+        self._aim(0.0, self._fade_out_frames)
 
     @property
     def is_bed(self):
@@ -179,6 +192,17 @@ class Voice:
     def at_eof(self):
         return False
 
+    @property
+    def exhausted(self):
+        """Is there definitely no more audio to come.
+
+        A short pull from a memory voice means the sound ended. A short pull
+        from a streaming one usually means the disk was slow, and ending the
+        sound on that would cut a song off mid word because a Dropbox sync
+        picked that moment to run.
+        """
+        return True
+
     def _pull(self, frames):
         raise NotImplementedError
 
@@ -186,14 +210,17 @@ class Voice:
         if self.finished:
             return np.zeros((frames, CHANNELS), dtype=np.float32)
         block = self._pull(frames)
+        # Only the frames that were really there count towards the position.
+        # Padding an underrun and calling it playback made position_seconds
+        # run ahead of the music, and the cue point is measured against it.
+        self._frames_played += len(block)
         if len(block) < frames:
             padded = np.zeros((frames, CHANNELS), dtype=np.float32)
             if len(block):
                 padded[:len(block)] = block
             block = padded
-            if not self.loop:
+            if not self.loop and self.exhausted:
                 self.finished = True
-        self._frames_played += frames
         block = block * self._ramp(frames)
         if self.is_ducked:
             block = block * duck
@@ -248,34 +275,37 @@ class StreamVoice(Voice):
         self._thread.start()
 
     def _run(self):
+        handle = None
         try:
-            with sf.SoundFile(self._path) as handle:
-                resampler = None
-                if handle.samplerate != self.rate:
-                    resampler = soxr.ResampleStream(
-                        handle.samplerate, self.rate, CHANNELS, dtype=_DTYPE)
-                while not self._stop.is_set():
-                    if self._ring.frames >= self._prebuffer:
-                        self._stop.wait(0.02)
+            handle = audiofile.reader(self._path)
+            resampler = None
+            if handle.samplerate != self.rate:
+                resampler = soxr.ResampleStream(
+                    handle.samplerate, self.rate, CHANNELS, dtype=_DTYPE)
+            while not self._stop.is_set():
+                if self._ring.frames >= self._prebuffer:
+                    self._stop.wait(0.02)
+                    continue
+                data = handle.read(_READ_FRAMES)
+                if len(data) == 0:
+                    if self.loop:
+                        handle.seek_start()
                         continue
-                    data = handle.read(_READ_FRAMES, dtype=_DTYPE, always_2d=True)
-                    if len(data) == 0:
-                        if self.loop:
-                            handle.seek(0)
-                            continue
-                        if resampler is not None:
-                            tail = resampler.resample_chunk(
-                                np.zeros((0, CHANNELS), dtype=np.float32), last=True)
-                            self._ring.put(np.ascontiguousarray(tail, dtype=np.float32))
-                        self._eof = True
-                        return
-                    data = _to_stereo(data)
                     if resampler is not None:
-                        data = resampler.resample_chunk(data)
-                    if len(data):
-                        self._ring.put(np.ascontiguousarray(data, dtype=np.float32))
+                        tail = resampler.resample_chunk(
+                            np.zeros((0, CHANNELS), dtype=np.float32), last=True)
+                        self._ring.put(np.ascontiguousarray(tail, dtype=np.float32))
+                    self._eof = True
+                    return
+                if resampler is not None:
+                    data = resampler.resample_chunk(data)
+                if len(data):
+                    self._ring.put(np.ascontiguousarray(data, dtype=np.float32))
         except Exception:
             self._eof = True
+        finally:
+            if handle is not None:
+                handle.close()
 
     @property
     def buffered_frames(self):
@@ -285,15 +315,15 @@ class StreamVoice(Voice):
     def at_eof(self):
         return self._eof
 
+    @property
+    def exhausted(self):
+        """Read to the end AND drained. Anything less is an underrun."""
+        return self._eof and self._ring.frames == 0
+
     def _pull(self, frames):
-        block = self._ring.take(frames)
-        if len(block) < frames and not self._eof:
-            # Underrun: the disk was slow. Pad rather than end the sound.
-            padded = np.zeros((frames, CHANNELS), dtype=np.float32)
-            if len(block):
-                padded[:len(block)] = block
-            return padded
-        return block
+        # Short is allowed: render pads it, and only a voice that is both at
+        # end of file and drained is allowed to finish.
+        return self._ring.take(frames)
 
     def close(self):
         self._stop.set()

@@ -72,11 +72,17 @@ toggles: the same key starts it and stops it.
 next before it ends. That overlap is the crossfade, and it is a box under the
 running order rather than a setting you have to go looking for.
 
-Every track has a tick: unticked stays in the list and is skipped. Drops go
+The running order shows the artist and the title out of each file's own tags,
+in columns a screen reader reads one at a time, and every track has a tick your
+screen reader announces. Unticked stays in the list and is skipped. Drops go
 between songs, one at a time or after every so many, and a **drops library** on
 `Alt+D` puts one in at random.
 
-The playlist has its own fader on `F7` and `F8`.
+`Ctrl+L` says what is on air and how much of it is left, and `Ctrl+Shift+L`
+takes you to it. The playlist has its own fader on `F7` and `F8`.
+
+It plays `wav`, `mp3`, `m4a`, `flac`, `ogg`, `wma`, `aac`, `opus` and more, so
+an iTunes or Apple Music library goes straight in.
 
 ## A microphone
 

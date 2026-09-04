@@ -4,3 +4,8 @@ sounddevice
 soundfile
 soxr
 accessible_output2
+# The MPEG-4 family, which libsndfile does not open: m4a, m4b, aac, wma, opus.
+# PyAV ships FFmpeg with it, so there is no separate binary to install.
+av
+# Artist and title out of the file's own tags. Pure Python, decodes nothing.
+mutagen

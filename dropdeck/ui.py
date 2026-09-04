@@ -92,9 +92,46 @@ ID_PL_LIBRARY = wx.ID_HIGHEST + 48
 ID_FEEDBACK = wx.ID_HIGHEST + 49
 ID_DONATE = wx.ID_HIGHEST + 50
 ID_USER_GUIDE = wx.ID_HIGHEST + 51
+ID_PL_GOTO_PLAYING = wx.ID_HIGHEST + 52
 
 #: The two things this window can be showing.
 VIEW_BOARD, VIEW_PLAYLIST = 0, 1
+
+#: Controls somebody types into. The frame's bare-key hotkeys stand down
+#: while one of these has focus, because a pad firing instead of a digit
+#: landing in the box means the box cannot be used at all.
+TEXT_ENTRY_CONTROLS = (wx.TextCtrl, wx.SpinCtrl, wx.SpinCtrlDouble,
+                       wx.ComboBox, wx.SearchCtrl)
+
+
+def _is_text_entry(window):
+    """Is this a control a keystroke belongs to rather than to the board.
+
+    Walks up a couple of levels, because several of these are composites on
+    Windows - a spin control is an edit box with a pair of arrows beside it,
+    and which of the three answers FindFocus is not something to rely on.
+    """
+    for _ in range(3):
+        if window is None:
+            return False
+        if isinstance(window, TEXT_ENTRY_CONTROLS):
+            return True
+        window = window.GetParent()
+    return False
+
+
+def _is_typed_key(code):
+    """Is this key code something somebody types into a box.
+
+    Printable ASCII and the number pad digits. Deliberately not Escape,
+    Delete, Tab, Return or the function keys: those are commands wherever you
+    are, and stopping everything with Escape has to work from inside a text
+    box as much as anywhere else.
+    """
+    if 32 <= code <= 126:
+        return True
+    return wx.WXK_NUMPAD0 <= code <= wx.WXK_NUMPAD9
+
 
 #: Which slot each fixed hotkey fires, as (modifiers, key_code, slot_index).
 def fixed_accelerators():
@@ -427,6 +464,9 @@ class BankPage(wx.Panel):
 class DropDeckFrame(wx.Frame):
     def __init__(self, parent=None):
         super().__init__(parent, title=C.APP_NAME)
+        #: What the title says when nothing is on air. The playing track goes
+        #: in front of it, see _update_title.
+        self._base_title = C.APP_NAME
         self.SetIcons(appicon.bundle())
 
         self.speaker = Speaker()
@@ -436,6 +476,7 @@ class DropDeckFrame(wx.Frame):
         # three. It checks this between files instead.
         self._closing = threading.Event()
         self._warm_thread = None
+        self._metadata_thread = None
         self._context_slot = None
         self._loaded_demo = False
         #: Banks whose hint has been spoken this session. See _on_bank_changed.
@@ -466,6 +507,9 @@ class DropDeckFrame(wx.Frame):
         self.warm_cache()
 
         self._start_player()
+        # The board that just loaded may be a running order nobody has read
+        # the tags of yet: boards saved before 2.6.0 have none.
+        wx.CallAfter(self.scan_playlist_metadata)
 
         self._build_menu()
         self._build_ui()
@@ -489,6 +533,11 @@ class DropDeckFrame(wx.Frame):
         self.global_item.Check(self.hotkeys.enabled)
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        # Focus moving anywhere in the window decides which keyboard map is
+        # installed: the full one, or the one that keeps its hands off a text
+        # box. See _apply_accelerators.
+        self.Bind(wx.EVT_CHILD_FOCUS, self._on_child_focus)
+        self.Bind(wx.EVT_IDLE, self._on_idle)
         self._size_window()
         # Deferred: this ran before the window was shown, so a screen reader's
         # own announcement of the new window arrived on top of it and the
@@ -541,6 +590,67 @@ class DropDeckFrame(wx.Frame):
         self._warm_thread = threading.Thread(target=work, daemon=True,
                                              name="dropdeck-warm")
         self._warm_thread.start()
+
+    def scan_playlist_metadata(self):
+        """Fill in artists, titles and run outs, in the background.
+
+        Two things come out of this, and both of them have to be measured
+        rather than guessed:
+
+        - **The artist and the title**, out of the file's own tags, so a
+          running order reads "Dancing Queen, Abba" and not "03 Track 3".
+        - **The run out**, the silence on the end of the file, which is what
+          the cue point is taken from. An MP3 routinely carries a second or
+          two of it; cueing from the last sample put most of a three second
+          crossfade inside that silence, and what you heard was one song
+          ending and the next one creeping up on its own.
+
+        On a thread, because measuring a run out means decoding, and pasting
+        an album must not stop the app. Rows are written back on the UI thread
+        in one go at the end, cell by cell, so a screen reader standing on a
+        row is not read the whole list again.
+        """
+        import threading
+
+        running = self._metadata_thread
+        if running is not None and running.is_alive():
+            # One pass at a time. Whatever arrived while it was working is
+            # picked up when it finishes; see _playlist_metadata_ready.
+            return None
+        pending = self.board.playlist.needs_metadata()
+        if not pending:
+            return None
+
+        def work():
+            changed = False
+            for track in pending:
+                if self._closing.is_set():
+                    return
+                try:
+                    changed = track.read_metadata() or changed
+                except Exception:
+                    pass          # a broken file is the trigger path's problem
+            if changed and not self._closing.is_set():
+                wx.CallAfter(self._playlist_metadata_ready)
+
+        thread = threading.Thread(target=work, daemon=True,
+                                  name="dropdeck-playlist-tags")
+        self._metadata_thread = thread
+        thread.start()
+        return thread
+
+    def _playlist_metadata_ready(self):
+        """The background pass found something. Show it, quietly."""
+        if self._closing.is_set():
+            return
+        try:
+            self.playlist_panel.refresh(keep=self.playlist_panel.selection())
+            self._touch()
+        except Exception:
+            pass
+        self._metadata_thread = None
+        # Anything pasted while that pass was running.
+        self.scan_playlist_metadata()
 
     def _size_window(self):
         """Size in DIP, then clamp to the screen.
@@ -809,6 +919,8 @@ class DropDeckFrame(wx.Frame):
                   "Nothing plays until you tick it again. Space toggles one")
         pl.AppendSeparator()
         pl.Append(ID_PL_PLAY, "Play &from here\tCtrl+Shift+Enter")
+        pl.Append(ID_PL_GOTO_PLAYING, "Go t&o what is on air\tCtrl+Shift+L",
+                  "Put the cursor on the track that is playing")
         pl.Append(ID_PL_NEXT, "&Next track")
         pl.Append(ID_PL_PREV, "Pre&vious track")
         pl.Append(ID_PL_STOP, "Stop the play&list")
@@ -877,6 +989,9 @@ class DropDeckFrame(wx.Frame):
                   id=ID_PL_ROW_TO_LIBRARY)
         self.Bind(wx.EVT_MENU, self._on_drop_every, id=ID_PL_DROP_EVERY)
         self.Bind(wx.EVT_MENU, self._on_playlist_play, id=ID_PL_PLAY)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.go_to_playing(),
+                  id=ID_PL_GOTO_PLAYING)
         self.Bind(wx.EVT_MENU, lambda _e: self.playlist_next(), id=ID_PL_NEXT)
         self.Bind(wx.EVT_MENU, lambda _e: self.playlist_previous(), id=ID_PL_PREV)
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_playlist(), id=ID_PL_STOP)
@@ -1007,7 +1122,16 @@ class DropDeckFrame(wx.Frame):
                 entries.append(wx.AcceleratorEntry(slot.modifiers or wx.ACCEL_NORMAL,
                                                    slot.key_code,
                                                    ID_SLOT_BASE + slot.index))
-        self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+        self._accelerators = entries
+        # The same map with every bare printable key taken out, for while
+        # somebody is typing into a box. See _apply_accelerators.
+        self._typing_accelerators = [
+            e for e in entries
+            if e.GetFlags() != wx.ACCEL_NORMAL or not _is_typed_key(e.GetKeyCode())]
+        # Forget which table is installed, so a rebuilt map is always put on
+        # rather than skipped because the last one was the same shape.
+        self._accelerators_typing = None
+        self._apply_accelerators()
 
         self.Bind(wx.EVT_MENU, self._on_slot_hotkey,
                   id=ID_SLOT_BASE, id2=ID_SLOT_BASE + C.TOTAL_SLOTS)
@@ -1015,6 +1139,74 @@ class DropDeckFrame(wx.Frame):
         # inspect an accelerator table once it is set, and the map is the one
         # thing in this app people have in their fingers.
         return entries
+
+    def _apply_accelerators(self, focus=None):
+        """Install the keyboard map that suits where focus is.
+
+        The pads are on bare digits, 1 to 0, and an accelerator table on a
+        frame is looked at BEFORE the control with focus gets the key. So
+        every digit typed into the crossfade box fired a sound instead of
+        going into the box, and the box could not be typed into at all.
+        Brian Hartgen: "When focusing upon the crossfade edit field, you
+        cannot type a value into there."
+
+        Vetoing it in a key handler does not work: on Windows the char hook
+        runs first but the accelerator fires anyway. So the map itself is
+        swapped. While a text box has focus the bare printable keys are not
+        in it, and every combination with a modifier still is - Ctrl+V still
+        pastes, Escape still stops everything, the function keys still work.
+        """
+        if not getattr(self, "_accelerators", None):
+            return
+        if focus is None:
+            focus = wx.Window.FindFocus()
+        if focus is None:
+            # Nobody in this process has focus, which happens while the window
+            # is not the active one. That is not an answer, and acting on it
+            # would put the pads back on under a crossfade box that still has
+            # the caret in it, ready for the first digit typed after an
+            # Alt+Tab back.
+            return
+        typing = _is_text_entry(focus)
+        entries = self._typing_accelerators if typing else self._accelerators
+        if getattr(self, "_accelerators_typing", None) == typing:
+            return
+        self._accelerators_typing = typing
+        self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+
+    def _on_child_focus(self, event):
+        """Focus moved. Which map is installed follows it.
+
+        The window is taken from the event rather than from FindFocus: this
+        event can arrive a moment before Windows has finished moving focus,
+        and asking who has it then gives the window that is losing it. Getting
+        that backwards leaves the pads switched off, or the crossfade box
+        untypeable, until the next time focus moves.
+
+        The CallAfter is the belt to that brace: whatever order the messages
+        arrive in, once they have all been handled the map is checked again.
+        """
+        event.Skip()
+        self._apply_accelerators(event.GetWindow())
+        wx.CallAfter(self._apply_accelerators)
+
+    def _on_idle(self, event):
+        """The map, checked once more whenever there is nothing else to do.
+
+        Focus moving into a wx.SpinCtrlDouble raises NO child focus event at
+        all: the control is a composite and the focus lands on the edit box
+        inside it, which the frame is never told about. Measured, not
+        guessed. So the crossfade box would sometimes still be under the
+        pads' keyboard map when the first digit arrived, and that digit fired
+        a sound instead of going into the box - which is the whole bug.
+
+        Idle is the reliable one, because it runs whenever the loop has
+        nothing left to dispatch, which is always before the next keystroke.
+        _apply_accelerators returns immediately unless the answer changed, so
+        this costs one FindFocus.
+        """
+        event.Skip()
+        self._apply_accelerators()
 
     def _on_slot_hotkey(self, event):
         self.trigger(event.GetId() - ID_SLOT_BASE)
@@ -1237,6 +1429,17 @@ class DropDeckFrame(wx.Frame):
         # whenever a field is truncated, and setting one manually asserts.
         self.status.SetStatusText(text, 1)
 
+    def note(self, text):
+        """Write the status bar and say nothing.
+
+        For the handful of things a screen reader has already announced
+        itself. Ticking a track is the case: the list says "checked" without
+        any help, and the app saying "will be skipped" over the top of it is
+        two announcements for one keypress. The words are still there to be
+        read, which is the rule every other channel here follows.
+        """
+        self.status.SetStatusText(text, 1)
+
     def _update_status(self):
         self.status.SetStatusText(
             f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)   "
@@ -1344,7 +1547,15 @@ class DropDeckFrame(wx.Frame):
         parts = []
         track = self.player.current if self.player.playing else None
         if track is not None:
-            parts.append("Playlist, %s" % track.display_name)
+            # Where it is in the running order and how much of it is left.
+            # Brian Hartgen: "We do not know how much time remains in the
+            # song." It is the question a presenter asks most often, and the
+            # player already knows the answer.
+            remaining = format_duration(self.player.remaining)
+            parts.append("Playlist, %d of %d, %s%s"
+                         % (self.player.index + 1, len(self.board.playlist),
+                            track.display_name,
+                            ", %s left" % remaining if remaining else ""))
         indices = [i for i in self.mixer.playing_slots() if i < C.TOTAL_SLOTS]
         if indices:
             parts.append("%d playing. %s" % (
@@ -1375,6 +1586,12 @@ class DropDeckFrame(wx.Frame):
         button.refresh(playing)
 
     def _focused_action(self, action):
+        # Not while somebody is typing. Delete and F2 reach here from the menu
+        # bar's own accelerators, which no swapping of the frame's table can
+        # stand down, and Delete inside the crossfade box meant "remove the
+        # track I am not even looking at".
+        if _is_text_entry(wx.Window.FindFocus()):
+            return
         # Delete means "remove this item" in the playlist and "clear this pad"
         # on the board. One key, the thing in front of you.
         if (self.views.GetSelection() == VIEW_PLAYLIST
@@ -1429,7 +1646,7 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox(
                 "There are no sounds in that folder.\n\n%s\n\n"
                 "It needs at least one %s file." % (
-                    path, ", ".join(e.lstrip(".") for e in C.AUDIO_EXTENSIONS)),
+                    path, C.AUDIO_FORMATS_SPOKEN),
                 "Nothing to play", wx.OK | wx.ICON_ERROR, self)
             self.announce("That folder has no sounds in it")
             return
@@ -1646,7 +1863,22 @@ class DropDeckFrame(wx.Frame):
             length = format_duration(track.duration)
             self.announce_playback(
                 "%s%s" % (track.display_name, ", " + length if length else ""))
+        self._update_title()
         self._update_status()
+
+    def _update_title(self):
+        """Put what is on air in the window title.
+
+        Brian Hartgen: "There is no way of telling from the window title or by
+        pressing a key to focus upon the song that is playing." A title is not
+        focused, so writing it interrupts nothing, and it is what a screen
+        reader reads when you come back to the window from somewhere else.
+        """
+        track = self.player.current if self.player.playing else None
+        if track is None:
+            self.SetTitle(self._base_title)
+            return
+        self.SetTitle("%s - %s" % (track.display_name, self._base_title))
 
     def show_view(self, view=None):
         """Swap between the soundboard and the playlist.
@@ -1670,6 +1902,15 @@ class DropDeckFrame(wx.Frame):
                 (self._current_bank() - 1) * C.SLOTS_PER_BANK]
             self._button_for(slot).SetFocus()
         self.announce(self._view_summary(view))
+
+    def show_view_playlist(self):
+        """Bring the playlist up without announcing anything.
+
+        show_view says where you are, which is right when you asked to move
+        and wrong when moving is only half of what you asked for.
+        """
+        if self.views.GetSelection() != VIEW_PLAYLIST:
+            self.views.SetSelection(VIEW_PLAYLIST)
 
     def _view_focused(self, view):
         window = wx.Window.FindFocus()
@@ -1700,6 +1941,10 @@ class DropDeckFrame(wx.Frame):
         """
         if relabel:
             self.playlist_panel.refresh()
+        # Tags and run outs for anything new. Returns straight away when
+        # there is nothing to look at, which is every call but the first
+        # after files go in.
+        self.scan_playlist_metadata()
         self._touch()
 
     # ------------------------------------------------------------ editing --
@@ -1962,6 +2207,7 @@ class DropDeckFrame(wx.Frame):
         if not quiet:
             self.announce_playback("Playlist stopped" if stopped
                                    else "The playlist was not playing")
+        self._update_title()
         self._update_status()
         return stopped
 
@@ -2632,7 +2878,14 @@ class DropDeckFrame(wx.Frame):
     def _on_refresh_tick(self, _event):
         """Repaint only the buttons whose playing state actually changed, so a
         screen reader is not told the same thing four times a second."""
-        now = set(self.mixer.playing_slots())
+        # Board slots only. The playlist's two decks are slot indices above
+        # the eighty pads, which is what keeps the mixer from needing a
+        # special case for them - and they came through here as well, so
+        # board[80] raised IndexError on the first playlist handover and went
+        # on raising it, from inside a timer, every quarter of a second. From
+        # then on no pad was ever relabelled again.
+        now = {index for index in self.mixer.playing_slots()
+               if 0 <= index < C.TOTAL_SLOTS}
         if now == self._playing:
             return
         for index in now ^ self._playing:
@@ -2641,14 +2894,6 @@ class DropDeckFrame(wx.Frame):
         self._playing = now
 
     def stop_background_work(self):
-        timer = getattr(self, "_player_timer", None)
-        if timer is not None:
-            timer.Stop()
-        mic = getattr(self, "mic", None)
-        if mic is not None:
-            # An open input stream keeps the process alive after the window
-            # has gone, exactly the way an open output stream does.
-            mic.close()
         """Bring the worker threads to a halt and wait for them.
 
         Called from both the close handler and Destroy, because Destroy does
@@ -2657,10 +2902,27 @@ class DropDeckFrame(wx.Frame):
         was still inside libsndfile, and the process would segfault on the way
         out. It did, about one run in three.
         """
+        # EVERY timer, not just the player's. A wx.Timer belongs to the frame
+        # and goes on firing after Destroy, and a timer callback on a
+        # destroyed window is an access violation rather than an exception:
+        # the process simply goes. _on_close stops the refresh timer, but
+        # Destroy does not raise EVT_CLOSE, so a frame torn down
+        # programmatically kept a 250 ms timer pointed at nothing.
+        for name in ("_player_timer", "_refresh_timer", "_save_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                timer.Stop()
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            # An open input stream keeps the process alive after the window
+            # has gone, exactly the way an open output stream does.
+            mic.close()
         self._closing.set()
-        if self._warm_thread is not None:
-            self._warm_thread.join(timeout=3.0)
-            self._warm_thread = None
+        for name in ("_warm_thread", "_metadata_thread"):
+            thread = getattr(self, name, None)
+            if thread is not None:
+                thread.join(timeout=3.0)
+                setattr(self, name, None)
 
     def Destroy(self):
         self.stop_background_work()

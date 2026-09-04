@@ -1,18 +1,36 @@
 """The playlist view: a running order you can paste into.
 
-Deliberately a ``wx.CheckListBox`` rather than anything cleverer. A list box is
-the one control every screen reader reads without argument, arrows through
-without surprises, and reports a position in. The whole row is the text, the
-same way a pad's whole label is its accessible name, and the tick beside it is
-whether that item goes out, so a running order can be "play this, this and
-this, not that" without anything having to leave the list and lose its place.
+A ``wx.ListCtrl`` in report view, with real check boxes turned on. It was a
+``wx.CheckListBox`` until September 2026 and that was the wrong control, for
+one reason that mattered more than everything else about it: on Windows a
+wxCheckListBox is an owner drawn list box with a tick painted on it, and MSAA
+has no idea the tick is there. So a screen reader read every row and never
+said whether the item was checked, and pressing Space said nothing at all.
 
-**The rows never say "playing".** They carry the running order, position,
-name, whether it is a song or a drop, how long, its cue, and none of that
-changes while the show is on. Rewriting the row that has focus would restart a
-screen reader mid sentence at exactly the moment a song changes, which is the
-trap `SoundButton.refresh` exists to avoid. What is on air is *spoken* when it
-changes, and `Ctrl+L` answers it on demand.
+Brian Hartgen: "The most critical issue is that a screen-reader does not
+announce whether an item is checked or not... Noone can move forward with this
+part of the app unless they know this information so it's a bit of a
+deal-breaker."
+
+A list view with ``EnableCheckBoxes`` is a native SysListView32 with real
+check boxes in it, which every screen reader on Windows has read for twenty
+years. It brings three more things with it:
+
+- **Columns.** Title, artist, kind, length, start time and crossfade, each one
+  a cell a screen reader can read on its own, instead of one comma separated
+  sentence per row.
+- **Enter.** A list box on a frame never sees Return: the dialog message loop
+  takes it first, which is why Enter did nothing here. A list view raises
+  ``wxEVT_LIST_ITEM_ACTIVATED`` for it.
+- **First letter navigation.** Which works on the first column, and is why
+  the running order number is no longer glued to the front of every row.
+
+**The rows still never say "playing".** They carry the running order and none
+of it changes while the show is on. Rewriting the row that has focus would
+restart a screen reader mid sentence at exactly the moment a song changes,
+which is the trap ``SoundButton.refresh`` exists to avoid. What is on air is
+*spoken* when it changes, ``Ctrl+L`` answers it on demand, and Ctrl+Shift+L
+takes you to it.
 """
 
 from __future__ import annotations
@@ -31,6 +49,12 @@ from .slot import format_duration
 #: What the list shows when there is nothing in it. A row, not an empty
 #: control: a list box with no items reads as nothing at all.
 EMPTY_ROW = "Empty. Paste songs with Ctrl+V, or use Add files"
+
+#: The columns, and how wide each one starts. The title is first because that
+#: is what first letter navigation searches, and because it is the thing
+#: anybody is looking for when they go hunting in a three hour running order.
+COLUMNS = (("Title", 260), ("Artist", 180), ("Kind", 90), ("Length", 100),
+           ("Starts", 110), ("Crossfade", 100))
 
 
 class _Dropped(wx.FileDropTarget):
@@ -51,6 +75,10 @@ class PlaylistPanel(wx.Panel):
     def __init__(self, parent, frame):
         super().__init__(parent)
         self.frame = frame
+        #: Set while Space is being handled. A list view raises ITEM_ACTIVATED
+        #: for Space as well as for Return once check boxes are on, and one
+        #: keypress must not both tick a track and put it on the air.
+        self._space_pressed = False
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -60,17 +88,22 @@ class PlaylistPanel(wx.Panel):
             "it ends.\n"
             "Space ticks or unticks a track: unticked stays in the list "
             "and is skipped. Enter plays from the one you are on.\n"
-            "Delete removes it. Alt+Up and Alt+Down move it."))
+            "Delete removes it. Alt+Up and Alt+Down move it. "
+            "Ctrl+Shift+L goes to whatever is on air."))
         outer.Add(intro, 0, wx.ALL, 8)
 
-        # A real label in front of the control: on MSW the accessible name of a
-        # list box comes from the static before it, not from SetName alone.
+        # A real label in front of the control: on MSW the accessible name of
+        # a list comes from the static before it, not from SetName alone.
         outer.Add(wx.StaticText(self, label="&Running order"), 0,
                   wx.LEFT | wx.RIGHT, 8)
-        # Space toggles a tick, which is what this control does natively and
-        # therefore what a screen reader already announces without help.
-        self.list = wx.CheckListBox(self, style=wx.LB_SINGLE)
+        self.list = wx.ListCtrl(
+            self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.LC_HRULES)
         self.list.SetName("Running order")
+        for index, (heading, width) in enumerate(COLUMNS):
+            self.list.InsertColumn(index, heading, width=self.FromDIP(width))
+        # Real check boxes, which is the whole reason this is a list view.
+        # Space toggles one and Windows announces it, with no help from here.
+        self.list.EnableCheckBoxes(True)
         outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
 
         # The crossfade lives HERE, next to the running order it applies to,
@@ -81,13 +114,15 @@ class PlaylistPanel(wx.Panel):
                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.crossfade = wx.SpinCtrlDouble(
             self, min=0.0, max=C.MAX_CROSSFADE, inc=0.5,
-            initial=float(self.playlist.crossfade))
+            initial=float(self.playlist.crossfade),
+            style=wx.SP_ARROW_KEYS | wx.TE_PROCESS_ENTER)
         self.crossfade.SetDigits(1)
         self.crossfade.SetName("Crossfade between tracks, seconds")
         self.crossfade.SetToolTip(
-            "How long one song overlaps the next. Zero means each one plays "
-            "right out before the next starts. A track can be given a "
-            "crossfade of its own from its right-click menu.")
+            "How long one song overlaps the next. Type a number or use the "
+            "arrow keys. Zero means each one plays right out before the next "
+            "starts. A track can be given a crossfade of its own from its "
+            "right-click menu.")
         fade_row.Add(self.crossfade, 0)
         outer.Add(fade_row, 0, wx.LEFT | wx.RIGHT, 8)
 
@@ -100,9 +135,10 @@ class PlaylistPanel(wx.Panel):
             "many seconds before\n"
             "the one playing ends, so every start time in the list moves when "
             "you change it.\n"
-            "Zero means each song plays right out first. A single track can "
-            "have its own from\n"
-            "its right-click menu, and this box is in Audio settings too.")),
+            "Type a value or use the arrow keys. Zero means each song plays "
+            "right out first. A single\n"
+            "track can have its own from its right-click menu, and this box "
+            "is in Audio settings too.")),
             0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.summary = wx.StaticText(self, label="")
@@ -126,12 +162,17 @@ class PlaylistPanel(wx.Panel):
 
         self.SetSizer(outer)
 
-        self.list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_play)
-        self.list.Bind(wx.EVT_CHECKLISTBOX, self._on_ticked)
+        # Enter and a double click both land on ITEM_ACTIVATED. So does Space
+        # once check boxes are on, which _on_activated has to allow for.
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activated)
+        self.list.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_ticked)
+        self.list.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_ticked)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.list.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
         self.list.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
         self.crossfade.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_crossfade)
         self.crossfade.Bind(wx.EVT_TEXT_ENTER, self._on_crossfade)
+        self.crossfade.Bind(wx.EVT_KILL_FOCUS, self._on_crossfade_leave)
         # BOTH, because the list covers nearly all of the panel and a child
         # window without a drop target of its own simply refuses the drop -
         # so "drag them in" worked everywhere except the obvious place.
@@ -157,72 +198,160 @@ class PlaylistPanel(wx.Panel):
         """Which track the user is on, or None.
 
         None while the list is empty, because the single row showing then is
-        the words "Empty" and not a track.
+        the word "Empty" and not a track. Focus rather than selection: with
+        the arrow keys they are the same thing, and after a rebuild focus is
+        the one that survives.
         """
         if self.is_empty:
             return None
-        index = self.list.GetSelection()
+        index = self.list.GetFirstSelected()
+        if index == wx.NOT_FOUND:
+            index = self.list.GetFocusedItem()
         return None if index == wx.NOT_FOUND else index
 
-    def focus_crossfade(self):
-        """Put the user on the crossfade box, for the menu item that says so.
+    def select(self, index):
+        """Put the cursor on a row, both halves of it."""
+        if not (0 <= index < self.list.GetItemCount()):
+            return
+        self.list.Select(index)
+        self.list.Focus(index)
+        self.list.EnsureVisible(index)
 
-        No text selection: wx.SpinCtrlDouble does not offer one here, and a
-        spin control is worked with the arrow keys anyway.
-        """
+    def row_count(self):
+        """How many rows the control is showing, empty message included."""
+        return self.list.GetItemCount()
+
+    def row_text(self, index):
+        """One row's cells, joined. What the row amounts to, in one string."""
+        if not (0 <= index < self.list.GetItemCount()):
+            return ""
+        cells = [self.list.GetItemText(index, column)
+                 for column in range(len(COLUMNS))]
+        return ", ".join(c for c in cells if c)
+
+    def cell(self, index, column):
+        """One cell, by column number. COLUMNS says which is which."""
+        if not (0 <= index < self.list.GetItemCount()):
+            return ""
+        return self.list.GetItemText(index, column)
+
+    def is_ticked(self, index):
+        """Is the box beside this row ticked."""
+        if not (0 <= index < self.list.GetItemCount()):
+            return False
+        return bool(self.list.IsItemChecked(index))
+
+    def focus_crossfade(self):
+        """Put the user on the crossfade box, for the menu item that says so."""
         self.crossfade.SetFocus()
 
-    def _on_crossfade(self, _event=None):
+    def _on_crossfade(self, event=None):
         """The crossfade moved. Apply it, relabel the cues, say the number.
 
         Every row carries its cue and its start time, so all of them change
         when this does - which is exactly why the rows are rebuilt here and
         the control is left alone.
         """
+        if event is not None:
+            event.Skip()
         seconds = round(float(self.crossfade.GetValue()), 2)
-        if seconds == self.playlist.crossfade:
+        if abs(seconds - self.playlist.crossfade) < 1e-9:
             return
         self.playlist.crossfade = seconds
-        keep = self.list.GetSelection()
-        self.refresh(keep=keep if keep != wx.NOT_FOUND else 0)
+        self.refresh(keep=self.selection())
         self.frame.announce(
             "Crossfade %s" % (format_duration(seconds)
                               or "off, each song plays right out"))
         self.frame.playlist_changed(relabel=False)
 
+    def _on_crossfade_leave(self, event):
+        """Typed digits are only a value once something commits them.
+
+        A spin control holds what you typed as text until it is asked. Leaving
+        the box is asking: without this, typing 6 and tabbing away left the
+        box reading 6 and the playlist still on 3.
+        """
+        event.Skip()
+        self._on_crossfade(None)
+
     def focus_list(self):
         self.list.SetFocus()
-        if self.list.GetCount() and self.list.GetSelection() == wx.NOT_FOUND:
-            self.list.SetSelection(0)
+        if self.list.GetItemCount() and self.selection() is None:
+            self.select(0)
 
-    def refresh(self, keep=None):
-        """Rebuild every row. The rows are static text; nothing here speaks."""
+    # -------------------------------------------------------------- rows ----
+    def _rows(self):
         playlist = self.playlist
         cues = playlist.cue_points()
-        rows = [track.label(index + 1, playlist.crossfade, cue=cues[index])
+        return [track.columns(playlist.crossfade, cue=cues[index])
                 for index, track in enumerate(playlist)]
-        previous = self.list.GetSelection() if keep is None else keep
+
+    def refresh(self, keep=None):
+        """Bring every row up to date. The rows are text; nothing here speaks.
+
+        Cells are written one at a time when the number of rows has not
+        changed, and only where the text is actually different. That matters:
+        deleting and rebuilding a list view moves focus and selection, and a
+        screen reader reads the row again every time it does. The background
+        pass that fills in artists and start times comes through here, and it
+        must not read the list out from under somebody who is arrowing it.
+        """
+        rows = self._rows()
+        previous = self.selection() if keep is None else keep
         if not rows:
             # One row saying so, rather than an empty control. Arrowing into a
             # list with nothing in it gives a screen reader nothing to read,
             # which sounds exactly like a list that failed to load.
-            self.list.Set([EMPTY_ROW])
-            self.list.SetSelection(0)
-            if abs(self.crossfade.GetValue() - playlist.crossfade) > 1e-9:
-                self.crossfade.SetValue(float(playlist.crossfade))
-            self._update_summary()
-            return
-        self.list.Set(rows)
-        for index, track in enumerate(playlist):
-            self.list.Check(index, bool(track.enabled))
-        if abs(self.crossfade.GetValue() - playlist.crossfade) > 1e-9:
-            # Loading a board brings its own crossfade with it.
-            self.crossfade.SetValue(float(playlist.crossfade))
-        if rows:
-            if previous == wx.NOT_FOUND or previous is None or previous >= len(rows):
-                previous = len(rows) - 1
-            self.list.SetSelection(max(0, previous))
+            rows = [[EMPTY_ROW] + [""] * (len(COLUMNS) - 1)]
+            previous = 0
+        self._write_rows(rows)
+        if previous is None or previous < 0 or previous >= len(rows):
+            previous = len(rows) - 1
+        self.select(max(0, previous))
+        self._sync_crossfade_box()
         self._update_summary()
+
+    def _write_rows(self, rows):
+        """Put ``rows`` into the control, changing as little as possible."""
+        count = self.list.GetItemCount()
+        if count != len(rows):
+            self.list.Freeze()
+            try:
+                self.list.DeleteAllItems()
+                for index, cells in enumerate(rows):
+                    self.list.InsertItem(index, cells[0])
+                    for column in range(1, len(COLUMNS)):
+                        self.list.SetItem(index, column, cells[column])
+            finally:
+                self.list.Thaw()
+        else:
+            for index, cells in enumerate(rows):
+                for column in range(len(COLUMNS)):
+                    if self.list.GetItemText(index, column) != cells[column]:
+                        self.list.SetItem(index, column, cells[column])
+        self._sync_ticks()
+
+    def _sync_ticks(self):
+        """The tick beside each row, from the model, without churning it.
+
+        CheckItem raises a checked event, and one that arrives while the model
+        is already correct is harmless but noisy, so nothing is written unless
+        it differs.
+        """
+        if self.is_empty:
+            if self.list.GetItemCount() and self.list.IsItemChecked(0):
+                self.list.CheckItem(0, False)
+            return
+        for index, track in enumerate(self.playlist):
+            if index >= self.list.GetItemCount():
+                break
+            if self.list.IsItemChecked(index) != bool(track.enabled):
+                self.list.CheckItem(index, bool(track.enabled))
+
+    def _sync_crossfade_box(self):
+        # Loading a board brings its own crossfade with it.
+        if abs(self.crossfade.GetValue() - self.playlist.crossfade) > 1e-9:
+            self.crossfade.SetValue(float(self.playlist.crossfade))
 
     def _update_summary(self):
         playlist = self.playlist
@@ -261,7 +390,7 @@ class PlaylistPanel(wx.Panel):
         if not playable:
             self.frame.announce(
                 "Nothing there this app can play. It takes %s files."
-                % ", ".join(e.lstrip(".") for e in C.AUDIO_EXTENSIONS))
+                % C.AUDIO_FORMATS_SPOKEN)
             return []
         added = self.playlist.add(playable, at=at)
         first = at if at is not None else len(self.playlist) - len(added)
@@ -315,25 +444,26 @@ class PlaylistPanel(wx.Panel):
         return self.add_paths(paths, where="pasted")
 
     def _on_ticked(self, event):
-        """The user toggled a tick. Move it into the model and say what it means.
+        """The tick changed. Move it into the model and leave the row alone.
 
-        The row's own text is left alone. The control has already said
-        "checked" or "not checked", and rewriting the row underneath that
-        would read the whole line again over the top of it - the same reason a
-        pad does not relabel itself while it has focus.
+        Nothing is spoken here. The control has already said "checked" or
+        "not checked" - that is the entire point of using a list view - and
+        saying "will be skipped" over the top of it is two announcements for
+        one keystroke. It goes in the status bar, which every level shows.
         """
-        index = event.GetSelection()
+        event.Skip()
+        index = event.GetIndex()
         if self.is_empty:
             # The only row is the word Empty. Put its tick straight back.
-            self.list.Check(index, False)
+            self.list.CheckItem(index, False)
             return
-        track = self.playlist.set_enabled(index, self.list.IsChecked(index))
+        track = self.playlist.set_enabled(index, self.list.IsItemChecked(index))
         if track is None:
             return
         self._update_summary()
-        self.frame.announce_help(
-            "%s %s" % (track.display_name,
-                       "will play" if track.enabled else "will be skipped"))
+        self.frame.note("%s %s" % (track.display_name,
+                                   "will play" if track.enabled
+                                   else "will be skipped"))
         self.frame.playlist_changed(relabel=False)
 
     def set_all_ticked(self, value):
@@ -349,11 +479,18 @@ class PlaylistPanel(wx.Panel):
         self.frame.playlist_changed()
         return changed
 
+    def _on_left_down(self, event):
+        # A click can activate a row, and it must not be mistaken for the
+        # activation Space produces. See _on_activated.
+        self._space_pressed = False
+        event.Skip()
+
     def _on_key(self, event):
         code = event.GetKeyCode()
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_play(None)
-            return
+        # Space toggles the tick natively, and ALSO raises ITEM_ACTIVATED on
+        # a list view with check boxes. Remembering that the key was Space is
+        # what stops one press both ticking a track and putting it on air.
+        self._space_pressed = code == wx.WXK_SPACE
         if code == wx.WXK_DELETE:
             self.remove_selected()
             return
@@ -361,6 +498,14 @@ class PlaylistPanel(wx.Panel):
             self.move_selected(-1 if code == wx.WXK_UP else 1)
             return
         event.Skip()
+
+    def _on_activated(self, event):
+        """Enter, or a double click. Not Space, which only ticks."""
+        if self._space_pressed:
+            self._space_pressed = False
+            return
+        event.Skip()
+        self._on_play(None)
 
     def _on_context_menu(self, event):
         """The Applications key, or a right-click, on a track.
@@ -420,12 +565,12 @@ class PlaylistPanel(wx.Panel):
         if index is None:
             return
         track = self.playlist.set_enabled(index, not self.playlist[index].enabled)
-        self.list.Check(index, bool(track.enabled))
-        self.refresh(keep=index)
+        # Written to the control, which raises the checked event, which is
+        # what puts it in the status bar and updates the summary.
+        self.list.CheckItem(index, bool(track.enabled))
         self.frame.announce_help(
             "%s %s" % (track.display_name,
                        "will play" if track.enabled else "will be skipped"))
-        self.frame.playlist_changed(relabel=False)
 
     def crossfade_selected(self):
         """Give one track a crossfade of its own, or put it back on the
@@ -443,6 +588,25 @@ class PlaylistPanel(wx.Panel):
             self.frame.announce("There is nothing in the running order yet")
             return
         self.frame.segue_playlist(index)
+
+    def go_to_playing(self):
+        """Put the cursor on whatever is on the air.
+
+        Brian Hartgen: "when a song is playing midway through the list, we do
+        not know which song that is. There is no way of telling from the
+        window title or by pressing a key to focus upon the song that is
+        playing."
+        """
+        if not self.player.playing or self.player.current is None:
+            self.frame.announce("The playlist is not playing")
+            return False
+        index = self.player.index
+        if not (0 <= index < self.list.GetItemCount()):
+            return False
+        self.frame.show_view_playlist()
+        self.list.SetFocus()
+        self.select(index)
+        return True
 
     # ------------------------------------------------------------ commands --
     def _on_play(self, _event):
@@ -491,7 +655,13 @@ class PlaylistPanel(wx.Panel):
             self.frame.announce("That is already at the %s"
                                 % ("top" if delta < 0 else "bottom"))
             return
+        # The player follows the track it is playing rather than the position
+        # it was at, or moving a song under the one on air would leave it
+        # convinced it is playing whatever took its place.
+        if self.player.index == index:
+            self.player.index = target
+        elif self.player.index == target:
+            self.player.index = index
         self.refresh(keep=target)
-        self.list.SetSelection(target)
         self.frame.announce_help("Moved to %d" % (target + 1))
         self.frame.playlist_changed()

@@ -49,11 +49,49 @@ And specific to this one:
   broken.
 - **The playlist runs on two decks and a cue point.** Every item says how
   long before its end the next one starts; that number is the crossfade, and
-  a crossfade is simply the outgoing voice releasing while the incoming one
-  fades in on the other deck. `PLAYLIST_DECK_A`/`_B` are slot indices above
-  the eighty pads, so the mixer needs no special case for any of it. The cue
+  a crossfade is the outgoing voice riding down while the incoming one comes
+  up on the other deck. `PLAYLIST_DECK_A`/`_B` are slot indices above the
+  eighty pads, so the mixer needs no special case for any of it. The cue
   arithmetic runs on the **ticked** items only - an unticked track keeps its
   place in the list and is stepped over.
+- **A crossfade is measured from where the MUSIC stops, not where the file
+  does.** `Track.playable_end` is the duration less `tail_silence`, measured
+  once by `audiofile.tail_silence` on the background pass and saved with the
+  board. This is the whole of Brian Hartgen's "the song is playing out in
+  full and the second one is fading in": an MP3 carries a second or two of
+  digital silence on the end, so cueing three seconds from the last sample
+  put most of the crossfade inside that silence. Nothing on the cue path may
+  go back to using `duration` directly.
+- **The incoming track comes in AT LEVEL and the outgoing one rides down.**
+  `C.SEGUE_FADE_IN` is thirty milliseconds and exists only so the first
+  sample cannot click. Both tracks ramping is a DJ blend, not a radio segue,
+  and it is what made a crossfade sound like a hole. And every handover gets
+  at least `C.SEGUE_LEAD`, a fifth of a second, even with the crossfade at
+  zero: waiting for a drop's last sample means waiting for a tick to notice
+  and then for the next file to open, and you hear both.
+- **The running order is a wx.ListCtrl with EnableCheckBoxes, and it has to
+  stay one.** A wxCheckListBox on Windows is an owner drawn list box with a
+  tick painted on it: MSAA never knows the tick is there, so a screen reader
+  announced nothing when you arrowed and nothing when you pressed Space. That
+  was the deal-breaker in Brian's report. A list view has real check boxes,
+  real columns, and it receives Return, which a list box on a frame never
+  does. Three consequences that are easy to undo by accident: **the title is
+  column 0** because that is what first letter navigation searches, **no
+  running order number goes in front of it** for the same reason, and
+  **Space raises ITEM_ACTIVATED as well as toggling the tick**, which
+  `_space_pressed` in `playlistview` is there to tell apart.
+- **The frame's bare-key hotkeys stand down while a text box has focus.**
+  An accelerator table on a frame is consulted BEFORE the control with
+  focus, so every digit typed into the crossfade box fired a pad and the box
+  could not be typed into at all. Vetoing it in `wxEVT_CHAR_HOOK` does not
+  work: measured on wx 4.2.5, the hook runs first and the accelerator fires
+  anyway. So the table itself is swapped, in `_apply_accelerators`. Two
+  things it has to be driven by, not one: `EVT_CHILD_FOCUS` for speed, and
+  `EVT_IDLE` because **focus moving into a wx.SpinCtrlDouble raises no child
+  focus event at all** - it is a composite and the focus lands on the edit
+  box inside it. Also measured. And `_focused_action` refuses while a text
+  box has focus, because Delete and F2 come from the menu bar's own
+  accelerators, which no swapping of this table can reach.
 - **Playlist rows never say "playing", and pads never relabel under focus.**
   Same rule, two places. What is on air is *spoken* (`_playlist_moved`) and
   answered on demand by `Ctrl+L`. Rewriting the row a screen reader is
@@ -136,6 +174,7 @@ And specific to this one:
 ```
 dropdeck/
   constants.py   banks, hotkey labels, fades, help text, one source of truth
+  audiofile.py   the two decoders behind one door, tags, and the run out
   slot.py        one button's state, how it describes itself, folder picking
   playlist.py    the running order, its cue points, and the two decks
   playlistview.py the list, its tick boxes and its row menu
@@ -155,7 +194,18 @@ tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
   check_guide.py     fact-checks the published user guide against the app
+  check_keyboard.py  real keystrokes into the real window. Run it by hand
 ```
+
+**Two decoders, one door.** `audiofile.py` tries libsndfile and falls back to
+FFmpeg through PyAV, which is what makes `m4a`, `m4b`, `aac`, `wma` and `opus`
+play at all. Three rules there: the extension list is what the decoders can
+really decode, so nothing is offered that would then fail at the moment
+somebody presses a key; PyAV is imported lazily, because it loads sixty
+megabytes of FFmpeg and a board of WAVs must not pay for that at startup; and
+tags are read with mutagen, which decodes nothing, so a file with broken tags
+still plays. The build needs `--collect-all av`, or the whole family is
+silently refused in the release and works fine from source.
 
 `engine.py` and `mixer.py` know nothing about wx. That is deliberate, it is
 why `tests/test_engine.py` can render the entire mixer and inspect the samples
@@ -262,6 +312,18 @@ would have had me editing correct prose.
   "cannot access the file because it is being used by another process" every
   time. The whole build goes to `%LOCALAPPDATA%\TG Studios Build\drop-deck`
   and only the zip and the installer are copied back.
+- **Some things can only be tested with a real keystroke.** Two of the eight
+  faults in Brian Hartgen's September 2026 report were invisible to every
+  test in `tests/`, because both were about what Windows does with a key
+  BEFORE any of this app's code sees it: Enter never reaching a list box on a
+  frame, and the accelerator table eating a digit before the crossfade box
+  got it. Calling the handler by hand proved nothing in either case.
+  `tools/check_keyboard.py` drives the real window with `wx.UIActionSimulator`
+  and it is in tools rather than tests on purpose: it needs the foreground,
+  and on a desktop somebody is using it does not always get it. It says
+  "skipped" rather than reporting a failure it cannot stand behind. It must
+  run inside `MainLoop`; keystrokes dispatched outside an event loop get no
+  accelerator translation at all, which is the very thing being tested.
 - **A modal message box in a test hangs it for ever.** `wx.MessageBox` waits
   for a click that a test cannot give, and `test_feedback_2_4` drives a path
   that raises one on purpose: assigning an empty folder is refused with a

@@ -5,8 +5,10 @@ the hotkeys are inherited unchanged from The Tony Gebhard Show Soundboard 1.2.
 They are muscle memory and they are not up for redesign.
 """
 
+from . import audiofile as _audiofile
+
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.5.2"
+APP_VERSION = "2.6.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -68,16 +70,15 @@ BANK_HINTS = {
 }
 
 # ------------------------------------------------------------------ audio ---
-AUDIO_EXTENSIONS = (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".aif", ".w64", ".au")
-AUDIO_WILDCARD = (
-    "Audio files (*.wav;*.mp3;*.ogg;*.flac;*.aiff;*.aif)|"
-    "*.wav;*.mp3;*.ogg;*.flac;*.aiff;*.aif|"
-    "WAV files (*.wav)|*.wav|"
-    "MP3 files (*.mp3)|*.mp3|"
-    "OGG files (*.ogg)|*.ogg|"
-    "FLAC files (*.flac)|*.flac|"
-    "All files (*.*)|*.*"
-)
+#: What this build can play, and the file dialog filter that matches it.
+#: Both come from audiofile, which is the only thing that knows which
+#: decoders are really here: libsndfile always, FFmpeg for the MPEG-4 family
+#: when PyAV is installed. Offering m4a in a dialog on a machine that cannot
+#: decode it would be worse than not offering it.
+AUDIO_EXTENSIONS = _audiofile.supported_extensions()
+AUDIO_WILDCARD = _audiofile.wildcard()
+#: The same list, short enough to say out loud.
+AUDIO_FORMATS_SPOKEN = _audiofile.spoken_formats()
 
 #: How much the app itself says out loud. A screen reader is already
 #: reading the controls; this decides how much the app adds on top.
@@ -106,6 +107,11 @@ MAX_BANK_NAME = 32
 BUS_SFX, BUS_BED, BUS_PLAYLIST = "sfx", "bed", "playlist"
 
 VOLUME_STEP = 0.05
+#: How long a fader move takes to land, in seconds. A glide, not a fade: it is
+#: there so a volume key does not step the gain and click, and it must not be
+#: the bed's fade out, which is most of a second and would make holding F5
+#: down feel like wading.
+VOLUME_GLIDE = 0.03
 DEFAULT_SFX_VOLUME = 0.75
 DEFAULT_BED_VOLUME = 0.50
 DEFAULT_PLAYLIST_VOLUME = 0.80
@@ -124,6 +130,23 @@ PLAYLIST_DECKS = (PLAYLIST_DECK_A, PLAYLIST_DECK_B)
 #: far from its end - that is where the next one starts.
 DEFAULT_CROSSFADE = 3.0
 MAX_CROSSFADE = 30.0
+
+#: The overlap an item gets even when its crossfade is zero. A drop that
+#: hands over only once its last sample has played leaves a hole: the tick
+#: that notices, and then the moment the next file takes to open. Two tenths
+#: of a second of overlap is what makes a spot butt up against the song
+#: behind it instead of sitting in a gap. Brian Hartgen: "Spots also do not
+#: play close up to the succeeding song."
+SEGUE_LEAD = 0.20
+
+#: How long the incoming track takes to reach full level at a handover.
+#: Deliberately tiny. A crossfade on the radio is the OUTGOING song riding
+#: down under a new one that is already at full level, not both of them
+#: meeting in the middle, and a song that fades up has had its opening
+#: softened for no reason. Long enough only to keep the first sample from
+#: clicking. Brian Hartgen: "The song is playing out in full and the second
+#: one is fading in. That is not crossfading."
+SEGUE_FADE_IN = 0.03
 
 #: How often the player is asked whether a cue is due, in milliseconds. A
 #: crossfade landing within a twentieth of a second is inaudible; the 250 ms
@@ -162,6 +185,13 @@ DUCK_ATTACK = 0.12
 DUCK_RELEASE = 0.70
 
 BLOCKSIZE = 512
+
+#: Where the output starts rounding off rather than being sawn flat. A
+#: crossfade is two songs at once and two songs are louder than one, so the
+#: sum goes over full scale on loud material however sensible the faders are.
+#: Everything below this is untouched; above it the top of the wave is bent
+#: rather than clipped. See mixer._soft_clip.
+SOFT_CLIP_FROM = 0.85
 
 #: Used when no device has told us otherwise, which is only ever the case
 #: before a stream has been opened.
@@ -244,9 +274,17 @@ THE PLAYLIST - a running order that cues itself
                             You can drag files onto the list as well.
   Enter                     Play from the item you are on
   Space                     Tick or untick it. An unticked track stays in
-                            the list, keeps its place, and is skipped
+                            the list, keeps its place, and is skipped.
+                            Your screen reader says checked or not checked
   Delete                    Take that item out
   Alt+Up / Alt+Down         Move it up or down the order
+  Ctrl+Shift+L              Go to whatever is on air
+  First letter              Jumps to the next track whose title starts with
+                            it, the way any Windows list does
+
+  The list has six columns: title, artist, song or drop, length, when it
+  starts, and its own crossfade if you have given it one. The title and the
+  artist come out of the file's tags, and fall back to the file name.
   Applications key          Everything above, in a menu, plus Segue to this
                             now - which crosses to it at the crossfade
                             length instead of waiting for the cue
@@ -256,7 +294,8 @@ THE PLAYLIST - a running order that cues itself
   Crossfade box             In the playlist view, and in Audio settings.
                             Under the running order, with what it does written
                             beside it.
-                            Arrow keys change it and every cue moves with it.
+                            Type a number into it or use the arrow keys, and
+                            every cue moves with it.
                             The Playlist menu takes you straight to it.
                             A single track can be given a crossfade of its
                             own from its right-click menu, or handed back to

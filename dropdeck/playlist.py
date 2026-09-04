@@ -30,9 +30,26 @@ import os
 import random
 from dataclasses import dataclass, field
 
+from . import audiofile
 from . import constants as C
 from .engine import probe
 from .slot import format_duration
+
+
+def format_cue(seconds):
+    """A start time, which is a different thing from a length.
+
+    ``format_duration`` answers "nothing" for zero, because a sound with no
+    length has none worth saying. A cue of zero is not nothing: it is the top
+    of the running order, and the first item in every playlist has one. Saying
+    "starts at" and then stopping is what a screen reader was doing, and Brian
+    Hartgen heard it as a value that had failed to arrive.
+    """
+    if seconds is None:
+        return ""
+    if seconds < 0.5:
+        return "at the top"
+    return format_duration(seconds) or "at the top"
 
 
 def _clean_crossfade(value, fallback=None):
@@ -64,6 +81,14 @@ class Track:
     #: place and can be ticked again, but the player walks straight past it.
     #: Tony: "play this, this and this, don't play that."
     enabled: bool = True
+    #: Out of the file's own tags. ``None`` means nobody has looked yet;
+    #: an empty string means we looked and the file does not say.
+    artist: str | None = None
+    title: str | None = None
+    #: Seconds of silence on the end of the file, measured once. This is what
+    #: the cue point is taken from, so a crossfade lands on the song and not
+    #: on the run out after it. ``None`` means not measured yet.
+    tail_silence: float | None = None
 
     @property
     def is_drop(self) -> bool:
@@ -74,10 +99,85 @@ class Track:
         return bool(self.filepath) and not os.path.exists(self.filepath)
 
     @property
-    def display_name(self) -> str:
+    def filename(self) -> str:
+        return os.path.splitext(os.path.basename(self.filepath or ""))[0] or "Untitled"
+
+    @property
+    def title_text(self) -> str:
+        """What this track is called: what you renamed it, its tag, its file.
+
+        In that order, because a name the user typed beats a tag and a tag
+        beats a file name. Never empty, because an empty row in a list is a
+        row a screen reader reads as nothing at all.
+        """
         if self.name:
             return self.name
-        return os.path.splitext(os.path.basename(self.filepath or ""))[0] or "Untitled"
+        if self.title:
+            return self.title
+        return self.filename
+
+    @property
+    def artist_text(self) -> str:
+        """The artist, or an empty string. Empty is a column that says nothing
+        rather than a column that says "unknown"."""
+        return self.artist or ""
+
+    @property
+    def has_metadata(self) -> bool:
+        """Have the tags been read. Empty strings count: they mean we looked."""
+        return self.artist is not None and self.title is not None
+
+    @property
+    def display_name(self) -> str:
+        """One spoken name for this track, artist included when it has one."""
+        if self.name:
+            return self.name
+        if self.title and self.artist:
+            return "%s by %s" % (self.title, self.artist)
+        return self.title or self.filename
+
+    @property
+    def playable_end(self) -> float:
+        """Where the music really stops, in seconds from the start.
+
+        The file's length less whatever silence is on the end of it. Cueing
+        the next item from the last SAMPLE rather than from here is what put
+        two of a three second crossfade inside the run out of an MP3.
+        """
+        duration = float(self.duration or 0.0)
+        if not duration:
+            return 0.0
+        tail = float(self.tail_silence or 0.0)
+        return max(0.0, duration - max(0.0, min(tail, duration)))
+
+    def read_metadata(self):
+        """Fill in artist, title and the run out. Safe to call twice.
+
+        Returns True if anything changed. Never raises: a file with broken
+        tags still plays, and a file that will not open is somebody else's
+        problem to report.
+        """
+        changed = False
+        if not self.has_metadata:
+            found = {}
+            if not self.is_missing:
+                try:
+                    found = audiofile.tags(self.filepath)
+                except Exception:
+                    found = {}
+            self.artist = found.get("artist") or ""
+            self.title = found.get("title") or ""
+            changed = True
+        if self.tail_silence is None:
+            measured = 0.0
+            if not self.is_missing:
+                try:
+                    measured = audiofile.tail_silence(self.filepath, self.duration)
+                except Exception:
+                    measured = 0.0
+            self.tail_silence = float(measured)
+            changed = True
+        return changed
 
     def crossfade_seconds(self, default):
         """This track's cue, in seconds, resolved against the playlist default.
@@ -90,13 +190,47 @@ class Track:
             return self.crossfade
         return 0.0 if self.is_drop else default
 
+    def columns(self, default_crossfade, cue=None):
+        """The cells of one row, in the order the list shows them.
+
+        The title comes first because that is what first letter navigation
+        looks at, and a running order is something you search by name. The
+        number used to be there and is not any more: a row starting "17." is
+        a row you cannot jump to by pressing its first letter, and in a three
+        hour playlist that is the only way to find anything. The position is
+        still announced, because a list item always announces its position.
+
+        Blank means "this cell has nothing to add", not "unknown": a screen
+        reader reading a column with nothing in it is one more thing said per
+        arrow press, and there are six columns.
+        """
+        kind = "Drop" if self.is_drop else "Song"
+        if self.is_missing:
+            return [self.title_text, self.artist_text, kind + ", file missing",
+                    "", "", ""]
+        fade = self.crossfade_seconds(default_crossfade)
+        return [
+            self.title_text,
+            self.artist_text,
+            kind,
+            format_duration(self.duration),
+            format_cue(cue) if cue is not None else "",
+            # Only when this track has been given one of its own. Every other
+            # row would otherwise repeat the playlist's crossfade, which is in
+            # the box under the list and does not need saying fifty times.
+            (format_duration(fade) or "none") if self.crossfade is not None else "",
+        ]
+
     def label(self, position, default_crossfade, playing=False, cue=None):
-        """What the list row says, and therefore what a screen reader reads."""
+        """One spoken sentence about this track. Not what the row shows.
+
+        The row is columns now, which is what lets a screen reader read them
+        one at a time. This is the whole thing said in one go, for the key
+        that asks and for the announcement when something starts.
+        """
         parts = ["%d. %s" % (position, self.display_name)]
         parts.append("drop" if self.is_drop else "song")
         if not self.enabled:
-            # The tick box says checked or not; this says what that means, for
-            # anyone reading the row rather than listening to the control.
             parts.append("skipped")
         if self.is_missing:
             parts.append("file missing")
@@ -110,19 +244,26 @@ class Track:
             if fade > 0:
                 parts.append("crossfade %s" % format_duration(fade))
             if cue is not None:
-                parts.append("starts at %s" % format_duration(cue))
+                parts.append("starts %s" % format_cue(cue))
         return ", ".join(parts)
 
     def to_dict(self):
         return {"filepath": self.filepath, "name": self.name,
                 "duration": self.duration, "kind": self.kind,
                 "crossfade": self.crossfade, "trim_db": float(self.trim_db),
-                "enabled": bool(self.enabled)}
+                "enabled": bool(self.enabled),
+                "artist": self.artist, "title": self.title,
+                "tail_silence": self.tail_silence}
 
     @classmethod
     def from_dict(cls, data):
         data = data or {}
         kind = data.get("kind")
+        tail = data.get("tail_silence")
+        try:
+            tail = None if tail is None else max(0.0, float(tail))
+        except (TypeError, ValueError):
+            tail = None
         return cls(
             filepath=data.get("filepath") or "",
             name=data.get("name") or None,
@@ -131,6 +272,9 @@ class Track:
             crossfade=_clean_crossfade(data.get("crossfade")),
             trim_db=float(data.get("trim_db", 0.0) or 0.0),
             enabled=bool(data.get("enabled", True)),
+            artist=data.get("artist"),
+            title=data.get("title"),
+            tail_silence=tail,
         )
 
 
@@ -224,8 +368,19 @@ class Playlist:
             duration = probe(path)[0]
         except Exception:
             duration = None
+        # The tags are read here too, because the file is already open in
+        # every practical sense and reading them costs about a millisecond.
+        # The run out is NOT: measuring it means decoding, and pasting an
+        # album should not stop the app for two seconds. It is filled in on
+        # a background pass afterwards.
+        try:
+            found = audiofile.tags(path)
+        except Exception:
+            found = {}
         return Track(filepath=path, duration=duration, kind=kind,
-                     crossfade=crossfade)
+                     crossfade=crossfade,
+                     artist=found.get("artist") or "",
+                     title=found.get("title") or "")
 
     def add(self, paths, at=None, kind=C.TRACK_SONG, crossfade=None):
         """Put files into the running order. Returns the tracks that went in.
@@ -344,10 +499,10 @@ class Playlist:
 
     # --------------------------------------------------------------- cues ---
     def crossfade_for(self, index):
-        """The cue of item ``index``: how early the next one starts.
+        """The crossfade of item ``index``: how long it overlaps the next one.
 
-        The last item has no cue, because there is nothing to hand over to.
-        A crossfade longer than the track is clamped to the track, so a three
+        The last item has none, because there is nothing to hand over to. A
+        crossfade longer than the music is clamped to the music, so a three
         second cue on a two second drop starts the next item at the drop's
         beginning rather than before it.
         """
@@ -359,15 +514,39 @@ class Playlist:
             return 0.0
         track = self.tracks[index]
         fade = track.crossfade_seconds(self.crossfade)
-        if track.duration:
-            fade = min(fade, track.duration)
+        playable = track.playable_end
+        if playable:
+            fade = min(fade, playable)
         return max(0.0, fade)
+
+    def handover_at(self, index):
+        """How early the next item really starts, in seconds before this one
+        stops being music.
+
+        The crossfade, or a fifth of a second, whichever is longer. That floor
+        is what closes the hole between a spot and the song behind it: waiting
+        until the drop's very last sample means waiting for a tick to notice
+        and then for the next file to open, and both of those are audible.
+        Zero for the last item, which has nothing to hand over to.
+        """
+        if not (0 <= index < len(self.tracks)):
+            return 0.0
+        if not self.will_play(index) or self._next_playing(index) is None:
+            return 0.0
+        overlap = max(self.crossfade_for(index), C.SEGUE_LEAD)
+        playable = self.tracks[index].playable_end
+        if playable:
+            overlap = min(overlap, playable)
+        return max(0.0, overlap)
 
     def cue_points(self):
         """When each item starts, in seconds from the top of the playlist.
 
-        This is the timeline: item n starts when item n-1 has `crossfade`
-        seconds left, so the overlaps accumulate backwards through the list.
+        This is the timeline: item n starts when item n-1 has its handover
+        left, so the overlaps accumulate backwards through the list. It is
+        measured against where each track's music stops, not its last sample,
+        which is why a running order of MP3s with silence on the end no longer
+        reads a few seconds long.
         """
         points = []
         clock = 0.0
@@ -377,7 +556,7 @@ class Playlist:
                 points.append(None)
                 continue
             points.append(clock)
-            clock += max(0.0, (track.duration or 0.0) - self.crossfade_for(index))
+            clock += max(0.0, track.playable_end - self.handover_at(index))
         return points
 
     @property
@@ -388,7 +567,15 @@ class Playlist:
             return 0.0
         points = self.cue_points()
         last = playing[-1]
-        return points[last] + (self.tracks[last].duration or 0.0)
+        return points[last] + (self.tracks[last].playable_end
+                               or self.tracks[last].duration or 0.0)
+
+    # ------------------------------------------------------------ metadata --
+    def needs_metadata(self):
+        """The tracks whose tags or run out have never been looked at."""
+        return [t for t in self.tracks
+                if not t.is_missing
+                and (not t.has_metadata or t.tail_silence is None)]
 
     # ----------------------------------------------------------- relinking --
     def relink(self, index):
@@ -455,6 +642,29 @@ class PlaylistPlayer:
             return self.playlist[self.index]
         return None
 
+    @property
+    def position(self):
+        """How far into the running track we are, in seconds, or None."""
+        if not self.playing or self._voice is None:
+            return None
+        return float(self._voice.position_seconds)
+
+    @property
+    def remaining(self):
+        """How much of the running track is left, in seconds, or None.
+
+        Measured to where the music stops rather than to the last sample, so
+        it agrees with when the next track will actually start. Brian
+        Hartgen: "We do not know how much time remains in the song."
+        """
+        track = self.current
+        if track is None or not self.playing or self._voice is None:
+            return None
+        end = track.playable_end or float(track.duration or 0.0)
+        if not end:
+            return None
+        return max(0.0, end - float(self._voice.position_seconds))
+
     def _next_deck(self):
         self._deck = 1 - self._deck
         return C.PLAYLIST_DECKS[self._deck]
@@ -466,8 +676,11 @@ class PlaylistPlayer:
             self._next_deck(), track.filepath,
             bus=C.BUS_PLAYLIST, loop=False, trim_db=track.trim_db,
             name=track.display_name, duration=track.duration,
-            fade_in=fade_in if fade_in is not None else 0.0,
-            fade_out=self.playlist.crossfade_for(index))
+            # A hair of a fade in, never a ramp. Long enough that the first
+            # sample cannot click, short enough that the song starts where
+            # the song starts.
+            fade_in=fade_in if fade_in is not None else C.SEGUE_FADE_IN,
+            fade_out=self.playlist.handover_at(index))
         if voice is None:
             self.last_error = getattr(self.mixer, "last_error", None)
             return None
@@ -555,14 +768,30 @@ class PlaylistPlayer:
         return self._start(target) is not None
 
     def _hand_over(self, following):
-        """Start the next item and let the current one fade under it."""
-        fade = self.playlist.crossfade_for(self.index)
+        """Start the next item and let the current one ride down under it.
+
+        The incoming track comes up at full level, near enough instantly. The
+        outgoing one fades out across the whole overlap. That is what a
+        crossfade is on the radio, and it is not what this used to do: both
+        of them ramped, so on a file with any silence on its end the outgoing
+        song finished while the incoming one was still a quarter of the way
+        up, and what you heard was one song stopping and another creeping in.
+
+        Brian Hartgen, September 2026: "The song is playing out in full and
+        the second one is fading in. That is not crossfading."
+        """
+        overlap = self.playlist.handover_at(self.index)
+        if overlap <= 0:
+            # Nothing to hand over to, which is the case when somebody segues
+            # by hand out of the last item in the order. Use the playlist's
+            # crossfade rather than cutting the outgoing song dead.
+            overlap = max(float(self.playlist.crossfade or 0.0), C.SEGUE_LEAD)
         outgoing = self._voice
-        started = self._start(following, fade_in=fade)
+        started = self._start(following, fade_in=C.SEGUE_FADE_IN)
         if started is None:
             return False
         if outgoing is not None and outgoing is not started:
-            outgoing.release(fade)
+            outgoing.release(overlap)
         return True
 
     # ---------------------------------------------------------------- tick --
@@ -603,13 +832,15 @@ class PlaylistPlayer:
             self.stop()
             return True
 
-        duration = track.duration
-        if not duration:
+        # Where the music stops, which is not the same as where the file
+        # stops. A track nobody has measured yet behaves as it always did.
+        end = track.playable_end
+        if not end:
             return False
-        fade = self.playlist.crossfade_for(self.index)
-        if fade <= 0:
+        overlap = self.playlist.handover_at(self.index)
+        if overlap <= 0:
             return False
-        if voice.position_seconds < duration - fade:
+        if voice.position_seconds < end - overlap:
             return False
         following = self._first_playable(self.index + 1)
         if following is None:
