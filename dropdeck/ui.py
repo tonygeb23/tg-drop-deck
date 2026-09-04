@@ -1429,6 +1429,25 @@ class DropDeckFrame(wx.Frame):
         # whenever a field is truncated, and setting one manually asserts.
         self.status.SetStatusText(text, 1)
 
+    def announce_answer(self, text):
+        """A direct answer to a question the user has just asked. Always spoken.
+
+        The fourth channel, and the only one that speaks at every level
+        including "none". "None" means the app does not volunteer anything and
+        leaves the running commentary to the screen reader, which is the right
+        default for somebody who knows the app. It cannot mean that a key
+        whose ONLY job is to answer a question does nothing at all: Ctrl+L has
+        no other effect, so silent Ctrl+L is a broken key rather than a quiet
+        one. Tony, 3 September 2026, with speech set to none: "ctrl L does not
+        announce anything while a track is playing."
+
+        Keep this for keys that exist purely to be asked. Anything you can
+        hear for yourself, or that a screen reader will read off the control,
+        belongs on one of the other three.
+        """
+        self.speaker.say(text)
+        self.note(text)
+
     def note(self, text):
         """Write the status bar and say nothing.
 
@@ -1438,7 +1457,11 @@ class DropDeckFrame(wx.Frame):
         two announcements for one keypress. The words are still there to be
         read, which is the rule every other channel here follows.
         """
-        self.status.SetStatusText(text, 1)
+        # getattr, because the playlist panel is built before the status bar
+        # is, and its very first refresh comes through here on the way past.
+        status = getattr(self, "status", None)
+        if status is not None:
+            status.SetStatusText(text, 1)
 
     def _update_status(self):
         self.status.SetStatusText(
@@ -1561,7 +1584,10 @@ class DropDeckFrame(wx.Frame):
             parts.append("%d playing. %s" % (
                 len(indices),
                 ", ".join(self.board[i].display_name for i in indices)))
-        self.announce(". ".join(parts) if parts else "Nothing is playing")
+        # announce_answer, not announce: this key exists only to be asked,
+        # and at speech level "none" announce says nothing, which made Ctrl+L
+        # a key that did nothing whatsoever.
+        self.announce_answer(". ".join(parts) if parts else "Nothing is playing")
 
     # ------------------------------------------------------- slot editing ----
     def _focused_slot(self):

@@ -582,8 +582,9 @@ class SettingsDialog(wx.Dialog):
         self.speech_choice.SetToolTip(
             "Everything is the default. The middle setting drops confirmations "
             "and the bank hints and keeps anything you could not otherwise "
-            "know. Nothing silences the app completely - the status bar and "
-            "your screen reader still have all of it.")
+            "know. Nothing leaves the running commentary to your screen reader "
+            "and the status bar, and still answers a key you press to ask a "
+            "question, such as Ctrl+L for what is playing.")
         self.speech_choice.Bind(wx.EVT_CHOICE, self._on_speech_level)
         outer.Add(self.speech_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 

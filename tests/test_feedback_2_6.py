@@ -416,6 +416,98 @@ check("the pad refresh survives the playlist being on air", True)
 frame.stop_playlist(quiet=True)
 
 # ---------------------------------------------------------------------------
+print("\nAsking a question, with the app set to say nothing")
+#
+# Tony, 3 September 2026, with Spoken feedback on "none": "ctrl L does not
+# announce anything while a track is playing." It did not, and it was doing
+# exactly what it was told: at that level announce() writes the status bar and
+# stays quiet. That is right for a running commentary and wrong for a key
+# whose only job is to answer a question. A silent Ctrl+L is a broken key.
+
+frame.board.playlist.clear()
+panel.refresh()
+panel.add_paths(songs)
+frame.board.speech_level = C.SPEECH_NONE
+frame.play_playlist(0)
+
+frame.speaker.last_message = None
+frame.announce("a running commentary")
+check("at none the app still volunteers nothing",
+      frame.speaker.last_message is None, frame.speaker.last_message)
+check("but the status bar has it",
+      "running commentary" in frame.status.GetStatusText(1),
+      frame.status.GetStatusText(1))
+
+frame.speaker.last_message = None
+frame._on_whats_playing(None)
+check("Ctrl+L answers even so",
+      frame.speaker.last_message and "Playlist" in frame.speaker.last_message,
+      frame.speaker.last_message)
+check("and says the track, which of how many, and what is left",
+      frame.speaker.last_message
+      and "1 of 3" in frame.speaker.last_message
+      and "left" in frame.speaker.last_message, frame.speaker.last_message)
+
+frame.stop_playlist(quiet=True)
+frame.speaker.last_message = None
+frame._on_whats_playing(None)
+check("and answers when nothing is on, rather than saying nothing at all",
+      frame.speaker.last_message == "Nothing is playing",
+      frame.speaker.last_message)
+
+frame.speaker.last_message = None
+panel.go_to_playing()
+check("go to what is on air answers too when there is nothing on",
+      frame.speaker.last_message == "The playlist is not playing",
+      frame.speaker.last_message)
+
+frame.play_playlist(1)
+panel.select(0)
+frame.speaker.last_message = None
+panel.go_to_playing()
+check("and moving the cursor to it is the answer, so nothing extra is said",
+      panel.selection() == 1 and frame.speaker.last_message is None,
+      (panel.selection(), frame.speaker.last_message))
+frame.stop_playlist(quiet=True)
+frame.board.speech_level = C.SPEECH_ALL
+
+check("the setting says what it really does now",
+      "Ctrl+L" in C.SPEECH_LABELS[C.SPEECH_LEVELS.index(C.SPEECH_NONE)],
+      C.SPEECH_LABELS[2])
+
+# ---------------------------------------------------------------------------
+print("\nTicking the boxes from the model is not the user ticking them")
+#
+# CheckItem raises the same event a keypress does. Treating that as somebody
+# having ticked a track meant every refresh wrote the status bar and marked
+# the board unsaved, and the very first refresh happens while the frame is
+# still being built and has no status bar at all: five tracebacks a launch.
+
+frame.board.playlist.clear()
+panel.refresh()
+panel.add_paths(songs)
+frame.board.playlist.set_enabled(1, False)
+frame.note("nothing has happened yet")
+panel.refresh()
+check("a refresh that writes the ticks says nothing about them",
+      frame.status.GetStatusText(1) == "nothing has happened yet",
+      frame.status.GetStatusText(1))
+check("and the ticks are still right",
+      [panel.is_ticked(i) for i in range(3)] == [True, False, True],
+      [panel.is_ticked(i) for i in range(3)])
+check("the flag is put back afterwards, whatever happened",
+      panel._syncing is False)
+
+# The user doing it by hand still reports it, in the status bar.
+panel.select(0)
+panel.list.CheckItem(0, False)
+check("ticking one by hand still reports it",
+      "will be skipped" in frame.status.GetStatusText(1),
+      frame.status.GetStatusText(1))
+panel.list.CheckItem(0, True)
+
+
+# ---------------------------------------------------------------------------
 print("\nThe background pass that fills all this in")
 
 frame.board.playlist.clear()

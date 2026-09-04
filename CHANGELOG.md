@@ -85,6 +85,18 @@ libsndfile, which is faster.
 
 ### Also fixed
 
+**`Ctrl+L` answers even with Spoken feedback set to Nothing.** It did not, and
+it was doing what it was told: at that level the app says nothing and leaves
+the commentary to your screen reader. That is right for a running commentary
+and wrong for a key whose only job is to answer a question, because `Ctrl+L`
+has no other effect, so a silent one is a broken key rather than a quiet one.
+The setting's wording says so now. Everything else at that level is unchanged.
+
+Writing the tick boxes from the running order counted as you having ticked
+them, so every refresh wrote the status bar and marked the board unsaved, and
+the first refresh of all happens before the window has a status bar to write
+to: five errors on every launch with a playlist in the board.
+
 The pad labels stopped being refreshed the moment the playlist went on air.
 The refresh walked every slot the mixer was playing, and the playlist's two
 decks are numbered above the eighty pads, so it raised on one of them from

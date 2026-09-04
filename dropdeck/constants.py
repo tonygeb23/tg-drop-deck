@@ -86,14 +86,17 @@ AUDIO_FORMATS_SPOKEN = _audiofile.spoken_formats()
 #: "all"       everything, including confirmations and the bank hints
 #: "essential" only what you cannot otherwise know: failures, refusals,
 #:             values you asked for. No confirmations, no hints.
-#: "none"      the app never speaks. The status bar still shows everything
-#:             and the screen reader still reads every control.
+#: "none"      the app volunteers nothing. The status bar still shows
+#:             everything and the screen reader still reads every control.
+#:             The one exception is a key whose only job is to answer a
+#:             question, Ctrl+L being the whole of it: a key that does
+#:             nothing at all is broken, not quiet.
 SPEECH_ALL, SPEECH_ESSENTIAL, SPEECH_NONE = "all", "essential", "none"
 SPEECH_LEVELS = (SPEECH_ALL, SPEECH_ESSENTIAL, SPEECH_NONE)
 SPEECH_LABELS = (
     "Everything, including confirmations and bank hints",
     "Only what I cannot hear or read for myself",
-    "Nothing - let my screen reader do all of it",
+    "Nothing but the answers to what I ask, such as Ctrl+L",
 )
 DEFAULT_SPEECH_LEVEL = SPEECH_ALL
 
@@ -348,8 +351,9 @@ GLOBAL
 HOW MUCH THE APP SAYS
   Audio settings, Ctrl+P, has a Spoken feedback setting with three levels.
   Everything is the default. Only what I cannot hear drops the confirmations
-  and the bank hints and keeps failures. Nothing silences the app completely
-  and leaves the status bar and your screen reader to it.
+  and the bank hints and keeps failures. Nothing leaves the running
+  commentary to your screen reader and the status bar entirely, and still
+  answers a key you press to ask a question, which is Ctrl+L.
 
 GLOBAL HOTKEYS - firing a sound from another program
   Right-click a sound, or press Alt+Enter on it, or use the Sounds menu.

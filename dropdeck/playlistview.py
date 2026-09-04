@@ -79,6 +79,12 @@ class PlaylistPanel(wx.Panel):
         #: for Space as well as for Return once check boxes are on, and one
         #: keypress must not both tick a track and put it on the air.
         self._space_pressed = False
+        #: Set while the ticks are being written FROM the model. CheckItem
+        #: raises the same event a keypress does, and treating that as the
+        #: user having ticked something means every refresh writes the status
+        #: bar and marks the board unsaved. Worse, the first refresh happens
+        #: while the frame is still being built and has no status bar yet.
+        self._syncing = False
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -338,15 +344,19 @@ class PlaylistPanel(wx.Panel):
         is already correct is harmless but noisy, so nothing is written unless
         it differs.
         """
-        if self.is_empty:
-            if self.list.GetItemCount() and self.list.IsItemChecked(0):
-                self.list.CheckItem(0, False)
-            return
-        for index, track in enumerate(self.playlist):
-            if index >= self.list.GetItemCount():
-                break
-            if self.list.IsItemChecked(index) != bool(track.enabled):
-                self.list.CheckItem(index, bool(track.enabled))
+        self._syncing = True
+        try:
+            if self.is_empty:
+                if self.list.GetItemCount() and self.list.IsItemChecked(0):
+                    self.list.CheckItem(0, False)
+                return
+            for index, track in enumerate(self.playlist):
+                if index >= self.list.GetItemCount():
+                    break
+                if self.list.IsItemChecked(index) != bool(track.enabled):
+                    self.list.CheckItem(index, bool(track.enabled))
+        finally:
+            self._syncing = False
 
     def _sync_crossfade_box(self):
         # Loading a board brings its own crossfade with it.
@@ -452,6 +462,11 @@ class PlaylistPanel(wx.Panel):
         one keystroke. It goes in the status bar, which every level shows.
         """
         event.Skip()
+        if self._syncing:
+            # Written from the model, not by the user. Putting it back into
+            # the model would be a no-op; saying it out loud and marking the
+            # board unsaved would not.
+            return
         index = event.GetIndex()
         if self.is_empty:
             # The only row is the word Empty. Put its tick straight back.
@@ -598,14 +613,23 @@ class PlaylistPanel(wx.Panel):
         playing."
         """
         if not self.player.playing or self.player.current is None:
-            self.frame.announce("The playlist is not playing")
+            # An answer, not a comment, so it is said at every speech level.
+            # A key that is only ever a question has to reply to it.
+            self.frame.announce_answer("The playlist is not playing")
             return False
         index = self.player.index
         if not (0 <= index < self.list.GetItemCount()):
             return False
+        already = (self.selection() == index
+                   and self.list.HasFocus())
         self.frame.show_view_playlist()
         self.list.SetFocus()
         self.select(index)
+        if already:
+            # Moving the cursor is the answer, because a screen reader reads
+            # the row it lands on. Standing on it already is not, so say it.
+            self.frame.announce_answer(
+                "Already on it. %s" % self.player.current.display_name)
         return True
 
     # ------------------------------------------------------------ commands --
