@@ -446,6 +446,36 @@ THE MICROPHONE
   Nothing here ever opens the microphone on its own. It opens when you press
   Ctrl+M and at no other time, and whether it was on is never saved.
 
+PROCESSING YOUR VOICE
+  Preferences, Voice. A noise gate, a high pass filter, a three band
+  equaliser, a compressor and a limiter, in that order, on the microphone.
+  Everything you can hear goes through it, so what you monitor is what goes
+  out.
+
+  It is one list. Up and down choose a setting, left and right change it, and
+  each change is spoken. Page up and page down move in bigger steps.
+
+  Process the microphone turns the whole chain off and on, which is the
+  fastest way to hear what it is doing.
+
+  The order is deliberate. The gate goes first so the compressor is not
+  pulling up room noise between words. The equaliser goes before the
+  compressor so it responds to the voice you have shaped. The limiter is last
+  because its job is the final word: set it to minus one and nothing you do
+  above it can get past minus one.
+
+VST3 PLUGINS
+  Preferences, Voice, Plugin. Any VST3 effect on this machine can go in the
+  chain, after the compressor and before the limiter.
+
+  Its own window is never opened. A plugin describes every one of its
+  controls, with a name, a range and a unit, so they appear in the same list
+  as everything else and can be read and changed the same way. A plugin whose
+  window no screen reader can touch is as usable here as the compressor.
+
+  Save preset and Open preset keep settings you like in a file you can copy
+  and share.
+
 PUTTING THE SHOW ON THE INTERNET
   Ctrl+B                    Go live, and come off air again
   Ctrl+Shift+B              What the stream is doing right now

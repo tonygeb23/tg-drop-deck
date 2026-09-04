@@ -15,7 +15,9 @@ import wx
 from . import audiofile
 from . import constants as C
 from . import feedback
+from . import dsp
 from . import streamout
+from . import vst
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
@@ -606,7 +608,7 @@ class SlotPropertiesDialog(wx.Dialog):
 
 
 class SettingsDialog(wx.Dialog):
-    """Everything you can set, on six tabs.
+    """Everything you can set, on seven tabs.
 
     It was one long column: output, routing, speech, ducking, bed fades,
     crossfade, and then the end of track beep on the end of that. Every
@@ -618,13 +620,13 @@ class SettingsDialog(wx.Dialog):
     Tabs, and one dialog. `Ctrl+P` opens it on Output and `Ctrl+Shift+M` opens
     it on Microphone; they are the same window. Ctrl+Tab moves between the
     tabs, and a screen reader reads a tab name when you land on it, which is
-    the whole reason this is a notebook rather than six group boxes.
+    the whole reason this is a notebook rather than seven group boxes.
     """
 
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
-    (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_STREAM,
-     PAGE_SPEECH) = range(6)
+    (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
+     PAGE_STREAM, PAGE_SPEECH) = range(7)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -641,6 +643,7 @@ class SettingsDialog(wx.Dialog):
         self._build_sound_tab()
         self._build_playlist_tab()
         self._build_mic_tab()
+        self._build_voice_tab()
         self._build_stream_tab()
         self._build_speech_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
@@ -684,6 +687,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_SOUND: self.duck_on,
                 self.PAGE_PLAYLIST: self.crossfade_ctrl,
                 self.PAGE_MIC: self.mic_device,
+                self.PAGE_VOICE: self.voice_list,
                 self.PAGE_STREAM: self.stream_server,
                 self.PAGE_SPEECH: self.speech_choice}.get(
                     self.tabs.GetSelection())
@@ -895,6 +899,193 @@ class SettingsDialog(wx.Dialog):
 
         sizer.Add(wx.StaticText(panel, label=self._mic_status_text()), 0,
                   wx.ALL, 10)
+
+    def _build_voice_tab(self):
+        """The microphone chain, as a list rather than a wall of knobs.
+
+        Every processor here has four or five numbers, and laid out as
+        controls that is thirty boxes to tab past to reach the one you want.
+        As a list it is one thing to arrow down and one thing to arrow across,
+        which is both faster to use and far less to hear.
+
+        The same list shows a VST3 plugin's parameters, because a plugin
+        describes its knobs in exactly the same terms. A plugin whose window
+        no screen reader can read becomes a list that any screen reader can.
+        """
+        panel, sizer = self._page("Voice")
+        self.chain = getattr(self.mic, "chain", None) if self.mic else None
+
+        if not dsp.available():
+            self._note(panel, sizer,
+                       "Voice processing is not installed in this copy.")
+            self.voice_list = wx.ListCtrl(panel, style=wx.LC_REPORT)
+            self.voice_list.SetName("Voice processing")
+            sizer.Add(self.voice_list, 1, wx.EXPAND | wx.ALL, 10)
+            return
+
+        self.voice_on = wx.CheckBox(
+            panel, label="Process the &microphone")
+        self.voice_on.SetValue(bool(self.chain.enabled) if self.chain else True)
+        self.voice_on.SetToolTip(
+            "Off passes your voice through untouched. The quickest way to "
+            "hear what the chain is doing is to turn it off and on while you "
+            "talk.")
+        sizer.Add(self.voice_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        self._label(panel, sizer, "&Settings")
+        self.voice_list = wx.ListCtrl(
+            panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+            size=(-1, 260))
+        self.voice_list.SetName("Voice processing settings")
+        self.voice_list.InsertColumn(0, "Setting", width=260)
+        self.voice_list.InsertColumn(1, "Value", width=140)
+        self.voice_list.SetToolTip(
+            "Up and down to choose a setting, left and right to change it. "
+            "Page up and page down move in bigger steps, and Home and End go "
+            "to the ends.")
+        self.voice_list.Bind(wx.EVT_KEY_DOWN, self._on_voice_key)
+        sizer.Add(self.voice_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self._note(panel, sizer,
+                   "Left and right change the setting you are on.")
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self._label(panel, sizer, "&Plugin")
+        names = ["None"] + [name for name, _path in vst.installed()]
+        self.voice_plugin = wx.Choice(panel, choices=names)
+        name_field(self.voice_plugin, "Plugin")
+        self.voice_plugin.SetSelection(0)
+        current = getattr(self.chain, "plugin", None) if self.chain else None
+        if current is not None:
+            wanted = getattr(current, "name", "")
+            if wanted in names:
+                self.voice_plugin.SetSelection(names.index(wanted))
+        self.voice_plugin.SetToolTip(
+            "A VST3 effect, added after the compressor and before the "
+            "limiter. Its own window is never opened; its settings appear in "
+            "the list above.")
+        self.voice_plugin.Bind(wx.EVT_CHOICE, self._on_voice_plugin)
+        row.Add(self.voice_plugin, 1, wx.EXPAND | wx.RIGHT, 8)
+        save = wx.Button(panel, label="Save prese&t...")
+        save.Bind(wx.EVT_BUTTON, self._on_voice_save_preset)
+        row.Add(save, 0, wx.RIGHT, 8)
+        load = wx.Button(panel, label="Open p&reset...")
+        load.Bind(wx.EVT_BUTTON, self._on_voice_load_preset)
+        row.Add(load, 0)
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
+
+        self._refresh_voice()
+
+    # ------------------------------------------------------------- voice --
+    def _voice_parameters(self):
+        """The chain's own settings, then the plugin's, in one list."""
+        if self.chain is None:
+            return []
+        params = list(self.chain.parameters())
+        plugin = getattr(self.chain, "plugin", None)
+        if plugin is not None:
+            params.extend(vst.parameters(plugin))
+        return params
+
+    def _refresh_voice(self, keep=0):
+        if self.chain is None:
+            return
+        self._voice_params = self._voice_parameters()
+        self.voice_list.DeleteAllItems()
+        for row, param in enumerate(self._voice_params):
+            self.voice_list.InsertItem(row, param.label)
+            self.voice_list.SetItem(row, 1, param.spoken())
+        if self._voice_params:
+            keep = max(0, min(keep, len(self._voice_params) - 1))
+            self.voice_list.Select(keep)
+            self.voice_list.Focus(keep)
+
+    def _on_voice_key(self, event):
+        """Left and right adjust; everything else is the list's own."""
+        key = event.GetKeyCode()
+        steps = {wx.WXK_LEFT: -1, wx.WXK_RIGHT: 1,
+                 wx.WXK_PAGEUP: 10, wx.WXK_PAGEDOWN: -10}.get(key)
+        if steps is None:
+            event.Skip()
+            return
+        row = self.voice_list.GetFirstSelected()
+        if row < 0 or row >= len(getattr(self, "_voice_params", [])):
+            event.Skip()
+            return
+        param = self._voice_params[row]
+        param.nudge(steps)
+        self.voice_list.SetItem(row, 1, param.spoken())
+        # Spoken as an answer, because the list will not say a value that
+        # changed under it and this is the whole point of the screen.
+        self._say_voice(param.describe())
+
+    def _say_voice(self, text):
+        frame = self.GetParent()
+        speak = getattr(frame, "announce_answer", None)
+        if speak is not None:
+            speak(text)
+
+    def _on_voice_plugin(self, _event):
+        """Load, or unload, the VST3 in the chain."""
+        if self.chain is None:
+            return
+        choice = self.voice_plugin.GetStringSelection()
+        if choice == "None":
+            self.chain.set_plugin(None)
+            self._refresh_voice()
+            self._say_voice("No plugin")
+            return
+        path = dict(vst.installed()).get(choice)
+        wx.BeginBusyCursor()
+        try:
+            plugin = vst.load(path)
+        except vst.LoadFailed as exc:
+            self._say_voice(str(exc))
+            self.voice_plugin.SetSelection(0)
+            return
+        finally:
+            wx.EndBusyCursor()
+        self.chain.set_plugin(plugin)
+        self._refresh_voice()
+        self._say_voice("%s loaded, %d settings"
+                        % (choice, len(vst.parameters(plugin))))
+
+    def _on_voice_save_preset(self, _event):
+        plugin = getattr(self.chain, "plugin", None) if self.chain else None
+        if plugin is None:
+            self._say_voice("Load a plugin first")
+            return
+        with wx.FileDialog(self, "Save this plugin's settings",
+                           wildcard="Drop Deck preset (*.json)|*.json",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+        try:
+            vst.save_preset(plugin, path)
+        except OSError as exc:
+            self._say_voice("Could not save it: %s" % exc)
+            return
+        self._say_voice("Saved")
+
+    def _on_voice_load_preset(self, _event):
+        plugin = getattr(self.chain, "plugin", None) if self.chain else None
+        if plugin is None:
+            self._say_voice("Load a plugin first")
+            return
+        with wx.FileDialog(self, "Open a preset",
+                           wildcard="Drop Deck preset (*.json)|*.json",
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+        try:
+            restored = vst.load_preset(plugin, path)
+        except (OSError, ValueError) as exc:
+            self._say_voice("Could not open it: %s" % exc)
+            return
+        self._refresh_voice(self.voice_list.GetFirstSelected())
+        self._say_voice("%d settings restored" % restored)
 
     def _build_stream_tab(self):
         """Where the show goes, and a button that proves it before air.

@@ -1173,13 +1173,13 @@ check("Ctrl+Shift+M is its settings",
 from dropdeck.dialogs import SettingsDialog
 prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
                        page=SettingsDialog.PAGE_MIC)
-check("Preferences has six tabs", prefs.tabs.GetPageCount() == 6,
+check("Preferences has seven tabs", prefs.tabs.GetPageCount() == 7,
       prefs.tabs.GetPageCount())
 check("named for what is on them",
-      [prefs.tabs.GetPageText(i) for i in range(6)]
-      == ["Output", "Sounds and beds", "Playlist", "Microphone", "Streaming",
-          "Speech"],
-      [prefs.tabs.GetPageText(i) for i in range(6)])
+      [prefs.tabs.GetPageText(i) for i in range(7)]
+      == ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
+          "Streaming", "Speech"],
+      [prefs.tabs.GetPageText(i) for i in range(7)])
 check("Ctrl+Shift+M opens it on the microphone tab",
       prefs.tabs.GetSelection() == SettingsDialog.PAGE_MIC,
       prefs.tabs.GetSelection())

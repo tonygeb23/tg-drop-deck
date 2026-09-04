@@ -188,9 +188,18 @@ class MicInput:
         self.monitor = bool(monitor)
         self.stream = None
         self.last_error = None
-        #: Peak of the most recent block, 0 to 1, for a level readout.
+        #: Peak of the most recent block, 0 to 1, for a level readout. This
+        #: one is BEFORE the processing, because it is what a gain control
+        #: needs to be set against.
         self.peak = 0.0
+        #: And after it, which is what actually leaves the building.
+        self.processed_peak = 0.0
         self.overruns = 0
+
+        #: Gate, equaliser, compressor and limiter. None means the voice
+        #: goes out exactly as it arrives, which is what happens when the
+        #: processing library is not installed.
+        self.chain = None
 
         #: On air. Separate from monitoring on purpose: a presenter working
         #: on speakers hears nothing back and is still being broadcast, and a
@@ -215,6 +224,12 @@ class MicInput:
     @property
     def gain(self):
         return db_to_gain(self.gain_db)
+
+    @property
+    def gain_reduction_db(self):
+        """How hard the compressor is working, or zero if there is none."""
+        chain = self.chain
+        return chain.gain_reduction_db if chain is not None else 0.0
 
     def describe(self):
         return describe_input(self.device)
@@ -339,6 +354,11 @@ class MicInput:
         with self._lock:
             self._monitor.clear()
             self._air.clear()
+        chain = self.chain
+        if chain is not None:
+            # Envelopes and filters remember the last thing they heard, and
+            # the last thing they heard was a different microphone.
+            chain.reset()
             if self.samplerate != self.output_rate:
                 self._resampler = soxr.ResampleStream(
                     self.samplerate, self.output_rate, CHANNELS,
@@ -368,6 +388,17 @@ class MicInput:
                 stereo = self._resampler.resample_chunk(stereo)
                 if not len(stereo):
                     return
+
+        # Processed OUTSIDE the lock. It is only a tenth of a millisecond, but
+        # the output callback takes this same lock to read the monitor, and
+        # there is no reason to make it wait behind a compressor.
+        chain = self.chain
+        if chain is not None:
+            stereo = chain.process(stereo)
+        self.processed_peak = (float(np.abs(stereo).max())
+                               if len(stereo) else 0.0)
+
+        with self._lock:
             if self.monitor:
                 self._monitor.write(stereo)
             if self.on_air:

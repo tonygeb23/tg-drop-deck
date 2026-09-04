@@ -204,6 +204,11 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+        #: The microphone chain: gate, equaliser, compressor, limiter.
+        #: Empty means the defaults, which are chosen for a spoken voice.
+        self.voice_on = True
+        self.voice_settings = {}
+
         #: Every station this board knows, newest last. The live settings
         #: above are whichever one is loaded; this is the shelf they came off.
         self.stream_stations = []
@@ -465,6 +470,8 @@ class Board:
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
             "stream_stations": list(self.stream_stations),
+            "voice_on": bool(self.voice_on),
+            "voice_settings": dict(self.voice_settings),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -542,6 +549,9 @@ class Board:
         board.stream_titles = bool(data.get("stream_titles", True))
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
+        board.voice_on = bool(data.get("voice_on", True))
+        settings = data.get("voice_settings")
+        board.voice_settings = dict(settings) if isinstance(settings, dict) else {}
         board.stream_stations = _stations(data.get("stream_stations"))
         # A board written before stations existed still has one set up, and
         # losing it on upgrade would be the worst kind of small betrayal.

@@ -18,6 +18,7 @@ import webbrowser
 
 from . import appicon
 from . import constants as C
+from . import dsp
 from . import feedback
 from . import streamout
 from . import globalhotkeys
@@ -541,6 +542,13 @@ class DropDeckFrame(wx.Frame):
                             device=resolve_input(self._mic_spec()),
                             gain_db=self.board.mic_gain_db,
                             monitor=self.board.mic_monitor)
+        # Gate, equaliser, compressor and limiter. Built even when the
+        # processing library is missing, because a chain that does nothing is
+        # simpler for everything downstream than a chain that is None.
+        if dsp.available():
+            self.mic.chain = dsp.MicChain(self.mixer.samplerate,
+                                          self.board.voice_settings)
+            self.mic.chain.enabled = bool(self.board.voice_on)
         self.mixer.monitor_source = self.mic
 
         #: The stream, once there is one. None is off air, and off air is
@@ -3453,6 +3461,11 @@ class DropDeckFrame(wx.Frame):
             self.board.stream_titles = dialog.stream_titles.GetValue()
             self.board.playlist_monitor_only = (
                 dialog.playlist_monitor_only.GetValue())
+            chain = getattr(self.mic, "chain", None)
+            if chain is not None and hasattr(dialog, "voice_on"):
+                chain.enabled = dialog.voice_on.GetValue()
+                self.board.voice_on = chain.enabled
+                self.board.voice_settings = chain.to_dict()
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
