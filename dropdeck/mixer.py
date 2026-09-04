@@ -153,6 +153,16 @@ class Mixer:
         #: read(frames) that never blocks will do; see micinput.MicInput.
         self.monitor_source = None
 
+        #: Where the on air mix goes while streaming, or None. Anything with a
+        #: write(key, block) that never blocks will do; see streamout.AirBus.
+        #: None is the ordinary state and costs nothing at all.
+        self.air_tap = None
+
+        #: The microphone, read through its own tap for the stream. Not the
+        #: same read as monitor_source: each takes what it reads away, and a
+        #: presenter on speakers monitors nothing and is still on air.
+        self.air_source = None
+
         #: The pip, made once per samplerate. See play_cue.
         self._cue_tone = None
         self._cue_frames = 0
@@ -445,12 +455,22 @@ class Mixer:
     def render(self, frames):
         """Mix one block. Public so tests can run the whole engine silently."""
         mix = np.zeros((frames, CHANNELS), dtype=np.float32)
+        tap = self.air_tap
+        air = (np.zeros((frames, CHANNELS), dtype=np.float32)
+               if tap is not None else None)
         with self._lock:
             voices = list(self._voices)
         if voices:
             duck = self._duck_ramp(frames, voices)
             for voice in voices:
-                mix += voice.render(frames, duck)
+                block = voice.render(frames, duck)
+                mix += block
+                # A voice can only be rendered once, because rendering moves
+                # it along. So the on air sum is built here beside the one
+                # going to the speakers rather than by a second pass over the
+                # same voices, which would play everything twice as fast.
+                if air is not None and voice.bus not in C.OFF_AIR_BUSES:
+                    air += block
         else:
             self._duck = 1.0
             self.duck_bus.publish(self.key, False)
@@ -470,9 +490,34 @@ class Mixer:
         if peak > C.SOFT_CLIP_FROM:
             _soft_clip(mix)
 
+        if air is not None:
+            self._to_air(air, frames, tap)
+
         if any(v.finished for v in voices):
             self._reap()
         return mix
+
+    def _to_air(self, air, frames, tap):
+        """Finish the on air block and hand it over. Never raises.
+
+        This runs inside the audio callback, so it does exactly two cheap
+        things and gets out. Everything expensive, the encoding and the
+        socket, happens on the streaming thread at the other end of the tap.
+        A stream that cannot keep up must never become a gap in the sound
+        coming out of the speakers.
+        """
+        mic = self.air_source
+        if mic is not None:
+            try:
+                air += mic.read_air(frames)
+            except Exception:
+                pass          # a microphone must never take the show down
+        if frames and float(np.abs(air).max()) > C.SOFT_CLIP_FROM:
+            _soft_clip(air)
+        try:
+            tap.write(self.key, air)
+        except Exception:
+            pass
 
     def _callback(self, outdata, frames, time_info, status):
         if status:

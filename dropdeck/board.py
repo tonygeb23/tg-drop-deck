@@ -18,6 +18,24 @@ from .slot import Slot
 FORMAT_VERSION = 2
 
 
+def _stream_port(value):
+    """A port, or the default. A board file is not a trusted document."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return C.DEFAULT_STREAM_PORT
+    return port if 1 <= port <= 65535 else C.DEFAULT_STREAM_PORT
+
+
+def _stream_bitrate(value):
+    """The nearest bitrate that is actually offered."""
+    try:
+        wanted = int(value)
+    except (TypeError, ValueError):
+        return C.DEFAULT_STREAM_BITRATE
+    return min(C.STREAM_BITRATES, key=lambda rate: abs(rate - wanted))
+
+
 def _warn_seconds(value):
     """How long before the end to beep, off disk. Clamped, never rejected."""
     try:
@@ -133,6 +151,30 @@ class Board:
         #: Whether the sound browser auditions each file as you reach it.
         #: Remembered, because somebody who wants it wants it every time.
         self.preview_sounds = False
+
+        # Streaming. Off until it is set up, and it never turns itself on: a
+        # program that could start broadcasting on its own is a program you
+        # cannot trust in a room with a microphone in it.
+        self.stream_server = "icecast"
+        self.stream_host = ""
+        self.stream_port = C.DEFAULT_STREAM_PORT
+        self.stream_mount = C.DEFAULT_STREAM_MOUNT
+        self.stream_user = C.DEFAULT_STREAM_USER
+        self.stream_password = ""
+        self.stream_format = "mp3"
+        self.stream_bitrate = C.DEFAULT_STREAM_BITRATE
+        self.stream_name = ""
+        self.stream_description = ""
+        self.stream_genre = ""
+        self.stream_url = ""
+        self.stream_public = False
+        #: Put the microphone out on the stream. On by default, because a
+        #: broadcast with no presenter in it is not what anybody meant, and
+        #: separate from monitoring, which is only about hearing yourself.
+        self.stream_mic = True
+        #: Send the playlist's artist and title to the server, so listeners
+        #: see what is playing.
+        self.stream_titles = True
         self.last_sound_dir = ""
         #: Where running orders were last saved or opened. Its own, because a
         #: show's M3U and a show's sounds are rarely in the same folder.
@@ -324,6 +366,21 @@ class Board:
             "warn_before_end": bool(self.warn_before_end),
             "warn_seconds": float(self.warn_seconds),
             "preview_sounds": bool(self.preview_sounds),
+            "stream_server": self.stream_server,
+            "stream_host": self.stream_host,
+            "stream_port": int(self.stream_port),
+            "stream_mount": self.stream_mount,
+            "stream_user": self.stream_user,
+            "stream_password": self.stream_password,
+            "stream_format": self.stream_format,
+            "stream_bitrate": int(self.stream_bitrate),
+            "stream_name": self.stream_name,
+            "stream_description": self.stream_description,
+            "stream_genre": self.stream_genre,
+            "stream_url": self.stream_url,
+            "stream_public": bool(self.stream_public),
+            "stream_mic": bool(self.stream_mic),
+            "stream_titles": bool(self.stream_titles),
             "last_sound_dir": self.last_sound_dir,
             "last_playlist_dir": self.last_playlist_dir,
             "slots": [s.to_dict() for s in self.slots],
@@ -384,6 +441,21 @@ class Board:
                                               C.DEFAULT_WARN_BEFORE_END))
         board.warn_seconds = _warn_seconds(data.get("warn_seconds"))
         board.preview_sounds = bool(data.get("preview_sounds", False))
+        board.stream_server = (data.get("stream_server") or "icecast")
+        board.stream_host = data.get("stream_host") or ""
+        board.stream_port = _stream_port(data.get("stream_port"))
+        board.stream_mount = data.get("stream_mount") or C.DEFAULT_STREAM_MOUNT
+        board.stream_user = data.get("stream_user") or C.DEFAULT_STREAM_USER
+        board.stream_password = data.get("stream_password") or ""
+        board.stream_format = (data.get("stream_format") or "mp3")
+        board.stream_bitrate = _stream_bitrate(data.get("stream_bitrate"))
+        board.stream_name = data.get("stream_name") or ""
+        board.stream_description = data.get("stream_description") or ""
+        board.stream_genre = data.get("stream_genre") or ""
+        board.stream_url = data.get("stream_url") or ""
+        board.stream_public = bool(data.get("stream_public", False))
+        board.stream_mic = bool(data.get("stream_mic", True))
+        board.stream_titles = bool(data.get("stream_titles", True))
         board.last_sound_dir = data.get("last_sound_dir") or ""
         board.last_playlist_dir = data.get("last_playlist_dir") or ""
         board.device_name = data.get("device_name")

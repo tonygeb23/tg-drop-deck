@@ -46,8 +46,10 @@ And the rest:
 | `Del` | Clear the slot you are on |
 | `Shift+Del` | Take the slot off the board altogether |
 | `F1` | Every shortcut, in a window you can read |
+| `Ctrl+B` | Go live to your streaming server, and come off air |
+| `Ctrl+Shift+B` | What the stream is doing |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |
-| `Ctrl+P` | Preferences: output, sounds, playlist, microphone, speech |
+| `Ctrl+P` | Preferences: output, sounds, playlist, microphone, streaming, speech |
 
 ## The four banks
 
@@ -91,6 +93,27 @@ hear yourself, so it stays out of the show.
 
 It plays `wav`, `mp3`, `m4a`, `flac`, `ogg`, `wma`, `aac`, `opus` and more, so
 an iTunes or Apple Music library goes straight in.
+
+## Streaming to your own station
+
+`Ctrl+B` sends everything you can hear to an Icecast server, a Liquidsoap
+harbor or SHOUTcast, in MP3 or Ogg Opus. Set it up under **On air, Set up
+streaming**; **Test the connection** proves it works before the show rather
+than during it.
+
+It sends the program: sounds, beds, the playlist and the microphone. Not a
+preview and not the end of track beep, because those are yours.
+
+The microphone goes out whenever it is open, whether or not you are hearing
+yourself. Those are different questions, and a presenter on speakers monitors
+nothing and is still on air.
+
+Encoding and the network run on their own thread, so a bad connection costs
+the stream and never your own audio. It reconnects by itself, `Ctrl+Shift+B`
+says what it is doing, and listeners see the artist and title from your
+playlist.
+
+Nothing goes out until you press `Ctrl+B`.
 
 ## A microphone
 

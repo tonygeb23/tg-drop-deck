@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.8.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -437,6 +437,35 @@ THE MICROPHONE
   Nothing here ever opens the microphone on its own. It opens when you press
   Ctrl+M and at no other time, and whether it was on is never saved.
 
+PUTTING THE SHOW ON THE INTERNET
+  Ctrl+B                    Go live, and come off air again
+  Ctrl+Shift+B              What the stream is doing right now
+
+  Set it up first: On air menu, Set up streaming. You need the address of your
+  server, its port, the mount point and the source password, all of which come
+  from whoever runs it. Test the connection proves it works before the show
+  rather than during it.
+
+  It sends everything you can hear: sounds, beds, the playlist and, unless you
+  turn it off, the microphone. It does NOT send a preview or the beep before a
+  track ends, because those are yours and not the listener's.
+
+  The microphone goes out whenever it is open, whether or not you are hearing
+  yourself. Being heard and hearing yourself are separate questions, and a
+  presenter working on speakers monitors nothing and is still on air.
+
+  Icecast, a Liquidsoap harbor and SHOUTcast all work. For SHOUTcast put in
+  the port your listeners use; the app works out the one a source needs.
+
+  If the connection drops it gets itself back and tells you. If the network
+  cannot keep up the STREAM loses audio and your own sound carries on, which
+  is the right way round, and Ctrl+Shift+B says whether that has happened.
+
+  Listeners see the artist and title from your playlist, unless you turn that
+  off in the same place.
+
+  Nothing goes out until you press Ctrl+B. It is never on when the app opens.
+
 GLOBAL
   Ctrl+F                    Search every bank by name (Ctrl+E also works)
                             Alt+P in there plays a match without closing it,
@@ -492,3 +521,53 @@ Sounds in banks 1, 2 and 4 overlap freely and never cut each other off.
 A bed toggles: press its hotkey again and it fades out.
 Your board saves itself on exit and whenever you change it.
 """
+
+# --------------------------------------------------------------- streaming --
+# Sending the show to an Icecast or SHOUTcast server. See streamout.py.
+
+#: How much audio the ring between the sound card and the encoder holds. Two
+#: seconds is enough to ride out a network hiccup without the stream noticing,
+#: and short enough that a listener is never far behind the presenter.
+AIR_RING_SECONDS = 2.0
+
+#: How much the encoder takes at a time. A quarter of a second is small enough
+#: to keep the delay down and big enough that the thread is not spinning.
+STREAM_CHUNK_SECONDS = 0.25
+
+#: How often the streaming thread looks for more audio when there is none yet.
+STREAM_POLL_SECONDS = 0.02
+
+#: Connecting, and sending once connected.
+STREAM_TIMEOUT = 10.0
+#: Waiting for the server to answer a source request. Short, because a server
+#: that likes the request often says nothing and simply waits for audio.
+STREAM_REPLY_TIMEOUT = 3.0
+#: Telling the server what is playing. Never worth holding up a show.
+STREAM_META_TIMEOUT = 5.0
+#: How long to wait for the thread to finish when coming off air.
+STREAM_STOP_TIMEOUT = 5.0
+#: No audio for this long means something is wrong worth reconnecting over.
+STREAM_SILENCE_TIMEOUT = 5.0
+
+#: Reconnect backoff, in seconds. Starts quick because most drops are brief.
+STREAM_RETRY_FIRST = 2.0
+STREAM_RETRY_MAX = 30.0
+
+#: Buses that never go out. Preview is for finding a sound, and the pip is the
+#: presenter's countdown; a listener should hear neither.
+OFF_AIR_BUSES = (BUS_PREVIEW, BUS_CUE)
+
+#: Where a stream goes until the user says otherwise. Icecast has used 8000
+#: since it began, and /live is what a station calls the mount a presenter
+#: takes over on.
+DEFAULT_STREAM_PORT = 8000
+DEFAULT_STREAM_MOUNT = "/live"
+DEFAULT_STREAM_USER = "source"
+DEFAULT_STREAM_BITRATE = 128
+#: What the Preferences box offers, in kbps.
+STREAM_BITRATES = (64, 96, 128, 160, 192, 256, 320)
+
+#: The order the Streaming tab offers them in. Kept here rather than taken
+#: from a dict so the list on screen cannot quietly reorder itself.
+STREAM_SERVER_ORDER = ("icecast", "shoutcast")
+STREAM_FORMAT_ORDER = ("mp3", "opus")

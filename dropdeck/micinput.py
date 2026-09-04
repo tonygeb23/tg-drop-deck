@@ -110,6 +110,56 @@ def input_rate(device):
         return C.DEFAULT_SAMPLERATE
 
 
+class _Ring:
+    """A block of audio written by one callback and drained by another.
+
+    Nothing here locks: MicInput owns the lock, because the two rings are
+    written in the same breath and a reader must not see one updated and not
+    the other.
+    """
+
+    def __init__(self, frames=None):
+        self.buf = np.zeros((frames or C.MIC_RING_FRAMES, CHANNELS),
+                            dtype=np.float32)
+        self.write_at = 0
+        self.available = 0
+
+    def clear(self):
+        self.buf[:] = 0.0
+        self.write_at = 0
+        self.available = 0
+
+    def write(self, block):
+        room = len(self.buf)
+        count = min(len(block), room)
+        end = self.write_at + count
+        if end <= room:
+            self.buf[self.write_at:end] = block[:count]
+        else:
+            first = room - self.write_at
+            self.buf[self.write_at:] = block[:first]
+            self.buf[:end - room] = block[first:count]
+        self.write_at = end % room
+        self.available = min(room, self.available + count)
+
+    def read(self, frames):
+        out = np.zeros((frames, CHANNELS), dtype=np.float32)
+        count = min(frames, self.available)
+        if count <= 0:
+            return out
+        room = len(self.buf)
+        start = (self.write_at - self.available) % room
+        end = start + count
+        if end <= room:
+            out[:count] = self.buf[start:end]
+        else:
+            first = room - start
+            out[:first] = self.buf[start:]
+            out[first:count] = self.buf[:end - room]
+        self.available -= count
+        return out
+
+
 class MicInput:
     """One microphone. Open or closed, with a gain and an optional monitor.
 
@@ -142,10 +192,16 @@ class MicInput:
         self.peak = 0.0
         self.overruns = 0
 
+        #: On air. Separate from monitoring on purpose: a presenter working
+        #: on speakers hears nothing back and is still being broadcast, and a
+        #: presenter checking their headphones is not necessarily live.
+        self.on_air = False
+
         self._lock = threading.Lock()
-        self._ring = np.zeros((C.MIC_RING_FRAMES, CHANNELS), dtype=np.float32)
-        self._write = 0
-        self._available = 0
+        #: What the speakers drain, and what the stream drains. Two readers
+        #: cannot share one ring, because each takes what it reads away.
+        self._monitor = _Ring()
+        self._air = _Ring()
         #: Set when the microphone's rate differs from the output's. Stateful,
         #: because resampling each block independently would click at every
         #: block boundary.
@@ -281,9 +337,8 @@ class MicInput:
     # ------------------------------------------------------------ capture --
     def _reset_ring(self):
         with self._lock:
-            self._ring[:] = 0.0
-            self._write = 0
-            self._available = 0
+            self._monitor.clear()
+            self._air.clear()
             if self.samplerate != self.output_rate:
                 self._resampler = soxr.ResampleStream(
                     self.samplerate, self.output_rate, CHANNELS,
@@ -300,30 +355,23 @@ class MicInput:
         block = block * self.gain
         peak = float(np.abs(block).max()) if frames else 0.0
         self.peak = peak
-        if not self.monitor:
+        if not self.monitor and not self.on_air:
             return
-        # One channel up the middle of both. Written into the ring under the
-        # lock; the output stream drains it from its own callback.
+        # One channel up the middle of both. Written into the rings under the
+        # lock; each reader drains its own from its own callback.
         stereo = np.repeat(block[:, None], CHANNELS, axis=1)
         with self._lock:
             if self._resampler is not None:
                 # The microphone and the speakers are on different clocks and
-                # different rates. Resampled here, so read() only ever deals
-                # in the output's rate and the mixer can add it straight in.
+                # different rates. Resampled once here, so both readers only
+                # ever deal in the output's rate and can add it straight in.
                 stereo = self._resampler.resample_chunk(stereo)
                 if not len(stereo):
                     return
-            room = len(self._ring)
-            count = min(len(stereo), room)
-            end = self._write + count
-            if end <= room:
-                self._ring[self._write:end] = stereo[:count]
-            else:
-                first = room - self._write
-                self._ring[self._write:] = stereo[:first]
-                self._ring[:end - room] = stereo[first:count]
-            self._write = end % room
-            self._available = min(room, self._available + count)
+            if self.monitor:
+                self._monitor.write(stereo)
+            if self.on_air:
+                self._air.write(stereo)
 
     def read(self, frames):
         """Drain up to ``frames`` of monitored audio. Never blocks.
@@ -333,21 +381,19 @@ class MicInput:
         monitor running dry has to be silence for a moment, never a stall in
         the output callback that would take the music with it.
         """
-        out = np.zeros((frames, CHANNELS), dtype=np.float32)
         if not self.monitor or not self.is_open:
-            return out
+            return np.zeros((frames, CHANNELS), dtype=np.float32)
         with self._lock:
-            count = min(frames, self._available)
-            if count <= 0:
-                return out
-            room = len(self._ring)
-            start = (self._write - self._available) % room
-            end = start + count
-            if end <= room:
-                out[:count] = self._ring[start:end]
-            else:
-                first = room - start
-                out[:first] = self._ring[start:]
-                out[first:count] = self._ring[:end - room]
-            self._available -= count
-        return out
+            return self._monitor.read(frames)
+
+    def read_air(self, frames):
+        """The same, for the stream. Its own tap, drained independently.
+
+        Monitoring and broadcasting are different questions and each reader
+        takes what it reads away, so the answer to one cannot come out of the
+        other's ring.
+        """
+        if not self.on_air or not self.is_open:
+            return np.zeros((frames, CHANNELS), dtype=np.float32)
+        with self._lock:
+            return self._air.read(frames)

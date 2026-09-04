@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.8.0, 4 September 2026
+
+### Put the show on the internet
+
+`Ctrl+B` sends everything you can hear to your own streaming server. Icecast,
+a Liquidsoap harbor or SHOUTcast, in MP3 or Ogg Opus, at whatever bitrate you
+pick. Set it up under On air, Set up streaming, and Test the connection proves
+it works before the show rather than during it.
+
+`Ctrl+Shift+B` says what the stream is doing: on air, for how long, and
+whether anything has been lost.
+
+**It sends the program, not your headphones.** Sounds, beds, the playlist and
+the microphone go out. Previewing a sound and the beep before a track ends do
+not, because those are yours.
+
+**The microphone goes out whenever it is open**, whether or not you are
+hearing yourself. Being heard and hearing yourself were the same switch
+before, and they are not the same question: a presenter on speakers monitors
+nothing and is still on air.
+
+**The show comes first.** Encoding and the network run on their own thread. If
+the connection cannot keep up, the stream loses audio and what you hear does
+not, which is the right way round. Ctrl+Shift+B tells you if it happened.
+
+**It reconnects on its own** and says so, rather than handing you a dead
+stream mid sentence. A wrong password stops instead, because retrying that
+forever only looks like it might still work.
+
+Listeners see the artist and title from your playlist.
+
+Nothing goes out until you press Ctrl+B, and it is never on when the app
+opens.
+
+Preferences has a Streaming tab, and is now six tabs rather than five.
+
+
 ## 2.7.1, 4 September 2026
 
 **Preview works in the Windows file window too.** Press `Alt+P` in there and

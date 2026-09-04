@@ -19,6 +19,7 @@ import webbrowser
 from . import appicon
 from . import constants as C
 from . import feedback
+from . import streamout
 from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
@@ -40,6 +41,10 @@ from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
                     output_devices, resolve_device)
 from .slot import Slot, format_duration
 from .speech import Speaker, percent
+
+ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
+ID_STREAM_STATUS = wx.ID_HIGHEST + 402
+ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 
 ID_SLOT_BASE = wx.ID_HIGHEST + 500
 
@@ -532,6 +537,12 @@ class DropDeckFrame(wx.Frame):
                             gain_db=self.board.mic_gain_db,
                             monitor=self.board.mic_monitor)
         self.mixer.monitor_source = self.mic
+
+        #: The stream, once there is one. None is off air, and off air is
+        #: where this starts every single time: a program that could begin
+        #: broadcasting by itself is not one to leave near a microphone.
+        self.streamer = None
+        self.air_bus = None
         self.mixer.bed_fade_in = self.board.bed_fade_in
         self.mixer.bed_fade_out = self.board.bed_fade_out
         # set_device clears the decode cache, so the whole board just went
@@ -1003,6 +1014,19 @@ class DropDeckFrame(wx.Frame):
                          "server costs and new products")
         help_menu.AppendSeparator()
         help_menu.Append(wx.ID_ABOUT, "&About")
+        air = wx.Menu()
+        self.stream_item = air.Append(
+            ID_STREAM_TOGGLE, "&Go live\tCtrl+B",
+            "Send the show to your streaming server, and stop sending it")
+        air.Append(ID_STREAM_STATUS, "&What the stream is doing\tCtrl+Shift+B",
+                   "Whether it is on air, for how long, and whether anything "
+                   "has been lost")
+        air.AppendSeparator()
+        air.Append(ID_STREAM_SETUP, "Set &up streaming...",
+                   "The address, the mount point and the password for your "
+                   "server")
+        bar.Append(air, "&On air")
+
         bar.Append(help_menu, "&Help")
 
         self.SetMenuBar(bar)
@@ -1077,6 +1101,13 @@ class DropDeckFrame(wx.Frame):
                   id=ID_PL_ROW_ADD)
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_playlist(), id=ID_PL_ROW_STOP)
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_mic(), id=ID_MIC_TOGGLE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.toggle_stream(),
+                  id=ID_STREAM_TOGGLE)
+        self.Bind(wx.EVT_MENU, lambda _e: self.say_stream_status(),
+                  id=ID_STREAM_STATUS)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
+                  id=ID_STREAM_SETUP)
         self.Bind(wx.EVT_MENU, self._on_mic_settings, id=ID_MIC_SETTINGS)
         self.Bind(wx.EVT_MENU, self._on_crossfade, id=ID_PL_CROSSFADE)
         self.Bind(wx.EVT_MENU, lambda _e: self.save_playlist_file(),
@@ -1151,6 +1182,11 @@ class DropDeckFrame(wx.Frame):
             # Ctrl+M opens and closes the microphone, Ctrl+Shift+M sets it up.
             # Both new; nothing on the frozen digit map moved for them.
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("M"), ID_MIC_TOGGLE),
+            # Ctrl+B goes live, Ctrl+Shift+B says what the stream is
+            # doing, the same shape as the microphone pair above.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("B"), ID_STREAM_TOGGLE),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("B"),
+                                ID_STREAM_STATUS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
@@ -1529,7 +1565,16 @@ class DropDeckFrame(wx.Frame):
             f"Beds {percent(self.mixer.bed_gain)} (F5, F6)   "
             f"Playlist {percent(self.mixer.playlist_gain)} (F7, F8)   "
             f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)   "
-            f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)", 0)
+            f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
+            f"{self._air_label()} (Ctrl+B)", 0)
+
+    def _air_label(self):
+        streamer = getattr(self, "streamer", None)
+        if streamer is None or not streamer.running:
+            return "Off air"
+        if streamer.state == streamout.ON_AIR:
+            return "ON AIR"
+        return streamer.state.capitalize()
 
     # ------------------------------------------------------------ transport --
     def trigger(self, index):
@@ -2053,6 +2098,10 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, self._on_player_tick, self._player_timer)
 
     def _on_player_tick(self, _event):
+        # The title is pushed from here rather than from a track change hook,
+        # because set_title only sends when it differs. Saying it every tick
+        # costs nothing and cannot miss a change.
+        self._push_stream_title()
         try:
             self.player.tick()
         except Exception as exc:              # pragma: no cover
@@ -3099,6 +3148,144 @@ class DropDeckFrame(wx.Frame):
         if repaired:
             self._touch()
 
+    # ----------------------------------------------------------- on air --
+    def streaming(self):
+        """On air, connecting or trying to get back. Not merely configured."""
+        streamer = getattr(self, "streamer", None)
+        return streamer is not None and streamer.running
+
+    def toggle_stream(self, _event=None):
+        """Ctrl+B. Go live, or come off air."""
+        if self.streaming():
+            self.stop_stream()
+            return False
+        return self.start_stream()
+
+    def start_stream(self):
+        """Open the tap and start the thread. Says why if it cannot.
+
+        The tap goes on EVERY mixer, not just the first one, because a bank
+        sent to its own sound card is still part of the show and a listener
+        should hear it.
+        """
+        if self.streaming():
+            return True
+        if not self.board.stream_host:
+            self.announce("There is no server set up yet. Set up streaming is "
+                          "on the On air menu")
+            self._on_settings(page=SettingsDialog.PAGE_STREAM)
+            return False
+
+        self.air_bus = streamout.AirBus(self.mixer.samplerate)
+        for mixer in self.mixer.mixers:
+            mixer.air_tap = self.air_bus
+        # The microphone goes out whether or not you can hear yourself. They
+        # are different questions and this is the one about the listener.
+        mic = getattr(self, "mic", None)
+        if mic is not None and self.board.stream_mic:
+            mic.on_air = True
+            self.mixer.primary.air_source = mic
+
+        self.streamer = streamout.Streamer(
+            self.air_bus, self._stream_settings(),
+            on_state=self._on_stream_state)
+        self.streamer.start()
+        self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
+        return True
+
+    def stop_stream(self, quiet=False):
+        """Come off air and put everything back the way it was."""
+        streamer, self.streamer = getattr(self, "streamer", None), None
+        if streamer is not None:
+            streamer.stop()
+        for mixer in self.mixer.mixers:
+            mixer.air_tap = None
+            mixer.air_source = None
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            mic.on_air = False
+        self.air_bus = None
+        item = getattr(self, "stream_item", None)
+        if item is not None:
+            item.SetItemLabel("&Go live\tCtrl+B")
+        if not quiet:
+            self.announce("Off air")
+        self._update_status()
+
+    def _stream_settings(self):
+        """What the board holds, in the shape the streamer wants."""
+        board = self.board
+        return {"server": board.stream_server, "host": board.stream_host,
+                "port": board.stream_port, "mount": board.stream_mount,
+                "user": board.stream_user, "password": board.stream_password,
+                "format": board.stream_format, "bitrate": board.stream_bitrate,
+                "name": board.stream_name,
+                "description": board.stream_description,
+                "genre": board.stream_genre, "url": board.stream_url,
+                "public": board.stream_public}
+
+    def _on_stream_state(self, state, detail):
+        """Called from the streaming thread. Nothing here touches wx.
+
+        Everything is handed to the main thread, because a screen reader
+        announcement raised from a socket thread is a crash waiting for a bad
+        night.
+        """
+        wx.CallAfter(self._say_stream_state, state, detail)
+
+    def _say_stream_state(self, state, detail):
+        if not self:
+            return
+        if state == streamout.ON_AIR:
+            self.announce("On air, %s" % detail if detail else "On air")
+        elif state == streamout.CONNECTING:
+            self.announce_help("Connecting to the server")
+        elif state == streamout.RECONNECTING:
+            self.announce("Off air, trying again. %s" % detail)
+        elif state == streamout.FAILED:
+            self.announce("Could not go on air. %s" % detail)
+            self.stop_stream(quiet=True)
+        self._update_status()
+
+    def say_stream_status(self, _event=None):
+        """Ctrl+Shift+B. The answer to "am I actually on air".
+
+        Spoken as an answer rather than as news, so it works with the app's
+        speech turned all the way down. Same reasoning as Ctrl+L.
+        """
+        self.announce_answer(self.stream_status())
+
+    def stream_status(self):
+        streamer = getattr(self, "streamer", None)
+        if streamer is None or not streamer.running:
+            if not self.board.stream_host:
+                return "Off air, and no server is set up yet"
+            return "Off air. Ctrl+B goes live to %s" % self.board.stream_host
+        if streamer.state != streamout.ON_AIR:
+            return "%s. %s" % (streamer.state.capitalize(),
+                               streamer.detail or streamer.error or "")
+        parts = ["On air for %s" % format_duration(streamer.on_air_for),
+                 "%d kbps %s" % (self.board.stream_bitrate,
+                                 streamout.FORMATS.get(
+                                     self.board.stream_format,
+                                     streamout.FORMATS["mp3"])["label"]),
+                 "to %s" % self.board.stream_host]
+        dropped = self.air_bus.dropped if self.air_bus is not None else 0
+        if dropped:
+            parts.append("%d blocks lost, so listeners have heard gaps"
+                         % dropped)
+        if streamer.reconnects:
+            parts.append("reconnected %d times" % streamer.reconnects)
+        return ", ".join(parts)
+
+    def _push_stream_title(self):
+        """Tell the server what is playing, if it is wanted and has changed."""
+        streamer = getattr(self, "streamer", None)
+        if streamer is None or not self.board.stream_titles:
+            return
+        track = self.player.current if self.player.playing else None
+        streamer.set_title(track.display_name if track is not None else "")
+
     def _on_settings(self, _event=None, page=None):
         """Preferences. One window, five tabs, two keys into it.
 
@@ -3124,6 +3311,19 @@ class DropDeckFrame(wx.Frame):
             self.board.warn_before_end = dialog.warn_before_end
             self.board.warn_seconds = dialog.warn_seconds
             self.board.playlist.crossfade = dialog.crossfade
+            stream = dialog.stream_settings
+            self.board.stream_server = stream["server"]
+            self.board.stream_host = stream["host"]
+            self.board.stream_port = stream["port"]
+            self.board.stream_mount = stream["mount"]
+            self.board.stream_user = stream["user"]
+            self.board.stream_password = stream["password"]
+            self.board.stream_format = stream["format"]
+            self.board.stream_bitrate = stream["bitrate"]
+            self.board.stream_name = stream["name"]
+            self.board.stream_public = stream["public"]
+            self.board.stream_mic = dialog.stream_mic.GetValue()
+            self.board.stream_titles = dialog.stream_titles.GetValue()
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db
@@ -3299,6 +3499,13 @@ class DropDeckFrame(wx.Frame):
             timer = getattr(self, name, None)
             if timer is not None:
                 timer.Stop()
+        # Off air before anything else is torn down. A streaming thread left
+        # running would go on reading a mixer that is being closed.
+        if getattr(self, "streamer", None) is not None:
+            try:
+                self.stop_stream(quiet=True)
+            except Exception:
+                pass
         mic = getattr(self, "mic", None)
         if mic is not None:
             # An open input stream keeps the process alive after the window

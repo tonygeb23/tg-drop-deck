@@ -15,6 +15,7 @@ import wx
 from . import audiofile
 from . import constants as C
 from . import feedback
+from . import streamout
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
@@ -539,7 +540,7 @@ class SlotPropertiesDialog(wx.Dialog):
 
 
 class SettingsDialog(wx.Dialog):
-    """Everything you can set, on five tabs.
+    """Everything you can set, on six tabs.
 
     It was one long column: output, routing, speech, ducking, bed fades,
     crossfade, and then the end of track beep on the end of that. Every
@@ -551,12 +552,13 @@ class SettingsDialog(wx.Dialog):
     Tabs, and one dialog. `Ctrl+P` opens it on Output and `Ctrl+Shift+M` opens
     it on Microphone; they are the same window. Ctrl+Tab moves between the
     tabs, and a screen reader reads a tab name when you land on it, which is
-    the whole reason this is a notebook rather than five group boxes.
+    the whole reason this is a notebook rather than six group boxes.
     """
 
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
-    PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_SPEECH = range(5)
+    (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_STREAM,
+     PAGE_SPEECH) = range(6)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -573,6 +575,7 @@ class SettingsDialog(wx.Dialog):
         self._build_sound_tab()
         self._build_playlist_tab()
         self._build_mic_tab()
+        self._build_stream_tab()
         self._build_speech_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -615,6 +618,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_SOUND: self.duck_on,
                 self.PAGE_PLAYLIST: self.crossfade_ctrl,
                 self.PAGE_MIC: self.mic_device,
+                self.PAGE_STREAM: self.stream_server,
                 self.PAGE_SPEECH: self.speech_choice}.get(
                     self.tabs.GetSelection())
 
@@ -820,6 +824,197 @@ class SettingsDialog(wx.Dialog):
 
         sizer.Add(wx.StaticText(panel, label=self._mic_status_text()), 0,
                   wx.ALL, 10)
+
+    def _build_stream_tab(self):
+        """Where the show goes, and a button that proves it before air.
+
+        Every field here is one somebody has to be told by whoever runs the
+        server, so the labels use the words a station uses rather than the
+        words the protocol uses. The Test button exists because the only
+        moment a broadcaster finds out a password is wrong should not be the
+        moment the show starts.
+        """
+        panel, sizer = self._page("Streaming")
+
+        grid = wx.FlexGridSizer(2, 8, 12)
+        grid.AddGrowableCol(1, 1)
+
+        def row(label, control, tip=""):
+            grid.Add(wx.StaticText(panel, label=label), 0,
+                     wx.ALIGN_CENTER_VERTICAL)
+            if tip:
+                control.SetToolTip(tip)
+            grid.Add(control, 0, wx.EXPAND)
+            return control
+
+        self.stream_server = wx.Choice(
+            panel, choices=[label for label, _cls
+                            in (streamout.SERVERS[key]
+                                for key in C.STREAM_SERVER_ORDER)])
+        self.stream_server.SetName("Server type")
+        self.stream_server.SetSelection(
+            C.STREAM_SERVER_ORDER.index(self.board.stream_server)
+            if self.board.stream_server in C.STREAM_SERVER_ORDER else 0)
+        row("Ser&ver", self.stream_server,
+            "Icecast covers almost everything, including the Liquidsoap "
+            "harbor a station puts in front of it so a presenter can take "
+            "over from the automation.")
+
+        self.stream_host = wx.TextCtrl(panel, value=self.board.stream_host)
+        self.stream_host.SetName("Address")
+        row("A&ddress", self.stream_host,
+            "The name of the server, with no http in front of it.")
+
+        self.stream_port = wx.SpinCtrl(panel, min=1, max=65535,
+                                       initial=int(self.board.stream_port))
+        self.stream_port.SetName("Port")
+        row("&Port", self.stream_port,
+            "The port listeners use. For SHOUTcast this is still the "
+            "listening port; the app adds the one it needs for a source.")
+
+        self.stream_mount = wx.TextCtrl(panel, value=self.board.stream_mount)
+        self.stream_mount.SetName("Mount point")
+        row("&Mount point", self.stream_mount,
+            "The part after the address, such as /live. SHOUTcast does not "
+            "use one.")
+
+        self.stream_user = wx.TextCtrl(panel, value=self.board.stream_user)
+        self.stream_user.SetName("User name")
+        row("&User name", self.stream_user,
+            "Almost always source. SHOUTcast ignores it.")
+
+        self.stream_password = wx.TextCtrl(panel,
+                                           value=self.board.stream_password,
+                                           style=wx.TE_PASSWORD)
+        self.stream_password.SetName("Password")
+        row("Pass&word", self.stream_password,
+            "The source password for the server, not your listener password.")
+
+        self.stream_format = wx.Choice(
+            panel, choices=[streamout.FORMATS[key]["label"]
+                            for key in C.STREAM_FORMAT_ORDER])
+        self.stream_format.SetName("Format")
+        self.stream_format.SetSelection(
+            C.STREAM_FORMAT_ORDER.index(self.board.stream_format)
+            if self.board.stream_format in C.STREAM_FORMAT_ORDER else 0)
+        row("&Format", self.stream_format,
+            "MP3 plays everywhere. Ogg Opus sounds better for the same "
+            "bandwidth, if your server and your listeners take it.")
+
+        self.stream_bitrate = wx.Choice(
+            panel, choices=["%d kbps" % rate for rate in C.STREAM_BITRATES])
+        self.stream_bitrate.SetName("Bitrate")
+        self.stream_bitrate.SetSelection(
+            C.STREAM_BITRATES.index(self.board.stream_bitrate)
+            if self.board.stream_bitrate in C.STREAM_BITRATES else 2)
+        row("&Bitrate", self.stream_bitrate,
+            "128 is plenty for speech and music together. Higher costs your "
+            "listeners more data and your server more bandwidth.")
+
+        self.stream_name = wx.TextCtrl(panel, value=self.board.stream_name)
+        self.stream_name.SetName("Station name")
+        row("Station &name", self.stream_name,
+            "What listeners see as the name of the stream.")
+
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.stream_mic = wx.CheckBox(
+            panel, label="Put the m&icrophone on air")
+        self.stream_mic.SetValue(bool(self.board.stream_mic))
+        self.stream_mic.SetToolTip(
+            "Separate from hearing yourself. With this on you go out live "
+            "whenever the microphone is open, whether or not you are "
+            "monitoring, which is the normal way to work on speakers.")
+        sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        self.stream_titles = wx.CheckBox(
+            panel, label="Send the &track title to the server")
+        self.stream_titles.SetValue(bool(self.board.stream_titles))
+        self.stream_titles.SetToolTip(
+            "Listeners see the artist and title of whatever the playlist is "
+            "playing, taken from the file.")
+        sizer.Add(self.stream_titles, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        self.stream_public = wx.CheckBox(
+            panel, label="&List this stream in public directories")
+        self.stream_public.SetValue(bool(self.board.stream_public))
+        sizer.Add(self.stream_public, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        test = wx.Button(panel, label="&Test the connection")
+        test.SetToolTip(
+            "Connects, says what happened, and disconnects again. Nothing is "
+            "broadcast.")
+        test.Bind(wx.EVT_BUTTON, self._on_test_stream)
+        sizer.Add(test, 0, wx.ALL, 10)
+
+        self.stream_result = wx.TextCtrl(
+            panel, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 60),
+            value="Not tested yet.")
+        self.stream_result.SetName("Test result")
+        sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
+                  | wx.BOTTOM, 10)
+
+    def _on_test_stream(self, _event):
+        """Connect, say what happened, disconnect. Never broadcasts anything.
+
+        Written into a read only box as well as spoken, because a result you
+        can only hear once is a result you cannot check, and this is the
+        answer to the question "will it work tonight".
+        """
+        settings = self.stream_settings
+        if not settings["host"]:
+            self._say_test("Fill in the address first.")
+            return
+        self._say_test("Connecting...")
+        wx.BeginBusyCursor()
+        try:
+            _label, factory = streamout.SERVERS.get(
+                settings["server"], streamout.SERVERS["icecast"])
+            spec = streamout.FORMATS.get(settings["format"],
+                                          streamout.FORMATS["mp3"])
+            sink = factory(host=settings["host"], port=settings["port"],
+                           mount=settings["mount"], user=settings["user"],
+                           password=settings["password"],
+                           content_type=spec["content_type"],
+                           name=settings["name"],
+                           bitrate=settings["bitrate"])
+            sink.connect()
+            sink.close()
+        except streamout.SinkError as exc:
+            self._say_test("It did not connect: %s" % exc)
+            return
+        except Exception as exc:
+            self._say_test("It did not connect: %s" % exc)
+            return
+        finally:
+            wx.EndBusyCursor()
+        self._say_test("Connected, and disconnected again. It will work.")
+
+    def _say_test(self, text):
+        self.stream_result.SetValue(text)
+        frame = self.GetParent()
+        speak = getattr(frame, "announce_answer", None)
+        if speak is not None:
+            speak(text)
+
+    @property
+    def stream_settings(self):
+        """Everything the streamer needs, as it stands in the boxes."""
+        return {
+            "server": C.STREAM_SERVER_ORDER[
+                max(0, self.stream_server.GetSelection())],
+            "host": self.stream_host.GetValue().strip(),
+            "port": int(self.stream_port.GetValue()),
+            "mount": self.stream_mount.GetValue().strip() or "/",
+            "user": self.stream_user.GetValue().strip() or "source",
+            "password": self.stream_password.GetValue(),
+            "format": C.STREAM_FORMAT_ORDER[
+                max(0, self.stream_format.GetSelection())],
+            "bitrate": C.STREAM_BITRATES[
+                max(0, self.stream_bitrate.GetSelection())],
+            "name": self.stream_name.GetValue().strip(),
+            "public": self.stream_public.GetValue(),
+        }
 
     def _build_speech_tab(self):
         panel, sizer = self._page("Speech")

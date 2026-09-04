@@ -112,6 +112,15 @@ NOTES = {
               "arrow onto it, the same as in the app's own browser. It only "
               "listens while Drop Deck is the program in front, so Alt+P in "
               "anything else is still that program's key."),
+    "2.8.0": ("Drop Deck can put the show on the internet now. Ctrl+B sends "
+              "everything you can hear to your own Icecast, Liquidsoap or "
+              "SHOUTcast server, in MP3 or Ogg Opus, and Ctrl+Shift+B says "
+              "what the stream is doing. It sends the sounds, the beds, the "
+              "playlist and the microphone, but not a preview or the beep "
+              "before a track ends. If the network struggles the stream "
+              "loses audio and what you hear does not, and it reconnects on "
+              "its own. Set it up under On air, and nothing goes out until "
+              "you press Ctrl+B."),
 }
 
 
