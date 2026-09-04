@@ -108,6 +108,9 @@ reach it** box on it, `Alt+P`. Every sound plays once as you arrow onto it and
 stops when you move on, so you can find the right one by listening instead of
 by reading forty file names.
 
+**Browse with Windows** opens the ordinary Windows file window, and `Alt+P`
+previews in there too, while Drop Deck is the program in front.
+
 ## Twenty slots, or fewer
 
 A bank ships with twenty. **`Shift+Delete`** takes the one you are on off, and

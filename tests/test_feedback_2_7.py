@@ -154,6 +154,81 @@ check("the board remembers the setting, so it is on next time too",
       Board.load(saved).preview_sounds is True)
 frame.board.preview_sounds = False
 
+print("\nPreviewing inside the Windows file window")
+#
+# Tony, 4 September 2026: "searching with windows with that open file dialog
+# is very native and people understand that layout much more. just need that
+# preview function to work better."
+#
+# The first answer to this was that Windows will not say what is highlighted.
+# That was wrong, and wrong for an embarrassing reason: the test that
+# "proved" it never managed to highlight anything, so an empty answer looked
+# like a broken one. It works.
+#
+# The switch was a registered hotkey next, and that was wrong too. A hotkey
+# is system wide. Tony, within minutes of getting it: "i just tried it to do
+# another function with a different program, and it triggered the drop deck
+# preview while it wasn't in focus." So the keyboard is read instead, and a
+# press only counts while a window of ours is the one in front.
+
+from dropdeck.dialogs import NativePreview
+
+
+def _foreign_pid():
+    """Who owns the desktop window. Explorer, never us."""
+    import ctypes
+    pid = ctypes.c_ulong(0)
+    ctypes.windll.user32.GetWindowThreadProcessId(
+        ctypes.windll.user32.GetShellWindow(), ctypes.byref(pid))
+    return pid.value
+
+
+native = wx.FileDialog(frame, "Pick", defaultDir=tmp,
+                       defaultFile=os.path.basename(sounds[0]),
+                       wildcard="Audio (*.wav)|*.wav",
+                       style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+watcher = NativePreview(native, frame, on=False)
+check("Alt+P switches it, the key Tony asked for",
+      watcher.key_label == "Alt+P", watcher.key_label)
+check("nothing is registered, so no other program loses the key",
+      not hasattr(watcher, "_grab_key") and not hasattr(watcher, "HOTKEY_ID"))
+check("and the switch turns it on",
+      watcher.toggle() is True and watcher.on is True)
+check("which is the same setting the browser's box uses",
+      frame.board.preview_sounds is True)
+check("and off again", watcher.toggle() is False)
+check("which puts the setting back", frame.board.preview_sounds is False)
+
+# The bug itself. A key pressed in somebody else's program is theirs.
+watcher.ours_is_in_front = lambda: False
+real_look = watcher._pressed_since_last_look
+watcher._pressed_since_last_look = lambda: True
+watcher._check_key()
+check("Alt+P while another program is in front does nothing",
+      watcher.on is False)
+watcher.ours_is_in_front = lambda: True
+watcher._check_key()
+check("and the same press with Drop Deck in front does", watcher.on is True)
+watcher.toggle()
+watcher._pressed_since_last_look = real_look
+del watcher.ours_is_in_front
+
+check("the real check asks which process owns the window in front",
+      NativePreview.ours_is_in_front() in (True, False))
+check("this process is not explorer, so the check can tell them apart",
+      _foreign_pid() not in (0, os.getpid()), _foreign_pid())
+
+watcher.stop()
+check("stopping silences anything auditioning",
+      not frame.mixer.is_playing(C.PREVIEW_SLOT))
+native.Destroy()
+
+check("the window is polled rather than listened to, because Windows tells "
+      "nobody, and often enough to feel immediate",
+      0 < C.NATIVE_POLL_MS <= 200, C.NATIVE_POLL_MS)
+
+# ---------------------------------------------------------------------------
+
 # ---------------------------------------------------------------------------
 print("\nTaking slots off the board")
 

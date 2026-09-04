@@ -123,7 +123,9 @@ def main():
         "Escape": "menu accelerator on Stop everything",
         "Alt+Up": "the playlist list's own key handler",
         "Alt+Down": "the playlist list's own key handler",
-        "Alt+P": "the search dialog's char hook",
+        "Alt+P": ("the search dialog's char hook, the sound browser's preview "
+                  "box, and a keyboard read done only while the Windows file "
+                  "window is open and Drop Deck is in front"),
         "1": "the frozen digit map", "0": "the frozen digit map",
         "2": "the frozen digit map",
         # Named as an EXAMPLE of a global hotkey you could assign yourself,

@@ -107,6 +107,11 @@ NOTES = {
               "twenty slots. Shift+Delete takes the one you are on off the "
               "board, and it never moves the others, so slot 6 is still on "
               "the 6 key. Nothing is lost and you can put it back."),
+    "2.7.1": ("Preview now works in the ordinary Windows file window too. "
+              "Browse with Windows, press Alt+P, and each sound plays as you "
+              "arrow onto it, the same as in the app's own browser. It only "
+              "listens while Drop Deck is the program in front, so Alt+P in "
+              "anything else is still that program's key."),
 }
 
 

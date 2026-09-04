@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -206,6 +206,13 @@ PREVIEW_DELAY_MS = 400
 #: they look for the next file.
 PREVIEW_MAX_SECONDS = 25.0
 
+#: How often the Windows file window is asked what is highlighted, in
+#: milliseconds. There is no event to listen for: the dialog is Windows' own
+#: and it tells nobody. A wx.Timer does keep firing while it is up, which is
+#: what makes polling possible at all, and an eighth of a second is quick
+#: enough that arrowing feels immediate and slow enough to cost nothing.
+NATIVE_POLL_MS = 120
+
 #: How often the player is asked whether a cue is due, in milliseconds. A
 #: crossfade landing within a twentieth of a second is inaudible; the 250 ms
 #: pad-refresh timer would have put it a quarter of a second out.
@@ -314,7 +321,9 @@ FINDING A SOUND BY EAR
   sound starts.
   Enter opens a folder or takes the sound you are on. Backspace goes up one.
   Browse with Windows opens the ordinary file window if you would rather type
-  a path or reach a network drive.
+  a path or reach a network drive, and previewing works in there too: Alt+P
+  switches it on and off while that window is open. Only while Drop Deck is
+  the program in front, so Alt+P elsewhere is still that program's key.
 
 HOW MANY SLOTS A BANK HAS
   Twenty, until you say otherwise. Shift+Delete takes the slot you are on off

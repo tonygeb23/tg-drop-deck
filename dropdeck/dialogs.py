@@ -6,7 +6,9 @@ dialog you cannot get out of without a mouse is worse than no dialog.
 
 from __future__ import annotations
 
+import ctypes
 import os
+import time
 
 import wx
 
@@ -1201,6 +1203,217 @@ def ask_text(parent, prompt, title, value=""):
     return dialog
 
 
+class NativePreview:
+    """Preview inside the Windows file window, which cannot be asked to help.
+
+    Tony, 4 September 2026: "searching with windows with that open file dialog
+    is very native and people understand that layout much more. just need that
+    preview function to work better." He is right, and the first answer to
+    this was wrong: the reason given for not doing it, that Windows will not
+    say what is highlighted, came from a test where nothing was ever
+    highlighted, so an empty answer looked like a broken one.
+
+    Three measured facts hold this up, and if any of them stops being true the
+    feature stops rather than misbehaves:
+
+    - **A wx.Timer keeps firing while the native dialog is up.** That is the
+      only way to run any code at all during somebody else's modal window.
+    - **GetCurrentlySelectedFilename really does report the highlighted file**,
+      as a full path, on Windows.
+    - **GetAsyncKeyState remembers a press.** Its low bit means "this key went
+      down since you last asked", so asking eight times a second catches a
+      press however brief, which plain "is it down now" polling did not.
+
+    The switch was a registered hotkey first, and that was wrong. A hotkey is
+    system wide: it takes Alt+P off every other program for as long as the
+    window is open, and it swallows the key rather than passing it on, so
+    ignoring it when we are not in front would not have given it back. Tony
+    found that within minutes of getting it: "i just tried it to do another
+    function with a different program, and it triggered the drop deck preview
+    while it wasn't in focus." This app already refuses to register a bare
+    global hotkey for that reason, and a preview switch has even less business
+    owning a key across the whole machine.
+
+    So nothing is registered anywhere. The keyboard is read, and a press only
+    counts while a window of this process is the one in front. Alt+P in
+    somebody else's program stays theirs.
+    """
+
+    #: Windows virtual key for either Alt.
+    VK_MENU = 0x12
+    #: GetAsyncKeyState: high bit is down now, low bit is went down since the
+    #: last time this thread asked.
+    DOWN_NOW = 0x8000
+    PRESSED_SINCE = 0x0001
+
+    def __init__(self, dialog, frame, on=False):
+        self.dialog = dialog
+        self.frame = frame
+        self.mixer = getattr(frame, "mixer", None)
+        self.board = getattr(frame, "board", None)
+        self.on = bool(on)
+        self._selected = None
+        self._changed_at = 0.0
+        self._played = None
+        self._started_at = 0.0
+        self._timer = None
+        #: What switches it. Read from the keyboard rather than registered, so
+        #: it is only ours while a window of ours is in front.
+        self.key_label = "Alt+P"
+
+    # ------------------------------------------------------------ lifetime --
+    def start(self):
+        """Begin watching. Call before ShowModal."""
+        if self.frame is None or self.mixer is None:
+            return self
+        self._timer = wx.Timer(self.frame)
+        self.frame.Bind(wx.EVT_TIMER, self._tick, self._timer)
+        self._timer.Start(C.NATIVE_POLL_MS)
+        # Throw away anything pressed before now, so a P typed a moment ago
+        # does not arrive as the first thing this sees.
+        self._pressed_since_last_look()
+        self._say_hello()
+        return self
+
+    def _say_hello(self):
+        """Say what does it, because nothing in the window can.
+
+        A native dialog has no room for a label of ours, so a switch nobody is
+        told about is a switch nobody finds.
+        """
+        self.frame.announce_help(
+            "The Windows file window. %s plays each sound as you reach it%s"
+            % (self.key_label, ", and it is on" if self.on else ""))
+
+    @staticmethod
+    def ours_is_in_front():
+        """Is the window in front one of ours.
+
+        A key pressed in somebody else's program is somebody else's business.
+        Asked by process rather than by window, because the window in front
+        while this runs is the Windows file dialog, which is ours but is not
+        any wx window there would be something to compare against.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            handle = user32.GetForegroundWindow()
+            if not handle:
+                return False
+            pid = ctypes.c_ulong(0)
+            user32.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+            return pid.value == os.getpid()
+        except Exception:
+            return False
+
+    def _pressed_since_last_look(self):
+        """Has Alt+P gone down since the last time this asked.
+
+        Alt counts as held if it is down now or if it went down in the same
+        breath, because a quick press can be over before the next look.
+
+        Always asked, in front or not, because the latch has to be cleared
+        either way. Left set, it would fire a preview the moment the app came
+        back in front, off a keypress meant for another program.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            alt = user32.GetAsyncKeyState(self.VK_MENU)
+            letter = user32.GetAsyncKeyState(ord("P"))
+        except Exception:
+            return False
+        if not letter & self.PRESSED_SINCE:
+            return False
+        return bool(alt & (self.DOWN_NOW | self.PRESSED_SINCE))
+
+    def _check_key(self):
+        pressed = self._pressed_since_last_look()
+        if pressed and self.ours_is_in_front():
+            self.toggle()
+
+    def stop(self):
+        """Stop watching and silence anything auditioning. Safe twice."""
+        if self._timer is not None:
+            self._timer.Stop()
+            try:
+                self.frame.Unbind(wx.EVT_TIMER, source=self._timer)
+            except Exception:
+                pass
+            self._timer = None
+        self._silence()
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *_exc):
+        self.stop()
+        return False
+
+    # ---------------------------------------------------------------- work --
+    def _silence(self):
+        self._played = None
+        if self.mixer is not None:
+            try:
+                self.mixer.stop_preview()
+            except Exception:
+                pass
+
+    def _tick(self, _event):
+        self._check_key()
+        selected = self._selection()
+        if selected != self._selected:
+            self._selected = selected
+            self._changed_at = time.monotonic()
+            # Whatever is playing belongs to the file you have just left.
+            self._silence()
+        if not self.on or not selected or self._played == selected:
+            self._stop_when_long_enough()
+            return
+        # The wait is the whole reason this is not instant: the screen reader
+        # is saying the file name at the moment you arrow onto it, and a sound
+        # on top of that takes the name away.
+        if (time.monotonic() - self._changed_at) * 1000.0 < C.PREVIEW_DELAY_MS:
+            return
+        if not audiofile.is_supported(selected):
+            return
+        try:
+            self.mixer.play_preview(selected)
+        except Exception:
+            return
+        self._played = selected
+        self._started_at = time.monotonic()
+
+    def _stop_when_long_enough(self):
+        """Nobody wants four minutes of a song while they look for the next."""
+        if (self._played
+                and time.monotonic() - self._started_at > C.PREVIEW_MAX_SECONDS):
+            self._silence()
+
+    def _selection(self):
+        try:
+            selected = self.dialog.GetCurrentlySelectedFilename()
+        except Exception:
+            return None
+        return selected or None
+
+    def toggle(self):
+        self.on = not self.on
+        if self.board is not None:
+            self.board.preview_sounds = self.on
+        if not self.on:
+            self._silence()
+        else:
+            # Play what is already highlighted rather than waiting for a move.
+            self._changed_at = 0.0
+            self._played = None
+        if self.frame is not None:
+            # Spoken, not written: the status bar is behind a modal window
+            # nobody can see past, and this is the answer to a key just
+            # pressed. Same reasoning as Ctrl+L.
+            self.frame.announce_answer(
+                "Preview on" if self.on else "Preview off")
+        return self.on
+
+
 class SoundBrowserDialog(wx.Dialog):
     """Find a sound by listening to it rather than by reading its name.
 
@@ -1477,12 +1690,27 @@ class SoundBrowserDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
     def _on_native(self, _event):
-        """The ordinary Windows window, for a path you would rather type."""
+        """The ordinary Windows window, which previews too.
+
+        Tony prefers this layout and so do most people: it is the window they
+        already know. Alt+P switches previewing on and off in there, because a
+        native dialog has nowhere to put a check box of ours.
+        """
         self._stop_preview()
+        current = self._current()
         with wx.FileDialog(self, "Choose a sound", wildcard=C.AUDIO_WILDCARD,
                            defaultDir=self.folder,
+                           defaultFile=(os.path.basename(current[1])
+                                        if current and not current[2] else ""),
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
-            if dialog.ShowModal() == wx.ID_OK:
+            with NativePreview(dialog, self.frame,
+                               on=self.preview.GetValue()) as preview:
+                chosen = dialog.ShowModal() == wx.ID_OK
+                still_on = preview.on
+            # Alt+P in there is the same switch as the box out here.
+            if still_on != self.preview.GetValue():
+                self.preview.SetValue(still_on)
+            if chosen:
                 self._choose(dialog.GetPath())
 
     def _on_close(self, event):
@@ -1522,11 +1750,15 @@ def audio_file_dialog(parent, start_dir="", title="Choose a sound", frame=None):
                 return None
             return dialog.chosen
     except Exception:
+        holder = frame or parent
         with wx.FileDialog(parent, title, wildcard=C.AUDIO_WILDCARD,
                            defaultDir=start_dir if os.path.isdir(start_dir) else "",
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
-            if dialog.ShowModal() != wx.ID_OK:
-                return None
+            with NativePreview(dialog, holder,
+                               on=bool(getattr(getattr(holder, "board", None),
+                                               "preview_sounds", False))):
+                if dialog.ShowModal() != wx.ID_OK:
+                    return None
             return dialog.GetPath()
 
 

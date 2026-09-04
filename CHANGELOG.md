@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.7.1, 4 September 2026
+
+**Preview works in the Windows file window too.** Press `Alt+P` in there and
+each sound plays as you arrow onto it, the same as in the app's own browser.
+It only listens while Drop Deck is the program in front, so Alt+P in anything
+else stays that program's key.
+
+2.7.0 said this could not be done because Windows will not say which file is
+highlighted. That was wrong. It says so perfectly well; the test that decided
+otherwise never managed to highlight anything, so an empty answer looked like
+a broken one.
+
+
 ## 2.7.0, 4 September 2026
 
 ### Find a sound by listening to it
@@ -14,9 +27,8 @@ Enter opens a folder or takes the sound you are on, Backspace goes up one, and
 **Browse with Windows** opens the ordinary file window for typing a path or
 reaching a network drive.
 
-It is this app's own window and not for want of trying the other way. The
-native Windows dialog cannot tell a program what is highlighted in it, so
-there was no way to know which sound to play.
+**Browse with Windows** opens the ordinary Windows file window, and 2.7.1 made
+`Alt+P` preview in there too.
 
 ### A bank does not have to have twenty slots
 
