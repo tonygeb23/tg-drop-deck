@@ -99,6 +99,14 @@ NOTES = {
               "and open it again. There is a beep before a track ends if you "
               "want one. Audio settings is now Preferences, on tabs, with "
               "the microphone in it."),
+    "2.7.0": ("Two things. The window that opens when you assign a sound is "
+              "this app's own now, and it has a Play each sound as I reach it "
+              "box on it, Alt+P: turn that on and every sound plays once as "
+              "you arrow onto it, so you can find one by listening rather "
+              "than by reading file names. And a bank does not have to have "
+              "twenty slots. Shift+Delete takes the one you are on off the "
+              "board, and it never moves the others, so slot 6 is still on "
+              "the 6 key. Nothing is lost and you can put it back."),
 }
 
 
