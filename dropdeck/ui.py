@@ -1581,6 +1581,25 @@ class DropDeckFrame(wx.Frame):
             f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
             f"{self._air_label()} (Ctrl+B)", 0)
 
+    def _keep_beds_off_the_playlist(self):
+        """A bed and a playlist track are both music, so never both.
+
+        Tony, 4 September 2026: "music beds can not play at the same time as
+        tracks in the playlist. if a bed is playing, and a track is clicked
+        on, the music bed should fade out and the playlist track should cross
+        fade in."
+
+        The playlist wins, and the bed leaves on its own fade rather than
+        being cut, so the handover sounds deliberate. Checked here rather than
+        where a track is started because a track also starts on its own at
+        the end of the one before it, and that never comes through the frame.
+        """
+        if not self.player.playing:
+            return
+        gone = self._stop_other_beds(None)
+        if gone:
+            self.announce_playback("Playlist started, faded out bed %s" % gone)
+
     def _stop_other_beds(self, keep):
         """Take down every bed but this one. Returns the name of the last.
 
@@ -1591,6 +1610,7 @@ class DropDeckFrame(wx.Frame):
         for index in list(self.mixer.playing_slots()):
             if index == keep or not 0 <= index < C.TOTAL_SLOTS:
                 continue
+            # keep=None means every bed, which is what the playlist wants.
             other = self.board[index]
             if not other.is_bed:
                 continue
@@ -1646,6 +1666,14 @@ class DropDeckFrame(wx.Frame):
                 self.mixer.stop_slot(index)
                 self.announce_playback(f"Stopped bed, {slot.display_name}")
                 self._sync_button(slot, playing=False)
+                return
+            if self.player.playing:
+                # Refused rather than allowed to fight the playlist, and
+                # refused rather than stopping the show: taking the playlist
+                # off air because somebody leaned on a bed key would be a
+                # worse surprise than being told no.
+                self.announce("The playlist is playing. Stop it first, or "
+                              "this would be two pieces of music at once")
                 return
             # One bed at a time. Two music beds running together is two
             # pieces of music fighting, which is a mistake rather than a
@@ -2147,6 +2175,7 @@ class DropDeckFrame(wx.Frame):
         # because set_title only sends when it differs. Saying it every tick
         # costs nothing and cannot miss a change.
         self._push_stream_title()
+        self._keep_beds_off_the_playlist()
         try:
             self.player.tick()
         except Exception as exc:              # pragma: no cover

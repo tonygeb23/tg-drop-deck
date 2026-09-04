@@ -296,6 +296,10 @@ BANK 3: Music Beds (loop by default)
   with its own fade, so it sounds like a change rather than a fault. Sound
   effects and drops still overlap, because a laugh on top of a sting is the
   point of a soundboard.
+
+  A bed and the playlist never play together either: both are music. Starting
+  a playlist track fades the bed out, and a bed will not start over a running
+  playlist. Stop the playlist first.
   Right-click               Turn looping off or on for one bed
   A bed starts exactly where the file does and fades out when you stop it.
   Preferences, Ctrl+P, sets both fades in seconds.

@@ -124,6 +124,51 @@ settle(100)
 check("stop everything still stops everything",
       frame.mixer.playing_slots() == [], frame.mixer.playing_slots())
 
+
+print("\nA bed and the playlist never share the air")
+
+# Tony, 4 September 2026: "music beds can not play at the same time as tracks
+# in the playlist. if a bed is playing, and a track is clicked on, the music
+# bed should fade out and the playlist track should cross fade in."
+
+songs = []
+for offset, hz in enumerate((550, 660)):
+    song = os.path.join(tmp, "song%d.wav" % offset)
+    seconds = np.arange(44100 * 10) / 44100.0
+    sf.write(song, np.tile(
+        (0.35 * np.sin(2 * np.pi * hz * seconds)).astype(np.float32)[:, None],
+        (1, 2)), 44100)
+    songs.append(song)
+frame.board.playlist.add_entries([{"filepath": s} for s in songs])
+frame.playlist_panel.refresh()
+
+frame.trigger(BEDS)
+settle()
+check("a bed is playing to start with", len(beds_playing()) == 1, names())
+
+frame.play_playlist_row(0) if hasattr(frame, "play_playlist_row") else frame.player.play(0)
+settle(400)
+frame._keep_beds_off_the_playlist()
+settle(800)
+check("starting a playlist track takes the bed off air",
+      beds_playing() == [], names())
+check("and the track is the thing playing", frame.player.playing)
+
+frame.trigger(BEDS + 1)
+settle()
+check("and a bed will not start over a running playlist",
+      beds_playing() == [], names())
+check("the playlist is untouched by the attempt", frame.player.playing)
+
+frame.player.stop(fade_out=0.0, quiet=True)
+settle(300)
+frame.trigger(BEDS + 1)
+settle()
+check("with the playlist stopped, a bed starts again",
+      len(beds_playing()) == 1, names())
+frame.mixer.stop_all(fade_out=0.0)
+settle(100)
+
 frame.stop_background_work()
 frame.Destroy()
 app.Yield()
