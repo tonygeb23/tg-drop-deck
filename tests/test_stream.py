@@ -567,6 +567,55 @@ board.save(kept)
 check("and turning it off survives a save and a load",
       Board.load(kept).playlist_monitor_only is False)
 
+
+# ---------------------------------------------------------------------------
+print("\nAnd the same thing, all the way to the server")
+# ---------------------------------------------------------------------------
+
+# The check above proves the ring gets full level audio. This one takes the
+# fader down to nothing halfway through a real encode and decodes what the
+# server received, because the ring is not the thing listeners hear.
+
+with MockServer(password="hackme") as server:
+    mixer = Mixer(open_stream=False, samplerate=RATE)
+    bus = AirBus(RATE)
+    mixer.air_tap = bus
+    mixer.set_playlist_gain(1.0)
+    streamer = Streamer(bus, settings(server.port))
+    streamer.start()
+    mixer.play_samples(70, tone(RATE * 20, 440.0), bus=C.BUS_PLAYLIST)
+
+    deadline = time.time() + 12
+    while time.time() < deadline and len(server.body) < 12000:
+        mixer.render(512)
+        time.sleep(0.004)
+    up_to = len(server.body)
+    check("audio is arriving with the fader up", up_to > 8000, up_to)
+
+    # All the way down, which is what you do to hear a screen reader.
+    mixer.set_playlist_gain(0.0)
+    heard = []
+    deadline = time.time() + 12
+    while time.time() < deadline and len(server.body) < up_to + 12000:
+        heard.append(float(np.abs(mixer.render(512)).max()))
+        time.sleep(0.004)
+    check("the room goes quiet", max(heard[20:] or [1.0]) < 0.01,
+          round(max(heard[20:] or [1.0]), 4))
+
+    streamer.stop()
+    mixer.stop_all(fade_out=0.0)
+    mixer.close()
+
+    samples, _rate = decode(server.body)
+    check("and the server still received audio the whole time",
+          len(samples) > RATE, len(samples))
+    half = len(samples) // 2
+    early = goertzel(samples[half // 2:half // 2 + 8192, 0], 440.0)
+    late = goertzel(samples[-16384:-8192, 0], 440.0)
+    check("at the same level before the fader moved and after it",
+          early > 0.02 and late > 0.02 and abs(early - late) < early * 0.5,
+          (round(early, 4), round(late, 4)))
+
 # ---------------------------------------------------------------------------
 print("\nThe app around it")
 # ---------------------------------------------------------------------------
