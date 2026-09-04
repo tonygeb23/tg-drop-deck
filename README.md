@@ -44,6 +44,7 @@ And the rest:
 | `F2` | Rename the sound you are on |
 | `Alt+Enter` | Properties: name, level and both hotkeys, in one place |
 | `Del` | Clear the slot you are on |
+| `Shift+Del` | Take the slot off the board altogether |
 | `F1` | Every shortcut, in a window you can read |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |
 | `Ctrl+P` | Preferences: output, sounds, playlist, microphone, speech |
@@ -109,9 +110,10 @@ by reading forty file names.
 
 ## Twenty slots, or fewer
 
-A bank ships with twenty. **Sounds, Remove this slot from the board** takes one
-off, and removing one never moves the others: take slot 5 away and 6 is still
-on the 6 key. Nothing is lost, and Put a removed slot back brings it again.
+A bank ships with twenty. **`Shift+Delete`** takes the one you are on off, and
+removing one never moves the others: take slot 5 away and 6 is still on the 6
+key. Nothing is lost, and Put a removed slot back brings it again. `Delete`
+still just clears the sound.
 
 ## A folder on one key
 

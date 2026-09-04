@@ -297,6 +297,7 @@ PER BUTTON
   Alt+Enter                 Properties: name, level, hotkeys, the file itself
   Applications key          Context menu: play, rename, properties, clear
   Delete                    Clear the focused slot
+  Shift+Delete              Take the slot off the board altogether
 
 BANK NAMES
   Ctrl+F2                   Rename the bank you are looking at
@@ -316,8 +317,9 @@ FINDING A SOUND BY EAR
   a path or reach a network drive.
 
 HOW MANY SLOTS A BANK HAS
-  Twenty, until you say otherwise. Sounds menu, Remove this slot from the
-  board, or the same on the right-click menu, or the button in Properties.
+  Twenty, until you say otherwise. Shift+Delete takes the slot you are on off
+  the board, and it is in the Sounds menu, the right-click menu and
+  Properties as well. Delete clears the sound; Shift+Delete removes the slot.
   Removing one NEVER moves the others: take slot 5 away and 6 is still on the
   6 key. The slot keeps its sound, its name and its hotkeys while it is off.
   Sounds menu, Put a removed slot back, or Put this bank's slots back.

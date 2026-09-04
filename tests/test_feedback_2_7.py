@@ -247,6 +247,45 @@ ids = {item.GetId() for item in sounds_menu.GetMenuItems()}
 check("and so does the Sounds menu, all three of them",
       {ID_REMOVE_SLOT, ID_RESTORE_SLOT, ID_RESTORE_ALL_SLOTS} <= ids)
 
+# Delete clears the sound, Shift+Delete takes the slot off. The stronger
+# action on the stronger key, the way Explorer pairs them.
+accel = bar.FindItemById(ID_REMOVE_SLOT).GetAccel()
+check("Shift+Delete is the key for it",
+      accel is not None and accel.GetKeyCode() == wx.WXK_DELETE
+      and bool(accel.GetFlags() & wx.ACCEL_SHIFT)
+      and not (accel.GetFlags() & (wx.ACCEL_CTRL | wx.ACCEL_ALT)),
+      accel.ToString() if accel else None)
+
+frame.pages[C.BANK_SFX].buttons[6].SetFocus()
+app.Yield()
+count = len(frame.board.visible_slots(1))
+frame.remove_slot()
+check("and it takes the pad the cursor is on",
+      len(frame.board.visible_slots(1)) == count - 1,
+      len(frame.board.visible_slots(1)))
+frame.restore_all_slots(1)
+
+# It comes from the menu bar's own accelerator, which the frame's keyboard
+# map cannot stand down, so the command itself has to refuse.
+from dropdeck.ui import VIEW_PLAYLIST
+frame.show_view(VIEW_PLAYLIST)
+app.Yield()
+frame.playlist_panel.crossfade.SetFocus()
+app.Yield()
+count = len(frame.board.visible_slots(1))
+frame.remove_slot()
+check("and does nothing at all from inside a text box",
+      len(frame.board.visible_slots(1)) == count)
+frame.playlist_panel.focus_list()
+app.Yield()
+frame.speaker.last_message = None
+frame.remove_slot()
+check("and says where it belongs when the playlist has focus",
+      "soundboard" in (frame.speaker.last_message or ""),
+      frame.speaker.last_message)
+check("F1 help says which key does which",
+      "Shift+Delete" in C.KEYBOARD_HELP)
+
 # ---------------------------------------------------------------------------
 try:
     frame.stop_background_work()

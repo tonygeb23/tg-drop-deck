@@ -20,8 +20,10 @@ there was no way to know which sound to play.
 
 ### A bank does not have to have twenty slots
 
-**Sounds menu, Remove this slot from the board.** Also on the right-click menu
-and as a button in Properties. Want ten instead of twenty? Remove 11 to 20.
+**`Shift+Delete` takes the slot you are on off the board.** Also in the Sounds
+menu, the right-click menu, and as a button in Properties. Delete clears the
+sound; Shift+Delete removes the slot. Want ten instead of twenty? Remove 11 to
+20.
 
 Removing one never moves the others. Take slot 5 away and 6 is still on the 6
 key, because that map is years of muscle memory. The slot keeps its sound, its

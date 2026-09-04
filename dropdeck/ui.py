@@ -900,7 +900,8 @@ class DropDeckFrame(wx.Frame):
         # Twenty slots a bank is what it ships with, not what everybody wants.
         # Removing one keeps its sound and its keys and simply takes it off
         # the board, and it never renumbers anything else.
-        sounds.Append(ID_REMOVE_SLOT, "Re&move this slot from the board",
+        sounds.Append(ID_REMOVE_SLOT,
+                      "Re&move this slot from the board	Shift+Del",
                       "Take this pad off the board. Nothing else moves, and "
                       "you can put it back")
         sounds.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...",
@@ -1691,9 +1692,18 @@ class DropDeckFrame(wx.Frame):
 
     def remove_slot(self, slot=None):
         """Take one pad off the board. Nothing is lost and nothing moves."""
+        if slot is None and _is_text_entry(wx.Window.FindFocus()):
+            # Shift+Delete comes from the menu bar's own accelerator, which no
+            # swapping of the frame's table can stand down, and it must not
+            # reach past a box somebody is typing in.
+            return False
         slot = slot or self._focused_slot()
         if slot is None:
-            self.announce("Move to a sound button first")
+            if self.views.GetSelection() == VIEW_PLAYLIST:
+                self.announce("That one is for the soundboard. "
+                              "Ctrl+Shift+S goes back to it")
+            else:
+                self.announce("Move to a sound button first")
             return False
         if slot.hidden:
             return False
@@ -2898,7 +2908,8 @@ class DropDeckFrame(wx.Frame):
             menu.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter")
             menu.Append(ID_CLEAR_FOCUSED, "&Clear slot")
         menu.AppendSeparator()
-        menu.Append(ID_REMOVE_SLOT, "Re&move this slot from the board")
+        menu.Append(ID_REMOVE_SLOT,
+                    "Re&move this slot from the board	Shift+Del")
         if self.board.hidden_slots(slot.bank):
             menu.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...")
 
