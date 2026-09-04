@@ -1,62 +1,79 @@
-"""Walk every dialog the way a screen reader does, and check it says something.
+"""What a screen reader will actually say, asked of Windows rather than of wx.
 
-Tony, 4 September 2026: "make sure field labels are correct with NVDA on the
-program as well, when tabbing and shift tabbing through dialogs."
+Tony, 4 September 2026, tabbing the Streaming tab with NVDA:
 
-The failure this catches is the quiet one. A text box with no name is not
-broken, does not throw, and looks perfectly fine on screen next to its label.
-Tab onto it with NVDA and you hear "edit, blank": the label beside it is a
-separate control and a screen reader has no reason to connect the two. Every
-box you cannot name is a box somebody has to fill in by counting Tabs from
-the top of the window and remembering.
+    Address   edit  Alt+d  selected 8001
+    Password  combo box  MP3  collapsed  Alt+w
 
-So this builds each dialog for real, walks the controls in tab order the way
-Tab and Shift+Tab do, and asks of each one: if I landed here and heard only
-what this control offers, would I know what it is for?
+Every field announced the PREVIOUS field's label with its own value. And of
+the crossfade box beside the running order:
+
+    edit  selected 3.0
+
+no label at all. Both shipped, and an earlier version of this file passed
+both, because it asked wx what each control was called and wx is not who a
+screen reader asks.
+
+Measured here, with deliberately different strings so the answer could not be
+a coincidence:
+
+    static text before it, plus SetName   ->  the static text
+    static text before it, no SetName     ->  the static text
+    SetName only, no static text          ->  nothing at all
+
+**SetName is not the accessible name on Windows.** It is a wx internal
+identifier. MSAA hands a screen reader the static text that PRECEDES the
+control in creation order, and creation order is the order things were built,
+not the order they were added to a sizer. Build a control before its label and
+it inherits the label of the row above it, which is exactly what happened.
+
+So this asks Windows. It builds every dialog for real, walks the controls in
+tab order and calls IAccessible::get_accName on each, which is the question
+NVDA asks. A control that answers with nothing, or with its own class name, is
+a control somebody has to identify by counting Tabs from the top of the window.
 
     python tools/check_labels.py
 
-It does not replace listening to it with NVDA running. It replaces having to
-notice, by ear, one silent box in a window of twenty.
+It does not replace listening with NVDA running. It replaces having to find
+one silent box in a window of twenty by ear.
 """
+import ctypes
 import os
+import re
 import sys
 import tempfile
+from ctypes import POINTER, byref
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("APPDATA", tempfile.mkdtemp(prefix="dd-labels-"))
 
+import comtypes
+import comtypes.client
 import wx
 
-from dropdeck import constants as C
-from dropdeck.board import Board
-from dropdeck.slot import Slot
+comtypes.client.GetModule("oleacc.dll")
+from comtypes.gen.Accessibility import IAccessible          # noqa: E402
+from comtypes.automation import VARIANT                     # noqa: E402
 
 FAILED = []
 CHECKED = [0]
 
-#: What wxWidgets calls a control when nobody has named it. Hearing one of
-#: these is hearing the class name, not the field.
-WX_DEFAULTS = {
-    "text", "textctrl", "choice", "combobox", "combo", "spinctrl",
-    "spinctrldouble", "listctrl", "listbox", "checklistbox", "checkbox",
-    "button", "panel", "dialog", "staticText", "statictext", "slider",
-    "notebook", "radiobutton", "radiobox", "gauge", "scrollbar", "window",
-    "item", "control", "",
-}
+#: The client area of a window, which is the object a screen reader lands on.
+OBJID_CLIENT = 0xFFFFFFFC
 
-#: Controls that carry their own words. A button says its label, a check box
-#: says its label; there is nothing to connect and nothing to miss.
-SPEAKS_FOR_ITSELF = (
-    wx.Button, wx.ToggleButton, wx.CheckBox, wx.RadioButton, wx.StaticText,
-    wx.Notebook, wx.BitmapButton,
-)
+#: Answers that mean nobody named it. wx hands out its own class name when it
+#: has nothing better, and a class name is not a label.
+NOT_A_NAME = re.compile(r"^(wx[A-Za-z]*)?$")
+
+#: Controls that carry their own words: a button says its label, a check box
+#: says its label. Nothing to associate, so nothing to lose.
+SPEAKS_FOR_ITSELF = (wx.Button, wx.ToggleButton, wx.CheckBox, wx.RadioButton,
+                     wx.StaticText, wx.Notebook, wx.BitmapButton)
 
 #: Controls that are a blank box until something names them.
-NEEDS_A_NAME = (
-    wx.TextCtrl, wx.Choice, wx.ComboBox, wx.SpinCtrl, wx.SpinCtrlDouble,
-    wx.ListCtrl, wx.ListBox, wx.CheckListBox, wx.Slider,
-)
+NEEDS_A_NAME = (wx.TextCtrl, wx.Choice, wx.ComboBox, wx.SpinCtrl,
+                wx.SpinCtrlDouble, wx.ListCtrl, wx.ListBox, wx.CheckListBox,
+                wx.Slider)
 
 
 def say(label, ok, detail=""):
@@ -64,7 +81,35 @@ def say(label, ok, detail=""):
     if not ok:
         FAILED.append(label)
     print(("  ok   " if ok else "  FAIL ") + label
-          + (("  " + str(detail)) if detail else ""), flush=True)
+          + (("  " + str(detail)) if detail != "" else ""), flush=True)
+
+
+def accessible_name(window):
+    """What Windows tells a screen reader this control is called."""
+    try:
+        acc = POINTER(IAccessible)()
+        ctypes.oledll.oleacc.AccessibleObjectFromWindow(
+            ctypes.c_void_p(window.GetHandle()), OBJID_CLIENT,
+            byref(IAccessible._iid_), byref(acc))
+        which = VARIANT()
+        which.value = 0                      # CHILDID_SELF
+        return acc.accName(which) or ""
+    except Exception:
+        return ""
+
+
+def focus_target(control):
+    """The window Tab actually lands on.
+
+    A spin control is a wrapper around a native edit box and a pair of
+    arrows. Focus goes to the edit, so the edit is the thing whose name has
+    to be right; naming the wrapper names something nobody visits.
+    """
+    if isinstance(control, (wx.SpinCtrl, wx.SpinCtrlDouble)):
+        for child in control.GetChildren():
+            if isinstance(child, wx.TextCtrl):
+                return child
+    return control
 
 
 def tab_order(window):
@@ -78,58 +123,61 @@ def tab_order(window):
     return found
 
 
-def spoken_name(control):
-    """What a screen reader has to go on for this control."""
-    name = (control.GetName() or "").strip()
-    label = ""
-    try:
-        label = (control.GetLabel() or "").strip()
-    except Exception:
-        pass
-    return name, label
+def all_children(window):
+    found = []
+    for child in window.GetChildren():
+        found.append(child)
+        found.extend(all_children(child))
+    return found
 
 
 def audit(title, window):
-    """Every control that needs naming has one, and none is a class name."""
     controls = tab_order(window)
     say("%s: has controls to tab through" % title, bool(controls), len(controls))
 
-    unnamed, generic = [], []
+    silent, heard = [], {}
+    seen = set()
     for control in controls:
         if isinstance(control, SPEAKS_FOR_ITSELF):
             continue
         if not isinstance(control, NEEDS_A_NAME):
             continue
-        name, label = spoken_name(control)
-        heard = name or label
-        if not heard:
-            unnamed.append(type(control).__name__)
-        elif heard.lower() in WX_DEFAULTS:
-            generic.append("%s named %r" % (type(control).__name__, heard))
-
-    say("%s: every box a screen reader lands on has a name" % title,
-        not unnamed, ", ".join(unnamed))
-    say("%s: and none of them is just the class name" % title,
-        not generic, ", ".join(generic))
-
-    duplicates = {}
-    for control in controls:
-        if not isinstance(control, NEEDS_A_NAME):
+        # A spin control turns up twice: once as itself and once as the edit
+        # box inside it, which is the same Tab stop. Counting it twice would
+        # report every correctly named spin as a duplicate name.
+        target = focus_target(control)
+        handle = target.GetHandle()
+        if handle in seen:
             continue
-        # A spin control and the text box inside it deliberately share a
-        # name: they are one field, and the inner box is the half that Tab
-        # reaches. Counting them as a collision would be counting the fix.
-        parent = control.GetParent()
-        if (isinstance(control, wx.TextCtrl)
-                and isinstance(parent, (wx.SpinCtrl, wx.SpinCtrlDouble))):
-            continue
-        heard = (control.GetName() or "").strip()
-        if heard and heard.lower() not in WX_DEFAULTS:
-            duplicates.setdefault(heard, 0)
-            duplicates[heard] += 1
-    repeated = [n for n, count in duplicates.items() if count > 1]
-    say("%s: no two boxes answer to the same name" % title,
+        seen.add(handle)
+        spoken = accessible_name(target).strip()
+        if NOT_A_NAME.match(spoken):
+            silent.append("%s says %r" % (type(control).__name__, spoken))
+        else:
+            heard.setdefault(spoken, 0)
+            heard[spoken] += 1
+
+    say("%s: every box says what it is, asked of Windows" % title,
+        not silent, "; ".join(silent))
+
+    repeated = [n for n, count in heard.items() if count > 1]
+    say("%s: and no two of them say the same thing" % title,
         not repeated, ", ".join(repeated))
+
+    keys = {}
+    for control in all_children(window):
+        try:
+            label = control.GetLabel() or ""
+        except Exception:
+            continue
+        match = re.search(r"&(\w)", label)
+        if match:
+            keys.setdefault(match.group(1).lower(), []).append(
+                label.replace("&", ""))
+    clashes = ["Alt+%s: %s" % (k, " / ".join(v))
+               for k, v in keys.items() if len(v) > 1]
+    say("%s: no two controls share an Alt key" % title,
+        not clashes, "; ".join(clashes))
 
 
 def main():
@@ -143,6 +191,10 @@ def main():
     from dropdeck.ui import DropDeckFrame
 
     frame = DropDeckFrame()
+    # Shown, because a window that was never realised has no accessible
+    # object behind it and every answer would be an empty string.
+    frame.Show()
+    app.Yield()
     board = frame.board
     slot = board[0]
     if not slot.name:
@@ -153,14 +205,17 @@ def main():
 
     print("\nEvery tab of Preferences")
     prefs = SettingsDialog(frame, board, frame.mixer, mic=frame.mic)
+    prefs.Show()
+    app.Yield()
     for page in range(prefs.tabs.GetPageCount()):
         prefs.tabs.SetSelection(page)
+        app.Yield()
         audit("Preferences, %s" % prefs.tabs.GetPageText(page),
               prefs.tabs.GetPage(page))
     prefs.Destroy()
 
     print("\nThe rest of the dialogs")
-    made = [
+    for title, build in [
         ("Slot properties", lambda: SlotPropertiesDialog(frame, slot)),
         ("Assign a hotkey", lambda: AssignHotkeyDialog(frame, slot)),
         ("Search", lambda: SearchDialog(frame, board)),
@@ -171,13 +226,14 @@ def main():
         ("Sound browser", lambda: SoundBrowserDialog(frame)),
         ("Submit feedback", lambda: FeedbackDialog(frame, frame)),
         ("Donate", lambda: DonateDialog(frame)),
-    ]
-    for title, build in made:
+    ]:
         try:
             dialog = build()
+            dialog.Show()
+            app.Yield()
         except Exception as exc:
-            say("%s: opens at all" % title, False, "%s: %s"
-                % (type(exc).__name__, exc))
+            say("%s: opens at all" % title, False,
+                "%s: %s" % (type(exc).__name__, exc))
             continue
         audit(title, dialog)
         dialog.Destroy()

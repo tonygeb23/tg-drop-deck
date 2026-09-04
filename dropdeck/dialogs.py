@@ -39,19 +39,58 @@ for _n in range(1, 25):
     _NAMED_KEYS[getattr(wx, f"WXK_F{_n}")] = f"F{_n}"
 
 
-def name_field(control, name):
-    """Name a control, and the inner box that focus actually lands on.
+class _Named(wx.Accessible):
+    """An accessible object that exists to answer one question: what is this.
 
-    A wx.SpinCtrlDouble is a text box and a pair of arrows inside a wrapper.
-    Tab lands on the text box, not the wrapper, so naming only the wrapper
-    leaves the thing a screen reader reaches called "text". Everything a
-    caption in front already does still applies; this makes sure the control
-    can also say what it is on its own.
+    Needed because SetName is NOT the accessible name on Windows. Measured,
+    with deliberately different strings: a control with a static text in
+    front of it reports the static text, and a control with only SetName
+    reports nothing at all. See tools/check_labels.py.
     """
-    control.SetName(name)
+
+    def __init__(self, name):
+        super().__init__()
+        self._name = name
+
+    def GetName(self, childId):
+        # childId 0 is the control itself. Answering for every child would
+        # make each part of a composite claim to be the whole thing, which is
+        # how a list ends up reading every row as the name of the list.
+        if childId == 0:
+            return (wx.ACC_OK, self._name)
+        return (wx.ACC_NOT_IMPLEMENTED, "")
+
+
+def name_field(control, name):
+    """Make a control say what it is, to a screen reader and not just to wx.
+
+    A wx.SpinCtrlDouble is a native edit box and a pair of arrows inside a
+    wrapper. Tab lands on the EDIT, and the edit has no static text in front
+    of it inside that wrapper, so MSAA has nothing to offer and NVDA reads it
+    as "edit" with no name at all. Tony, of the crossfade box beside the
+    running order: "edit selected 3.0".
+
+    So the edit gets an accessible object of its own.
+
+    The object is stored on the control on purpose. wx does not take
+    ownership, so an Accessible left as a local is collected the moment the
+    function returns, and the control then reports an empty name: identical,
+    from the outside, to never having been named. That cost an hour.
+    """
+    control.SetName(name)          # wx internal, for this codebase to read
+    target = control
     for child in control.GetChildren():
         if isinstance(child, wx.TextCtrl):
-            child.SetName(name)
+            target = child
+            break
+    accessible = _Named(name)
+    # Kept on the CONTROL, never on the child. GetChildren() hands back a
+    # fresh Python wrapper every call, so an attribute set on the child is
+    # set on a temporary that is discarded the moment this returns, and the
+    # accessible goes with it. Same failure as leaving it in a local, one
+    # level further down and twice as easy to miss.
+    control._dropdeck_accessible = accessible
+    target.SetAccessible(accessible)
     return control
 
 
@@ -682,14 +721,19 @@ class SettingsDialog(wx.Dialog):
         grid.AddGrowableCol(1, 1)
         for bank in range(1, C.BANK_COUNT + 1):
             title = self.board.bank_name(bank)
+            # The label is built BEFORE the choice, and the order matters.
+            # MSAA gives a screen reader the static text that precedes a
+            # control in creation order, so building the choice first labelled
+            # every bank with the name of the bank above it: Dialog Drops
+            # announced itself as "Sound Effects".
+            grid.Add(wx.StaticText(panel, label=title), 0,
+                     wx.ALIGN_CENTER_VERTICAL)
             choice = wx.Choice(panel, choices=["Main output"] + self.choices[1:])
             # Named for the screen reader, because four identical unlabelled
             # dropdowns in a column are indistinguishable by ear.
             choice.SetName(f"{title} output")
             choice.SetSelection(self._bank_selection(bank))
             self.bank_choices[bank] = choice
-            grid.Add(wx.StaticText(panel, label=title), 0,
-                     wx.ALIGN_CENTER_VERTICAL)
             grid.Add(choice, 1, wx.EXPAND)
         sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
@@ -701,7 +745,7 @@ class SettingsDialog(wx.Dialog):
         self.duck_on.SetValue(bool(self.board.ducking))
         sizer.Add(self.duck_on, 0, wx.ALL, 10)
 
-        self._label(panel, sizer, "Duck &depth in decibels")
+        self._label(panel, sizer, "Duck depth in de&cibels")
         self.duck_db = wx.Slider(panel, value=int(round(self.board.duck_db)),
                                  minValue=-24, maxValue=0,
                                  style=wx.SL_HORIZONTAL)
@@ -791,7 +835,7 @@ class SettingsDialog(wx.Dialog):
             panel, min=int(C.MIN_WARN_SECONDS), max=int(C.MAX_WARN_SECONDS),
             initial=int(round(getattr(self.board, "warn_seconds",
                                       C.DEFAULT_WARN_SECONDS))))
-        self.warn_seconds_ctrl.SetName("Seconds before the end to beep")
+        name_field(self.warn_seconds_ctrl, "Seconds before the end to beep")
         self.warn_seconds_ctrl.SetToolTip(
             "How long before a track's music stops the beep sounds. Ten is a "
             "usual answer. Nothing shorter than this plus a second gets one, "
@@ -886,85 +930,111 @@ class SettingsDialog(wx.Dialog):
         grid = wx.FlexGridSizer(2, 8, 12)
         grid.AddGrowableCol(1, 1)
 
-        def row(label, control, tip=""):
+        def field(label, build, name, tip=""):
+            """A labelled box. The LABEL IS BUILT FIRST, and that matters.
+
+            MSAA gives a screen reader the static text that precedes a control
+            in creation order, which is the order things were constructed and
+            not the order they were added to the sizer. Building the control
+            first and the label after labels every field with the one above
+            it: NVDA read this tab's password box as "User name" and its
+            format box as "Password".
+
+            It takes a function rather than a finished control so that it
+            cannot be called the wrong way round again.
+            """
             grid.Add(wx.StaticText(panel, label=label), 0,
                      wx.ALIGN_CENTER_VERTICAL)
+            control = build()
+            # name_field rather than SetName: a spin control's edit box needs
+            # an accessible object of its own, and SetName is not the
+            # accessible name on Windows.
+            name_field(control, name)
             if tip:
                 control.SetToolTip(tip)
             grid.Add(control, 0, wx.EXPAND)
             return control
 
-        self.stream_server = wx.Choice(
-            panel, choices=[label for label, _cls
-                            in (streamout.SERVERS[key]
-                                for key in C.STREAM_SERVER_ORDER)])
-        self.stream_server.SetName("Server type")
-        self.stream_server.SetSelection(
-            C.STREAM_SERVER_ORDER.index(self.board.stream_server)
-            if self.board.stream_server in C.STREAM_SERVER_ORDER else 0)
-        row("Ser&ver", self.stream_server,
+        self.stream_server = field(
+            "Se&rver",
+            lambda: wx.Choice(panel, choices=[
+                streamout.SERVERS[key][0] for key in C.STREAM_SERVER_ORDER]),
+            "Server type",
             "Icecast covers almost everything, including the Liquidsoap "
             "harbor a station puts in front of it so a presenter can take "
             "over from the automation.")
+        self.stream_server.SetSelection(
+            C.STREAM_SERVER_ORDER.index(self.board.stream_server)
+            if self.board.stream_server in C.STREAM_SERVER_ORDER else 0)
 
-        self.stream_host = wx.TextCtrl(panel, value=self.board.stream_host)
-        self.stream_host.SetName("Address")
-        row("A&ddress", self.stream_host,
+        self.stream_host = field(
+            "A&ddress",
+            lambda: wx.TextCtrl(panel, value=self.board.stream_host),
+            "Address",
             "The name of the server, with no http in front of it.")
 
-        self.stream_port = wx.SpinCtrl(panel, min=1, max=65535,
-                                       initial=int(self.board.stream_port))
-        self.stream_port.SetName("Port")
-        row("&Port", self.stream_port,
+        self.stream_port = field(
+            "&Port",
+            lambda: wx.SpinCtrl(panel, min=1, max=65535,
+                                initial=int(self.board.stream_port)),
+            "Port",
             "The port listeners use. For SHOUTcast this is still the "
             "listening port; the app adds the one it needs for a source.")
 
-        self.stream_mount = wx.TextCtrl(panel, value=self.board.stream_mount)
-        self.stream_mount.SetName("Mount point")
-        row("&Mount point", self.stream_mount,
+        self.stream_mount = field(
+            "&Mount point",
+            lambda: wx.TextCtrl(panel, value=self.board.stream_mount),
+            "Mount point",
             "The part after the address, such as /live. SHOUTcast does not "
             "use one.")
 
-        self.stream_user = wx.TextCtrl(panel, value=self.board.stream_user)
-        self.stream_user.SetName("User name")
-        row("&User name", self.stream_user,
+        self.stream_user = field(
+            "&User name",
+            lambda: wx.TextCtrl(panel, value=self.board.stream_user),
+            "User name",
             "Almost always source. SHOUTcast ignores it.")
 
-        self.stream_password = wx.TextCtrl(panel,
-                                           value=self.board.stream_password,
-                                           style=wx.TE_PASSWORD)
-        self.stream_password.SetName("Password")
-        row("Pass&word", self.stream_password,
+        self.stream_password = field(
+            "Pass&word",
+            lambda: wx.TextCtrl(panel, value=self.board.stream_password,
+                                style=wx.TE_PASSWORD),
+            "Password",
             "The source password for the server, not your listener password.")
 
-        self.stream_format = wx.Choice(
-            panel, choices=[streamout.FORMATS[key]["label"]
-                            for key in C.STREAM_FORMAT_ORDER])
-        self.stream_format.SetName("Format")
+        self.stream_format = field(
+            "&Format",
+            lambda: wx.Choice(panel, choices=[
+                streamout.FORMATS[key]["label"]
+                for key in C.STREAM_FORMAT_ORDER]),
+            "Format",
+            "MP3 plays everywhere. AAC sounds better for the same bandwidth "
+            "and is what a lot of stations use. Ogg Opus is better again, if "
+            "your server and your listeners take it.")
         self.stream_format.SetSelection(
             C.STREAM_FORMAT_ORDER.index(self.board.stream_format)
             if self.board.stream_format in C.STREAM_FORMAT_ORDER else 0)
-        row("&Format", self.stream_format,
-            "MP3 plays everywhere. Ogg Opus sounds better for the same "
-            "bandwidth, if your server and your listeners take it.")
 
-        self.stream_bitrate = wx.Choice(
-            panel, choices=["%d kbps" % rate for rate in C.STREAM_BITRATES])
-        self.stream_bitrate.SetName("Bitrate")
+        self.stream_bitrate = field(
+            "&Bitrate",
+            lambda: wx.Choice(panel, choices=[
+                "%d kbps" % rate for rate in C.STREAM_BITRATES]),
+            "Bitrate",
+            "128 is plenty for speech and music together. Higher costs your "
+            "listeners more data and your server more bandwidth.")
         self.stream_bitrate.SetSelection(
             C.STREAM_BITRATES.index(self.board.stream_bitrate)
             if self.board.stream_bitrate in C.STREAM_BITRATES else 2)
-        row("&Bitrate", self.stream_bitrate,
-            "128 is plenty for speech and music together. Higher costs your "
-            "listeners more data and your server more bandwidth.")
 
-        self.stream_name = wx.TextCtrl(panel, value=self.board.stream_name)
-        self.stream_name.SetName("Station name")
-        row("Station &name", self.stream_name,
+        self.stream_name = field(
+            "Statio&n name",
+            lambda: wx.TextCtrl(panel, value=self.board.stream_name),
+            "Station name",
             "What listeners see as the name of the stream.")
 
         sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
+        # Check boxes carry their own label, so nothing above can steal it.
+        # Their access keys still have to be unique: i did two jobs here.
         self.stream_mic = wx.CheckBox(
             panel, label="Put the m&icrophone on air")
         self.stream_mic.SetValue(bool(self.board.stream_mic))
@@ -975,7 +1045,7 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.stream_titles = wx.CheckBox(
-            panel, label="Send the &track title to the server")
+            panel, label="Send the track &title to the server")
         self.stream_titles.SetValue(bool(self.board.stream_titles))
         self.stream_titles.SetToolTip(
             "Listeners see the artist and title of whatever the playlist is "
@@ -983,7 +1053,7 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.stream_titles, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.playlist_monitor_only = wx.CheckBox(
-            panel, label="F7 and F8 change what &I hear, not what goes out")
+            panel, label="F7 and F8 change what I &hear, not what goes out")
         self.playlist_monitor_only.SetValue(
             bool(self.board.playlist_monitor_only))
         self.playlist_monitor_only.SetToolTip(
@@ -999,20 +1069,21 @@ class SettingsDialog(wx.Dialog):
         self.stream_public.SetValue(bool(self.board.stream_public))
         sizer.Add(self.stream_public, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
-        test = wx.Button(panel, label="&Test the connection")
+        test = wx.Button(panel, label="T&est the connection")
         test.SetToolTip(
             "Connects, says what happened, and disconnects again. Nothing is "
             "broadcast.")
         test.Bind(wx.EVT_BUTTON, self._on_test_stream)
         sizer.Add(test, 0, wx.ALL, 10)
 
+        self._label(panel, sizer, "Test result")
         self.stream_result = wx.TextCtrl(
             panel, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 60),
             value="Not tested yet.")
         self.stream_result.SetName("Test result")
-        self._refresh_stations()
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
+        self._refresh_stations()
 
     #: The boxes a saved station fills in, and what reads and writes each.
     def _stream_controls(self):

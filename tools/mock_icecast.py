@@ -21,7 +21,8 @@ class MockServer:
     """One connection at a time, which is all a source ever needs."""
 
     def __init__(self, password="hackme", kind="icecast", accept=True,
-                 drop_after=None, expect_mount="/live"):
+                 drop_after=None, expect_mount="/live", stall_after=None,
+                 stall_seconds=6.0):
         #: What it will accept.
         self.password = password
         self.kind = kind
@@ -30,6 +31,14 @@ class MockServer:
         #: Bytes to take before hanging up, or None to stay up. This is how a
         #: dropped connection mid show is tested without unplugging anything.
         self.drop_after = drop_after
+        #: Stop reading the socket after this many bytes, for this long, then
+        #: carry on. A real network does this: a receiver whose window closes
+        #: is not a disconnection, it is a pause, and the difference matters
+        #: because a source that treats every pause as a drop reconnects all
+        #: night.
+        self.stall_after = stall_after
+        self.stall_seconds = stall_seconds
+        self.stalled = False
         self.expect_mount = expect_mount
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -181,6 +190,13 @@ class MockServer:
         while not self._stop.is_set():
             if self.drop_after is not None and len(self.body) >= self.drop_after:
                 return
+            if (self.stall_after is not None and not self.stalled
+                    and len(self.body) >= self.stall_after):
+                # Stop reading, without closing. The kernel buffer fills, then
+                # the sender's send() blocks. This is what a congested link
+                # does to a source client.
+                self.stalled = True
+                time.sleep(self.stall_seconds)
             try:
                 chunk = conn.recv(16384)
             except socket.timeout:

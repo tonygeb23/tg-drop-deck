@@ -161,7 +161,11 @@ class PlaylistPanel(wx.Panel):
                 ("&Add files...", self._on_add, "Choose songs to put at the end"),
                 ("&Insert a drop...", self._on_drop,
                  "Put a drop in front of the item you are on"),
-                ("&Remove", self._on_remove, "Take this item out of the order")):
+                # Not &Remove: the Running order list above already answers
+                # to Alt+R, and two controls on one key means one of them
+                # cannot be reached.
+                ("Re&move", self._on_remove,
+                 "Take this item out of the order")):
             button = wx.Button(self, label=label)
             button.SetToolTip(tip)
             button.Bind(wx.EVT_BUTTON, handler)
