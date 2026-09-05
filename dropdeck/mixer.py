@@ -163,9 +163,9 @@ class Mixer:
         #: presenter on speakers monitors nothing and is still on air.
         self.air_source = None
 
-        #: The pip, made once per samplerate. See play_cue.
+        #: The cue, made once per shape, level and samplerate. See play_cue.
         self._cue_tone = None
-        self._cue_frames = 0
+        self._cue_key = None
 
         #: Where the playlist fader actually is, as opposed to where it has
         #: been asked to go. It glides, the same way ducking does, because a
@@ -319,12 +319,18 @@ class Mixer:
             self._voices.append(voice)
         return voice
 
-    def play_cue(self):
-        """The end of track pip. Returns the Voice, or None if it will not."""
+    def play_cue(self, kind=None, level_db=None):
+        """The end of track cue. Returns the Voice, or None if it will not.
+
+        ``kind`` is which of the shapes in C.CUE_SOUNDS, and ``level_db`` how
+        loud. Both are cached with the samplerate, so arrowing through the
+        picker in Preferences builds each one once and no more.
+        """
         try:
-            if self._cue_tone is None or len(self._cue_tone) != self._cue_frames:
-                self._cue_tone = cue_tone(self.samplerate)
-                self._cue_frames = len(self._cue_tone)
+            key = (kind, level_db, self.samplerate)
+            if self._cue_tone is None or self._cue_key != key:
+                self._cue_tone = cue_tone(self.samplerate, kind, level_db)
+                self._cue_key = key
             # Only ever one. Pressing on through a second one landing on top
             # of the first would be a rattle, not a cue.
             self.stop_slot(C.CUE_SLOT, fade_out=0.01, also_releasing=True)
@@ -840,7 +846,7 @@ class MixerGroup:
     def stop_preview(self):
         return sum(m.stop_preview() for m in self._mixers.values())
 
-    def play_cue(self):
+    def play_cue(self, kind=None, level_db=None):
         """Out of the monitor output, which is where the presenter is.
 
         The same output the microphone is monitored on, for the same reason:
@@ -848,7 +854,7 @@ class MixerGroup:
         not go to. With no separate monitor output set it is the ordinary
         output, which is what somebody with one sound card wants.
         """
-        return self.monitor_mixer.play_cue()
+        return self.monitor_mixer.play_cue(kind, level_db)
 
     def set_monitor_device(self, device):
         """Move monitoring to another output, opening it if need be."""

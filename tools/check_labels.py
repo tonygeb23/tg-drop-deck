@@ -254,7 +254,8 @@ def main():
                                   DropsLibraryDialog, FeedbackDialog,
                                   SearchDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
-                                  TrackCrossfadeDialog, TrimDialog)
+                                  StreamStatsDialog, TrackCrossfadeDialog,
+                                  TrimDialog)
     from dropdeck.playlist import Track
     from dropdeck.ui import DropDeckFrame
 
@@ -294,6 +295,11 @@ def main():
         ("Sound browser", lambda: SoundBrowserDialog(frame)),
         ("Submit feedback", lambda: FeedbackDialog(frame, frame)),
         ("Donate", lambda: DonateDialog(frame)),
+        # It asks a server on a thread, so it opens with an empty list and
+        # names everything before any answer arrives, which is the state the
+        # names have to be right in.
+        ("Who is listening",
+         lambda: StreamStatsDialog(frame, frame._stream_settings())),
     ]:
         try:
             dialog = build()

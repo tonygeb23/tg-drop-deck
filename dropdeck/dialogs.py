@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 import time
 
 import wx
@@ -17,6 +18,7 @@ from . import constants as C
 from . import feedback
 from . import dsp
 from . import streamout
+from . import streamstats
 from . import vst
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
@@ -859,10 +861,82 @@ class SettingsDialog(wx.Dialog):
             "so a short ident does not beep the moment it starts.")
         warn_row.Add(self.warn_seconds_ctrl, 0)
         sizer.Add(warn_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        self.warn_seconds_ctrl.Enable(self.warn_on.GetValue())
-        self.warn_on.Bind(
-            wx.EVT_CHECKBOX,
-            lambda e: (self.warn_seconds_ctrl.Enable(e.IsChecked()), e.Skip()))
+
+        # Which sound, and how loud. Both play as you change them, because
+        # the only useful answer to "is this loud enough over a song" is
+        # hearing it, and a picker you have to close the window to audition
+        # is a picker nobody adjusts twice.
+        sound_row = wx.BoxSizer(wx.HORIZONTAL)
+        sound_row.Add(wx.StaticText(panel, label="Which s&ound"), 0,
+                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.cue_sound = wx.Choice(
+            panel, choices=[label for _key, label in C.CUE_SOUNDS])
+        name_field(self.cue_sound, "Which sound")
+        current = getattr(self.board, "cue_sound", C.DEFAULT_CUE_SOUND)
+        self.cue_sound.SetSelection(
+            C.CUE_SOUND_KEYS.index(current)
+            if current in C.CUE_SOUND_KEYS else 0)
+        self.cue_sound.SetToolTip(
+            "Each one is a different shape rather than a different note, so "
+            "you can tell them apart over music. You hear each as you "
+            "choose it.")
+        self.cue_sound.Bind(wx.EVT_CHOICE, self._on_cue_changed)
+        sound_row.Add(self.cue_sound, 1, wx.EXPAND | wx.RIGHT, 8)
+        try_it = wx.Button(panel, label="&Hear it")
+        try_it.Bind(wx.EVT_BUTTON, self._on_cue_changed)
+        sound_row.Add(try_it, 0)
+        sizer.Add(sound_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self._label(panel, sizer, "How &loud the warning is, in decibels")
+        # No SL_LABELS. That style builds the slider's own min, max and value
+        # statics as children, and MSAA hands a screen reader the last static
+        # created before the control: with it on, this announced itself as
+        # "-6". The value is read out as you move it anyway, which is the
+        # part that matters.
+        self.cue_level = wx.Slider(
+            panel, value=int(round(getattr(self.board, "cue_level_db",
+                                           C.CUE_LEVEL_DB))),
+            minValue=int(C.MIN_CUE_LEVEL_DB), maxValue=int(C.MAX_CUE_LEVEL_DB),
+            style=wx.SL_HORIZONTAL)
+        self.cue_level.SetName("How loud the warning is, in decibels")
+        self.cue_level.SetToolTip(
+            "Zero is as loud as it goes. The warning is a cue for you, not "
+            "part of the show, so it never reaches the stream.")
+        self.cue_level.Bind(wx.EVT_SCROLL_CHANGED, self._on_cue_changed)
+        self.cue_level.Bind(wx.EVT_SLIDER, self._on_cue_changed)
+        sizer.Add(self.cue_level, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM,
+                  10)
+
+        for control in (self.warn_seconds_ctrl, self.cue_sound, try_it,
+                        self.cue_level):
+            control.Enable(self.warn_on.GetValue())
+        self._warn_controls = (self.warn_seconds_ctrl, self.cue_sound, try_it,
+                               self.cue_level)
+        self.warn_on.Bind(wx.EVT_CHECKBOX, self._on_warn_toggled)
+
+    def _on_warn_toggled(self, event):
+        for control in getattr(self, "_warn_controls", ()):
+            control.Enable(event.IsChecked())
+        event.Skip()
+
+    @property
+    def cue_sound_key(self):
+        return C.CUE_SOUND_KEYS[max(0, self.cue_sound.GetSelection())]
+
+    @property
+    def cue_level_db(self):
+        return float(self.cue_level.GetValue())
+
+    def _on_cue_changed(self, event=None):
+        """Play the cue as it is chosen, out of the monitor, as it will be."""
+        mixer = getattr(self.GetParent(), "mixer", None)
+        if mixer is not None:
+            try:
+                mixer.play_cue(self.cue_sound_key, self.cue_level_db)
+            except Exception:
+                pass
+        if event is not None:
+            event.Skip()
 
     def _build_mic_tab(self):
         panel, sizer = self._page("Microphone")
@@ -1328,6 +1402,15 @@ class SettingsDialog(wx.Dialog):
             "Station name",
             "What listeners see as the name of the stream.")
 
+        self.stream_stats = field(
+            "Where listeners &connect",
+            lambda: wx.TextCtrl(panel,
+                                value=self.board.stream_stats_url),
+            "Where listeners connect",
+            "Only if your listeners are somewhere other than the address "
+            "above, which they are whenever you stream into automation. "
+            "Leave it empty and Drop Deck looks in the usual places.")
+
         sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
         # Check boxes carry their own label, so nothing above can steal it.
@@ -1403,6 +1486,7 @@ class SettingsDialog(wx.Dialog):
             "stream_bitrate": (self.stream_bitrate, "index",
                                C.STREAM_BITRATES),
             "stream_name": (self.stream_name, "text", None),
+            "stream_stats_url": (self.stream_stats, "text", None),
             "stream_public": (self.stream_public, "check", None),
             "stream_mic": (self.stream_mic, "check", None),
             "stream_titles": (self.stream_titles, "check", None),
@@ -1533,6 +1617,7 @@ class SettingsDialog(wx.Dialog):
             "bitrate": C.STREAM_BITRATES[
                 max(0, self.stream_bitrate.GetSelection())],
             "name": self.stream_name.GetValue().strip(),
+            "stats_url": self.stream_stats.GetValue().strip(),
             "public": self.stream_public.GetValue(),
         }
 
@@ -2575,6 +2660,136 @@ class FeedbackDialog(wx.Dialog):
             # refused by the server anyway, and would sit in the queue for
             # ever being retried.
             self.submit.Enable(bool(self.text))
+
+
+class StreamStatsDialog(wx.Dialog):
+    """Who is listening, and to what.
+
+    Two things a presenter wants mid show and cannot get from the app
+    otherwise: how many people are out there, and whether what the server
+    thinks is playing matches what actually is.
+
+    Everything here is asked of the server on a thread, because a station
+    that has gone away takes seconds to say so and this window must not be
+    one of the things that freezes when it does.
+
+    The list is the whole window on purpose. A summary line that has to be
+    hunted for is a summary line nobody reads, so it is also spoken, and it is
+    spoken again only when the number CHANGES: a window that says "nobody is
+    listening" every fifteen seconds is a window you close.
+    """
+
+    #: How often it asks again. Icecast counts a listener the moment they
+    #: connect, so this is about how fresh the number feels rather than about
+    #: catching anything.
+    REFRESH_MS = 15000
+
+    def __init__(self, parent, settings, on_air=False):
+        super().__init__(parent, title="Who is listening",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.settings = dict(settings or {})
+        self.on_air = bool(on_air)
+        self._said = None
+        self._busy = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # A real label in front of it. SetName is not what a screen reader
+        # reads on Windows; the static text before the control is.
+        outer.Add(wx.StaticText(self, label="&What the server says"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.summary = wx.TextCtrl(
+            self, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 66),
+            value="Asking the server...")
+        self.summary.SetName("What the server says")
+        outer.Add(self.summary, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        outer.Add(wx.StaticText(self, label="&Streams"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.list = wx.ListCtrl(
+            self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(560, 200))
+        self.list.SetName("Streams")
+        self.list.InsertColumn(0, "Stream", width=190)
+        self.list.InsertColumn(1, "Listening", width=90)
+        self.list.InsertColumn(2, "Most at once", width=100)
+        self.list.InsertColumn(3, "Playing", width=250)
+        self.list.SetToolTip(
+            "Every stream on the server, not only yours. A station running "
+            "automation has its listeners on the output rather than on the "
+            "feed you are sending.")
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.note = wx.StaticText(self, label="")
+        outer.Add(self.note, 0, wx.LEFT | wx.RIGHT, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        again = wx.Button(self, label="&Ask again")
+        again.Bind(wx.EVT_BUTTON, lambda _e: self.ask())
+        row.Add(again, 0, wx.RIGHT, 8)
+        row.AddStretchSpacer()
+        close = wx.Button(self, wx.ID_CANCEL, "&Close")
+        row.Add(close, 0)
+        outer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.list.SetFocus()
+
+        self._timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, lambda _e: self.ask(quiet=True), self._timer)
+        self._timer.Start(self.REFRESH_MS)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.ask()
+
+    # ------------------------------------------------------------- asking --
+    def ask(self, quiet=False):
+        """Off the interface thread, always. A dead server takes seconds."""
+        if self._busy:
+            return
+        self._busy = True
+        settings = dict(self.settings)
+
+        def work():
+            stats = streamstats.fetch(settings)
+            wx.CallAfter(self._arrived, stats, quiet)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _arrived(self, stats, quiet):
+        self._busy = False
+        if not self:
+            return                      # the window closed while it was asking
+        self.summary.SetValue(stats.summary())
+        self.note.SetLabel("Answered by %s" % stats.source if stats.source
+                           else "")
+        keep = self.list.GetFirstSelected()
+        self.list.DeleteAllItems()
+        for row, mount in enumerate(stats.mounts):
+            name = mount.name or mount.mount or "A stream"
+            if mount.ours:
+                name += " (yours)"
+            self.list.InsertItem(row, name)
+            self.list.SetItem(row, 1, str(mount.listeners))
+            self.list.SetItem(row, 2, str(mount.peak) if mount.peak else "")
+            self.list.SetItem(row, 3, mount.title or "")
+        if self.list.GetItemCount():
+            keep = max(0, min(keep, self.list.GetItemCount() - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+
+        # Spoken only when it has changed. Every fifteen seconds otherwise,
+        # which would make the window unusable with a screen reader running.
+        said = stats.summary()
+        if said != self._said:
+            self._said = said
+            if not quiet or self.IsShown():
+                speak = getattr(self.GetParent(), "announce_answer", None)
+                if speak is not None:
+                    speak(said)
+
+    def _on_close(self, event):
+        self._timer.Stop()
+        event.Skip()
 
 
 class DonateDialog(wx.Dialog):

@@ -24,7 +24,7 @@ STATION_FIELDS = (
     "stream_name", "stream_server", "stream_host", "stream_port",
     "stream_mount", "stream_user", "stream_password", "stream_format",
     "stream_bitrate", "stream_description", "stream_genre", "stream_url",
-    "stream_public", "stream_mic", "stream_titles",
+    "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
 )
 
 
@@ -196,6 +196,11 @@ class Board:
         self.stream_description = ""
         self.stream_genre = ""
         self.stream_url = ""
+        #: Where the LISTENERS are, when that is not where the audio is sent.
+        #: A station running automation streams into a harbor and its
+        #: audience is on the Icecast behind it, so the two are different
+        #: addresses. Empty means work it out; see streamstats.candidates.
+        self.stream_stats_url = ""
         self.stream_public = False
         #: Put the microphone out on the stream. On by default, because a
         #: broadcast with no presenter in it is not what anybody meant, and
@@ -211,6 +216,9 @@ class Board:
 
         #: The microphone chain: gate, equaliser, compressor, limiter.
         #: Empty means the defaults, which are chosen for a spoken voice.
+        #: Which of the warning shapes, and how loud. See C.CUE_SOUNDS.
+        self.cue_sound = C.DEFAULT_CUE_SOUND
+        self.cue_level_db = C.CUE_LEVEL_DB
         self.voice_on = True
         self.voice_settings = {}
 
@@ -477,12 +485,15 @@ class Board:
             "stream_description": self.stream_description,
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
+            "stream_stats_url": self.stream_stats_url,
             "stream_public": bool(self.stream_public),
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
             "stream_stations": list(self.stream_stations),
             "mic_channel": self.mic_channel,
+            "cue_sound": str(self.cue_sound),
+            "cue_level_db": float(self.cue_level_db),
             "voice_on": bool(self.voice_on),
             "voice_settings": dict(self.voice_settings),
             "last_sound_dir": self.last_sound_dir,
@@ -557,6 +568,7 @@ class Board:
         board.stream_description = data.get("stream_description") or ""
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""
+        board.stream_stats_url = data.get("stream_stats_url") or ""
         board.stream_public = bool(data.get("stream_public", False))
         board.stream_mic = bool(data.get("stream_mic", True))
         board.stream_titles = bool(data.get("stream_titles", True))
@@ -564,6 +576,16 @@ class Board:
             data.get("playlist_monitor_only", True))
         channel = data.get("mic_channel")
         board.mic_channel = channel if channel in ("mix", "left", "right") else "mix"
+        sound = data.get("cue_sound")
+        board.cue_sound = (sound if sound in C.CUE_SOUND_KEYS
+                           else C.DEFAULT_CUE_SOUND)
+        try:
+            board.cue_level_db = max(C.MIN_CUE_LEVEL_DB,
+                                     min(C.MAX_CUE_LEVEL_DB,
+                                         float(data.get("cue_level_db",
+                                                        C.CUE_LEVEL_DB))))
+        except (TypeError, ValueError):
+            board.cue_level_db = C.CUE_LEVEL_DB
         board.voice_on = bool(data.get("voice_on", True))
         settings = data.get("voice_settings")
         board.voice_settings = dict(settings) if isinstance(settings, dict) else {}

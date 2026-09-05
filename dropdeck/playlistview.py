@@ -44,7 +44,8 @@ from .dialogs import name_field
 from . import m3u
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
                     ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
-                    ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE, ID_PL_ROW_STOP,
+                    ID_PL_ROW_BOTTOM, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
+                    ID_PL_ROW_STOP, ID_PL_ROW_TOP,
                     ID_PL_ROW_TICK, ID_PL_ROW_TO_LIBRARY, ID_PL_ROW_UP)
 from .slot import format_duration
 
@@ -554,6 +555,25 @@ class PlaylistPanel(wx.Panel):
         if event.AltDown() and code in (wx.WXK_UP, wx.WXK_DOWN):
             self.move_selected(-1 if code == wx.WXK_UP else 1)
             return
+        if event.AltDown() and code in (wx.WXK_HOME, wx.WXK_END,
+                                        wx.WXK_NUMPAD_HOME, wx.WXK_NUMPAD_END):
+            self.move_to_end(code in (wx.WXK_HOME, wx.WXK_NUMPAD_HOME))
+            return
+        # Shift and Enter: bring this one up and take what is on air down
+        # under it, at the crossfade length. The same thing the right click
+        # menu calls Segue, which until now had no key.
+        if (code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+                and event.ShiftDown() and not event.ControlDown()
+                and not event.AltDown()):
+            self.segue_to_selected()
+            return
+        # Shift with A or U ticks or unticks the lot. Plain letters are left
+        # alone, because plain letters are how you find a track by typing its
+        # name.
+        if (event.ShiftDown() and not event.ControlDown()
+                and not event.AltDown() and code in (ord("A"), ord("U"))):
+            self.set_all_ticked(code == ord("A"))
+            return
         event.Skip()
 
     def _on_activated(self, event):
@@ -581,13 +601,16 @@ class PlaylistPanel(wx.Panel):
             # hand, at the crossfade length rather than as a hard cut.
             if self.player.playing:
                 menu.Append(ID_PL_ROW_SEGUE,
-                            "&Segue to this now, fading out what is on")
+                            "&Segue to this now, fading out what is on"
+                            "	Shift+Enter")
             item = menu.AppendCheckItem(
                 ID_PL_ROW_TICK, "&Ticked to play	Space")
             item.Check(bool(track.enabled))
             menu.AppendSeparator()
             menu.Append(ID_PL_ROW_UP, "Move &up	Alt+Up")
             menu.Append(ID_PL_ROW_DOWN, "Move &down	Alt+Down")
+            menu.Append(ID_PL_ROW_TOP, "Move to the &top	Alt+Home")
+            menu.Append(ID_PL_ROW_BOTTOM, "Move to the &end	Alt+End")
             menu.Append(ID_PL_ROW_FADE,
                         "&Crossfade out of this one... (now %s)"
                         % (format_duration(
@@ -710,6 +733,38 @@ class PlaylistPanel(wx.Panel):
             self.player.index -= 1
         self.refresh(keep=min(index, len(self.playlist) - 1))
         self.frame.announce_help("Removed %s" % track.display_name)
+        self.frame.playlist_changed()
+
+    def move_to_end(self, top):
+        """Send the selected track to the top of the order, or the bottom.
+
+        Alt+Home and Alt+End. Alt+Up thirty times is not a way to move a track
+        to the top of a long running order, and counting the presses to know
+        where you are is worse.
+        """
+        index = self.selection()
+        if index is None:
+            return
+        target = self.playlist.move_to(index, 0 if top else
+                                       len(self.playlist) - 1)
+        if target is None:
+            self.frame.announce("That is already at the %s"
+                                % ("top" if top else "bottom"))
+            return
+        # Every index between the two has shifted by one. The player follows
+        # the track it is playing, not the position it was at.
+        playing = self.player.index
+        if playing == index:
+            self.player.index = target
+        elif target <= playing < index:
+            self.player.index = playing + 1
+        elif index < playing <= target:
+            self.player.index = playing - 1
+        self.refresh(keep=target)
+        self.frame.announce_help(
+            "%s moved to the %s, position %d"
+            % (self.playlist[target].display_name,
+               "top" if top else "end", target + 1))
         self.frame.playlist_changed()
 
     def move_selected(self, delta):

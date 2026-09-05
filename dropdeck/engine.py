@@ -45,22 +45,110 @@ def load_audio(path, target_rate):
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
-def cue_tone(rate):
-    """One short pip, made rather than loaded.
-
-    Generated so there is no file to ship, no file to lose and nothing to
-    license. Shaped at both ends over a few milliseconds: a sine that starts
-    and stops at full amplitude is a click with a tone in the middle of it.
-    """
-    frames = max(1, int(C.CUE_TONE_SECONDS * rate))
-    t = np.arange(frames, dtype=np.float32) / float(rate)
-    wave = np.sin(2.0 * np.pi * C.CUE_TONE_HZ * t).astype(np.float32)
-    edge = max(1, int(C.CUE_TONE_EDGE * rate))
-    if frames > 2 * edge:
+def _shaped(wave, rate, edge=None):
+    """Fade a few milliseconds in and out. Without it a tone is a click."""
+    edge = max(1, int((C.CUE_TONE_EDGE if edge is None else edge) * rate))
+    if len(wave) > 2 * edge:
         ramp = np.linspace(0.0, 1.0, edge, dtype=np.float32)
         wave[:edge] *= ramp
         wave[-edge:] *= ramp[::-1]
-    wave *= db_to_gain(C.CUE_LEVEL_DB)
+    return wave
+
+
+def _sine(rate, hz, seconds, edge=None):
+    frames = max(1, int(seconds * rate))
+    t = np.arange(frames, dtype=np.float32) / float(rate)
+    return _shaped(np.sin(2.0 * np.pi * hz * t).astype(np.float32), rate, edge)
+
+
+def _gap(rate, seconds):
+    return np.zeros(max(1, int(seconds * rate)), dtype=np.float32)
+
+
+def _cue_shape(kind, rate):
+    """One cue, as a mono waveform, before it is levelled.
+
+    Six of them, and the differences are deliberately differences of SHAPE.
+    Over a song a bell and a sweep are told apart at once, where two tones a
+    third apart are not, and a cue you have to stop and identify has already
+    cost you the moment it was warning you about.
+    """
+    if kind == "double":
+        # Two short ones. The classic "stand by" from a talkback panel.
+        pip = _sine(rate, C.CUE_TONE_HZ, 0.075)
+        return np.concatenate([pip, _gap(rate, 0.075), pip])
+    if kind == "chime":
+        # A fifth up, the second overlapping the first, so it reads as one
+        # gesture rather than two sounds.
+        low = _sine(rate, 880.0, 0.16)
+        high = _sine(rate, 1318.5, 0.20)
+        out = np.zeros(len(low) + len(high) - int(0.06 * rate),
+                       dtype=np.float32)
+        out[:len(low)] += low
+        out[len(out) - len(high):] += high
+        return out
+    if kind == "bell":
+        # Struck, and left to ring. Bell partials are not harmonics, which is
+        # exactly why a bell sounds like a bell and not like an organ.
+        frames = max(1, int(0.6 * rate))
+        t = np.arange(frames, dtype=np.float32) / float(rate)
+        out = np.zeros(frames, dtype=np.float32)
+        for ratio, weight, decay in ((1.0, 1.0, 4.0), (2.0, 0.6, 6.0),
+                                     (2.76, 0.4, 8.0), (5.4, 0.15, 12.0)):
+            out += (weight * np.exp(-decay * t)
+                    * np.sin(2.0 * np.pi * 1046.5 * ratio * t)).astype(np.float32)
+        return _shaped(out, rate, edge=0.002)
+    if kind == "tick":
+        # Three, like a clock running out. Higher and shorter than the pip,
+        # so it cuts through music without being a tone anybody could mistake
+        # for part of it.
+        tick = _sine(rate, 2200.0, 0.022, edge=0.004)
+        gap = _gap(rate, 0.085)
+        return np.concatenate([tick, gap, tick, gap, tick])
+    if kind == "sweep":
+        # Rising, which reads as "coming up" rather than "stop".
+        frames = max(1, int(0.22 * rate))
+        t = np.arange(frames, dtype=np.float32) / float(rate)
+        hz = 600.0 + (1600.0 - 600.0) * (t / t[-1] if frames > 1 else t)
+        phase = 2.0 * np.pi * np.cumsum(hz) / float(rate)
+        return _shaped(np.sin(phase).astype(np.float32), rate, edge=0.008)
+    # "pip", and anything a board asks for that this version has never heard
+    # of. A cue that is missing is worse than a cue that is plain.
+    return _sine(rate, C.CUE_TONE_HZ, C.CUE_TONE_SECONDS)
+
+
+def cue_tone(rate, kind=None, level_db=None):
+    """One cue, made rather than loaded.
+
+    Generated so there is no file to ship, no file to lose and nothing to
+    license. Every shape is normalised to the same peak before the level is
+    applied, so changing which cue you use never changes how loud it is.
+    """
+    wave = _cue_shape(kind or C.DEFAULT_CUE_SOUND, rate)
+    level = db_to_gain(C.CUE_LEVEL_DB if level_db is None else float(level_db))
+    if len(wave):
+        # Matched on the loudest MOMENT rather than on the peak. A bell and a
+        # steady pip at the same peak are not the same loudness: the bell
+        # decays, so most of it is quiet, and peak matching left it ten
+        # decibels down in energy and easy to miss over a song. This measures
+        # a thirty millisecond window, which is roughly what an ear averages
+        # over, and then backs off if that would push the peak past the
+        # level, so nothing ever gets louder than you asked for.
+        window = max(1, int(0.03 * rate))
+        energy = np.convolve(wave.astype(np.float64) ** 2,
+                             np.ones(window) / window, mode="valid")
+        loudest = float(np.sqrt(energy.max())) if len(energy) else 0.0
+        peak = float(np.abs(wave).max())
+        # A steady sine's window RMS is its peak over root two, so the pip
+        # comes out exactly at the level and every other shape is matched to
+        # it. A peakier shape is then allowed a higher PEAK to get there, up
+        # to a decibel below full scale, which is the difference between a
+        # bell you hear over the music and one you do not.
+        ceiling = 0.891251                     # minus one decibel
+        gain = (level / 1.41421356) / loudest if loudest > 0 else 0.0
+        if peak > 0 and peak * gain > ceiling:
+            gain = ceiling / peak
+        wave = (wave * gain).astype(np.float32)
     return np.ascontiguousarray(np.tile(wave[:, None], (1, CHANNELS)),
                                 dtype=np.float32)
 

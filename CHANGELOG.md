@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.1.0, 5 September 2026
+
+**Escape now takes three presses.** One key that silences the whole show is
+one key away from silencing it by accident, and Escape is the key everybody
+presses out of habit. It counts, says how many are left, and forgets the count
+after a couple of seconds. The Stop everything button still does it in one,
+because pressing a button called Stop everything is not something you do by
+mistake.
+
+**Alt+Home and Alt+End** send the track you are on to the top of the running
+order or to the end. Alt+Up thirty times was not a way to move a song, and
+counting the presses to know where you had got to was worse.
+
+**Shift+Enter crosses into the track you are on**, fading out whatever is on
+air at the crossfade length. It is how you get out of a song early. The right
+click menu has always had it; now it has a key.
+
+**Shift+A ticks every track, Shift+U unticks them all**, from inside the
+running order. Plain letters still jump to a track by name.
+
+**Six warning sounds, and a louder one by default.** The beep before a track
+ends was at minus fourteen, which is fine in a quiet room and not what a cue
+is for: it has to be heard over the song it is warning you about. It is at
+minus six now, with a volume of its own, and there are six to choose from:
+a pip, a double pip, a chime, a bell, three ticks and a rising sweep. Each
+plays as you choose it. They are deliberately different shapes rather than
+different notes, because over music a bell and a sweep are told apart at once
+where two tones a third apart are not. All six are matched to the same
+loudness, so changing your mind never changes how loud your warning is.
+
+**Who is listening.** `Ctrl+Shift+A`, or the On air menu. It shows every
+stream on your server, how many people are on each, and what the server thinks
+is playing, and it keeps itself up to date while it is open. It works off air
+too, which matters if your station carries on without you.
+
+It handles the awkward case, which is the common one: if you stream into
+automation, the server you send to is not the server people listen to. Drop
+Deck looks in the usual places and says which one answered. If your listeners
+are somewhere else entirely, there is a box for that on the Streaming tab.
+
+Nothing here needs a password. Icecast and SHOUTcast both publish their own
+listener counts, and that is what this reads.
+
+
 ## 3.0.0, 4 September 2026
 
 **Your voice, properly processed.** A gate, a high pass filter, a three band

@@ -632,8 +632,9 @@ check("back to three for the checks below", len(frame.board.playlist) == 3)
 
 # Enter, on the list itself, through the key handler the control uses.
 class _Key:
-    def __init__(self, code, alt=False):
+    def __init__(self, code, alt=False, shift=False, ctrl=False):
         self._code, self._alt = code, alt
+        self._shift, self._ctrl = shift, ctrl
         self.skipped = False
 
     def GetKeyCode(self):
@@ -641,6 +642,12 @@ class _Key:
 
     def AltDown(self):
         return self._alt
+
+    def ShiftDown(self):
+        return self._shift
+
+    def ControlDown(self):
+        return self._ctrl
 
     def Skip(self):
         self.skipped = True
@@ -692,6 +699,94 @@ panel._on_key(_Key(wx.WXK_DOWN, alt=True))
 check("Alt+Down moves it back",
       frame.board.playlist[2].display_name == "03 Third",
       [t.display_name for t in frame.board.playlist])
+
+# Alt+Home and Alt+End, for a running order longer than three items, where
+# Alt+Up thirty times is not a way to move anything.
+panel.select(2)
+panel._on_key(_Key(wx.WXK_HOME, alt=True))
+check("Alt+Home moves a track to the top",
+      frame.board.playlist[0].display_name == "03 Third",
+      [t.display_name for t in frame.board.playlist])
+check("and it is a move, not a swap: nothing else changed order",
+      [t.display_name for t in frame.board.playlist]
+      == ["03 Third", "01 First", "02 Second"],
+      [t.display_name for t in frame.board.playlist])
+panel._on_key(_Key(wx.WXK_END, alt=True))
+check("Alt+End sends it to the bottom",
+      frame.board.playlist[2].display_name == "03 Third",
+      [t.display_name for t in frame.board.playlist])
+check("and the rest close up behind it",
+      [t.display_name for t in frame.board.playlist]
+      == ["01 First", "02 Second", "03 Third"],
+      [t.display_name for t in frame.board.playlist])
+panel.select(0)
+panel._on_key(_Key(wx.WXK_HOME, alt=True))
+check("asking for the top when it is already there says so, and moves nothing",
+      [t.display_name for t in frame.board.playlist]
+      == ["01 First", "02 Second", "03 Third"])
+
+# The player follows the track it is playing rather than the row number.
+frame.play_playlist(0)
+playing = frame.player.current.display_name
+panel.select(0)
+panel._on_key(_Key(wx.WXK_END, alt=True))
+check("moving the track that is on air takes the player with it",
+      frame.player.current.display_name == playing,
+      frame.player.current.display_name)
+panel.select(0)
+panel._on_key(_Key(wx.WXK_END, alt=True))
+check("and moving a different one does not steal what is on air",
+      frame.player.current.display_name == playing,
+      frame.player.current.display_name)
+frame.stop_playlist(quiet=True)
+while frame.board.playlist[0].display_name != "01 First":
+    panel.select(next(i for i, t in enumerate(frame.board.playlist)
+                      if t.display_name == "01 First"))
+    panel._on_key(_Key(wx.WXK_HOME, alt=True))
+    break
+panel.select(next(i for i, t in enumerate(frame.board.playlist)
+                  if t.display_name == "02 Second"))
+panel._on_key(_Key(wx.WXK_END, alt=True))
+panel.select(next(i for i, t in enumerate(frame.board.playlist)
+                  if t.display_name == "03 Third"))
+panel._on_key(_Key(wx.WXK_END, alt=True))
+check("put back in order for what follows",
+      [t.display_name for t in frame.board.playlist]
+      == ["01 First", "02 Second", "03 Third"],
+      [t.display_name for t in frame.board.playlist])
+
+# Shift with A and U, asked for so a whole running order can be turned on or
+# off without pressing Space down the length of it.
+panel._on_key(_Key(ord("U"), shift=True))
+check("Shift+U unticks the lot",
+      not any(t.enabled for t in frame.board.playlist))
+panel._on_key(_Key(ord("A"), shift=True))
+check("Shift+A ticks the lot",
+      all(t.enabled for t in frame.board.playlist))
+# A plain letter is left alone, because a plain letter is how you find a
+# track by typing its name.
+plain = _Key(ord("A"))
+panel._on_key(plain)
+check("a plain A is left to the list, for finding a track by name",
+      plain.skipped)
+# And so is Ctrl+A, which is select all.
+ctrl_a = _Key(ord("A"), shift=True, ctrl=True)
+panel._on_key(ctrl_a)
+check("Ctrl+Shift+A is left alone too, it belongs to the stats window",
+      ctrl_a.skipped)
+
+# Shift and Enter segues: what is on air fades out under the one you chose.
+frame.play_playlist(0)
+was = frame.player.current.display_name
+panel.select(2)
+shift_enter = _Key(wx.WXK_RETURN, shift=True)
+panel._on_key(shift_enter)
+check("Shift+Enter segues into the selected track",
+      frame.player.playing and frame.player.current.display_name != was,
+      frame.player.current.display_name)
+check("and the key is not passed on to become a plain Enter",
+      not shift_enter.skipped)
+frame.stop_playlist(quiet=True)
 
 # ---------------------------------------------------------------------------
 print("Ticking what plays and what does not")

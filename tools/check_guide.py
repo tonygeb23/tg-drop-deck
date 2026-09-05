@@ -110,7 +110,7 @@ def main():
             continue
         if re.fullmatch(r"(?i)((ctrl|alt|shift)\+)*"
                         r"(f\d{1,2}|[a-z0-9]|enter|space|tab|delete|del|escape"
-                        r"|up|down)", text):
+                        r"|up|down|home|end)", text):
             keyish.add(text)
 
     # Keys the app handles somewhere other than the accelerator table, with
@@ -123,6 +123,13 @@ def main():
         "Escape": "menu accelerator on Stop everything",
         "Alt+Up": "the playlist list's own key handler",
         "Alt+Down": "the playlist list's own key handler",
+        # All five are the running order's own, and all five are proved a
+        # few lines below rather than simply excused here.
+        "Alt+Home": "the playlist list's own key handler",
+        "Alt+End": "the playlist list's own key handler",
+        "Shift+Enter": "the playlist list's own key handler",
+        "Shift+A": "the playlist list's own key handler",
+        "Shift+U": "the playlist list's own key handler",
         "Alt+P": ("the search dialog's char hook, the sound browser's preview "
                   "box, and a keyboard read done only while the Windows file "
                   "window is open and Drop Deck is in front"),
@@ -143,6 +150,51 @@ def main():
         missing.append(text)
     check("every key the guide names really exists in the app",
           not missing, "guide invents: %s" % missing)
+
+    # The ones excused above, asked of the control that owns them. Excusing a
+    # key with a comment is how a guide comes to promise a key nobody wrote,
+    # so each is pressed and has to be taken rather than passed on.
+    class Press:
+        def __init__(self, code, alt=False, shift=False, ctrl=False):
+            self.code, self.alt, self.shift, self.ctrl = code, alt, shift, ctrl
+            self.skipped = False
+
+        def GetKeyCode(self):
+            return self.code
+
+        def AltDown(self):
+            return self.alt
+
+        def ShiftDown(self):
+            return self.shift
+
+        def ControlDown(self):
+            return self.ctrl
+
+        def Skip(self):
+            self.skipped = True
+
+    panel = frame.playlist_panel
+    unclaimed = []
+    for name, press in (
+            ("Alt+Up", Press(wx.WXK_UP, alt=True)),
+            ("Alt+Down", Press(wx.WXK_DOWN, alt=True)),
+            ("Alt+Home", Press(wx.WXK_HOME, alt=True)),
+            ("Alt+End", Press(wx.WXK_END, alt=True)),
+            ("Shift+Enter", Press(wx.WXK_RETURN, shift=True)),
+            ("Shift+A", Press(ord("A"), shift=True)),
+            ("Shift+U", Press(ord("U"), shift=True))):
+        panel._on_key(press)
+        if press.skipped:
+            unclaimed.append(name)
+    check("and the running order really takes the keys it is excused for",
+          not unclaimed, unclaimed)
+    # And the one that must NOT be taken, or typing a track name would stop
+    # working.
+    plain = Press(ord("A"))
+    panel._on_key(plain)
+    check("while a plain letter is still left to the list, for finding a track",
+          plain.skipped)
 
     # And the reverse: a key in the app that the guide never mentions.
     print()

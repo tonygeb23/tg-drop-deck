@@ -555,6 +555,22 @@ class Playlist:
         self.tracks[index], self.tracks[target] = self.tracks[target], self.tracks[index]
         return target
 
+    def move_to(self, index, target):
+        """Take one item out and put it back at ``target``. Where it ended up.
+
+        Not a swap. Alt+Home means "this goes first and everything else shifts
+        down", not "this and whatever is first change places", which would
+        reorder two tracks rather than one.
+        """
+        if not (0 <= index < len(self.tracks)):
+            return None
+        target = max(0, min(int(target), len(self.tracks) - 1))
+        if target == index:
+            return None
+        track = self.tracks.pop(index)
+        self.tracks.insert(target, track)
+        return target
+
     def clear(self):
         count = len(self.tracks)
         self.tracks = []

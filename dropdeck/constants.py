@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -185,9 +185,36 @@ MAX_WARN_SECONDS = 60.0
 CUE_TONE_HZ = 1000.0
 CUE_TONE_SECONDS = 0.16
 CUE_TONE_EDGE = 0.01
-#: How loud, in decibels below full scale. Loud enough to hear over a song,
-#: quiet enough not to make anybody jump at two in the morning.
-CUE_LEVEL_DB = -14.0
+#: How loud, in decibels below full scale.
+#:
+#: Tony, 5 September 2026: "make the warning sound for a track finishing
+#: louder." It was minus fourteen, which is fine in a quiet room and is not
+#: what a cue is for: it has to be heard over the song it is warning you
+#: about. Minus six, and adjustable, because how loud a cue needs to be is a
+#: question about headphones rather than about software.
+CUE_LEVEL_DB = -6.0
+MIN_CUE_LEVEL_DB = -30.0
+MAX_CUE_LEVEL_DB = 0.0
+
+#: The cues, in the order the picker lists them. Every one is generated
+#: rather than shipped: no file to lose, nothing to license, and every one
+#: comes out at the same peak so changing your mind does not change how loud
+#: your warning is.
+#:
+#: They are deliberately different SHAPES rather than different pitches. Over
+#: a song, a bell and a sweep are told apart instantly where two tones a
+#: third apart are not, and a cue you have to think about is a cue that has
+#: already cost you the moment it was warning you of.
+CUE_SOUNDS = [
+    ("pip", "Pip, one short tone"),
+    ("double", "Double pip"),
+    ("chime", "Chime, two notes rising"),
+    ("bell", "Bell"),
+    ("tick", "Ticks, three of them"),
+    ("sweep", "Sweep upward"),
+]
+CUE_SOUND_KEYS = [key for key, _label in CUE_SOUNDS]
+DEFAULT_CUE_SOUND = "pip"
 
 #: Where the pip plays. Above the eighty pads and above the two playlist
 #: decks, for the same reason they are: the mixer needs no special case.
@@ -372,8 +399,12 @@ THE PLAYLIST - a running order that cues itself
   Space                     Tick or untick it. An unticked track stays in
                             the list, keeps its place, and is skipped.
                             Your screen reader says checked or not checked
+  Shift+Enter               Cross into it from whatever is on air, at the
+                            crossfade length. How you get out of a track early
   Delete                    Take that item out
   Alt+Up / Alt+Down         Move it up or down the order
+  Alt+Home / Alt+End        Send it to the top of the order, or the end
+  Shift+A / Shift+U         Tick every track, or untick every track
   Ctrl+Shift+L              Go to whatever is on air
   First letter              Jumps to the next track whose title starts with
                             it, the way any Windows list does
@@ -406,6 +437,10 @@ A BEEP BEFORE A TRACK ENDS
   the countdown clock a sighted presenter watches.
   You hear it wherever you hear yourself, set in Microphone settings, so
   with headphones set up there it stays out of the show.
+  Six sounds to pick from and a volume, both on the same tab. Each one plays
+  as you choose it, so you can find one you hear over your own music. They
+  are different shapes rather than different notes, which is what makes them
+  tellable apart over a song.
   It is off until you turn it on, and a track shorter than the warning does
   not get one.
 
@@ -485,6 +520,8 @@ VST3 PLUGINS
 PUTTING THE SHOW ON THE INTERNET
   Ctrl+B                    Go live, and come off air again
   Ctrl+Shift+B              What the stream is doing right now
+  Ctrl+Shift+A              Who is listening, and what the server says is
+                            playing. Works off air too
 
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come
@@ -531,7 +568,10 @@ GLOBAL
   Ctrl+D                    Ducking on or off
   Ctrl+L                    What is playing right now
   Ctrl+G                    Global hotkeys on or off
-  Escape                    Stop everything, with a short fade
+  Escape three times        Stop everything, with a short fade. Three,
+                            because one key that silences the show is one key
+                            away from silencing it by accident. The Stop
+                            everything button does it in one press
   F1                        This help
   Help, User guide          The full guide on the web, in plain English
   Ctrl+Tab                  Next bank
@@ -573,7 +613,7 @@ FILE
                             microphone, speech. Five tabs, Ctrl+Tab between
 
 The playlist has its own fader and ducks under sounds and drops, the same
-way the beds do. Escape stops it along with everything else.
+way the beds do. Escape three times stops it along with everything else.
 
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off.
 A bed toggles: press its hotkey again and it fades out.

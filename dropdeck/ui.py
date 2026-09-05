@@ -11,6 +11,7 @@ import ctypes
 import datetime
 import os
 import threading
+import time
 
 import wx
 
@@ -29,6 +30,7 @@ from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
+                      StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
 from .engine import probe
@@ -36,7 +38,8 @@ from .micinput import MicInput, describe_input, resolve_input
 from .playlist import PlaylistPlayer
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
                     ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
-                    ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE, ID_PL_ROW_STOP,
+                    ID_PL_ROW_BOTTOM, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
+                    ID_PL_ROW_STOP, ID_PL_ROW_TOP,
                     ID_PL_ROW_TICK, ID_PL_ROW_TO_LIBRARY, ID_PL_ROW_UP)
 from .playlistview import PlaylistPanel
 from .mixer import (Mixer, MixerGroup, describe_device, device_spec,
@@ -46,6 +49,8 @@ from .speech import Speaker, percent
 
 ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
+#: Who is listening. Ctrl+Shift+A for audience, next to the pair above.
+ID_STREAM_STATS = wx.ID_HIGHEST + 403
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
 #: anyone has, and a fixed block keeps them clear of every other id.
@@ -61,6 +66,9 @@ ID_VOL_BED_UP = wx.ID_HIGHEST + 4
 ID_RENAME = wx.ID_HIGHEST + 5
 ID_CLEAR_FOCUSED = wx.ID_HIGHEST + 6
 ID_STOP_ALL = wx.ID_HIGHEST + 7
+#: Escape, which needs three presses. Its own id so that the menu item and
+#: the button, which are deliberate on their own, still stop immediately.
+ID_STOP_ALL_KEY = wx.ID_HIGHEST + 8
 ID_SEARCH = wx.ID_HIGHEST + 8
 ID_DUCK = wx.ID_HIGHEST + 9
 ID_WHATS_PLAYING = wx.ID_HIGHEST + 10
@@ -872,10 +880,13 @@ class DropDeckFrame(wx.Frame):
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_bank_changed)
         outer.Add(self.views, 1, wx.EXPAND | wx.ALL, 6)
 
-        stop = wx.Button(panel, ID_STOP_ALL, "Stop everything  (Escape)")
+        stop = wx.Button(panel, ID_STOP_ALL,
+                         "Stop everything  (Escape three times)")
         stop.SetFont(stop.GetFont().Bold())
         stop.SetMinSize(wx.Size(-1, self.FromDIP(38)))
-        stop.SetToolTip("Stop every sound and bed, with a short fade (Escape)")
+        stop.SetToolTip("Stop every sound and bed, with a short fade. "
+                        "This button does it at once; Escape needs three "
+                        "presses, so a stray one cannot take the show off")
         stop.Bind(wx.EVT_BUTTON, lambda _e: self.stop_all())
         outer.Add(stop, 0, wx.EXPAND | wx.ALL, 6)
 
@@ -940,7 +951,9 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_SEARCH, "&Search sounds...\tCtrl+F", "Find a sound by name")
         sounds.Append(ID_WHATS_PLAYING, "&What is playing\tCtrl+L")
         sounds.Append(ID_DUCK, "&Ducking on or off\tCtrl+D")
-        sounds.Append(ID_STOP_ALL, "Stop &everything\tEscape")
+        sounds.Append(ID_STOP_ALL, "Stop &everything",
+                      "Stops every sound, bed and the running order. "
+                      "Escape three times does it from the keyboard")
         sounds.AppendSeparator()
         # A check item, so the menu itself says whether global hotkeys are
         # armed. While they are on, this app owns those combinations across the
@@ -986,9 +999,11 @@ class DropDeckFrame(wx.Frame):
         pl.Append(ID_PL_DROP_EVERY, "Insert a drop every so man&y songs...")
         pl.AppendSeparator()
         pl.Append(ID_PL_CHECK_ALL, "Tic&k every track",
-                  "Everything in the running order will play")
+                  "Everything in the running order will play. "
+                  "Shift+A in the list does it too")
         pl.Append(ID_PL_UNCHECK_ALL, "&Untick every track",
-                  "Nothing plays until you tick it again. Space toggles one")
+                  "Nothing plays until you tick it again. Space toggles one, "
+                  "Shift+U in the list unticks the lot")
         pl.AppendSeparator()
         pl.Append(ID_PL_PLAY, "Play &from here\tCtrl+Shift+Enter")
         pl.Append(ID_PL_GOTO_PLAYING, "Go to w&hat is on air\tCtrl+Shift+L",
@@ -1039,6 +1054,9 @@ class DropDeckFrame(wx.Frame):
         air.Append(ID_STREAM_STATUS, "&What the stream is doing\tCtrl+Shift+B",
                    "Whether it is on air, for how long, and whether anything "
                    "has been lost")
+        air.Append(ID_STREAM_STATS, "Who is &listening...\tCtrl+Shift+A",
+                   "How many people are on the stream, and what the server "
+                   "thinks is playing")
         air.AppendSeparator()
         # Switching station without going through Preferences, because on a
         # show you want it on a menu, not four keystrokes into a dialog.
@@ -1113,6 +1131,12 @@ class DropDeckFrame(wx.Frame):
                   lambda _e: self.playlist_panel.move_selected(1),
                   id=ID_PL_ROW_DOWN)
         self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.move_to_end(True),
+                  id=ID_PL_ROW_TOP)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.playlist_panel.move_to_end(False),
+                  id=ID_PL_ROW_BOTTOM)
+        self.Bind(wx.EVT_MENU,
                   lambda _e: self.playlist_panel.crossfade_selected(),
                   id=ID_PL_ROW_FADE)
         self.Bind(wx.EVT_MENU, lambda _e: self.insert_playlist_drop(),
@@ -1128,6 +1152,7 @@ class DropDeckFrame(wx.Frame):
                   id=ID_STREAM_TOGGLE)
         self.Bind(wx.EVT_MENU, lambda _e: self.say_stream_status(),
                   id=ID_STREAM_STATUS)
+        self.Bind(wx.EVT_MENU, self._on_stream_stats, id=ID_STREAM_STATS)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
                   id=ID_STREAM_SETUP)
@@ -1162,6 +1187,8 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_whats_playing, id=ID_WHATS_PLAYING)
         self.Bind(wx.EVT_MENU, self._on_toggle_duck, id=ID_DUCK)
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_all(), id=ID_STOP_ALL)
+        self.Bind(wx.EVT_MENU, lambda _e: self._escape_pressed(),
+                  id=ID_STOP_ALL_KEY)
         self.Bind(wx.EVT_MENU, self._on_shortcuts, id=ID_SHORTCUTS)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, self._on_user_guide, id=ID_USER_GUIDE)
@@ -1180,6 +1207,9 @@ class DropDeckFrame(wx.Frame):
             # Windows. The volume keys moved down one to make room: F3 and F4
             # for sounds, F5 and F6 for beds, which is the pairing people
             # expect once F2 is out of the way.
+            # Escape, counted rather than acted on. See _escape_pressed.
+            wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_ESCAPE,
+                                ID_STOP_ALL_KEY),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F2, ID_RENAME),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F3, ID_VOL_SFX_DOWN),
             wx.AcceleratorEntry(wx.ACCEL_NORMAL, wx.WXK_F4, ID_VOL_SFX_UP),
@@ -1213,6 +1243,8 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("B"), ID_STREAM_TOGGLE),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("B"),
                                 ID_STREAM_STATUS),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"),
+                                ID_STREAM_STATS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
@@ -1765,6 +1797,36 @@ class DropDeckFrame(wx.Frame):
         self.announce_playback(
             f"{slot.display_name}{', ' + length if length else ''}")
 
+    #: How long the three presses have to arrive within, in milliseconds.
+    #: Long enough to be comfortable, short enough that an Escape now and one
+    #: in a minute are not read as the same gesture.
+    ESCAPE_WINDOW_MS = 2000
+
+    def _escape_pressed(self):
+        """Escape, which takes three to stop the show.
+
+        One key that silences everything is one key away from silencing
+        everything by accident, and Escape is the key people press when a
+        dialog did not close, when a screen reader is talking, or out of
+        habit. Three presses in a couple of seconds is unmistakably meant.
+
+        The count is spoken, because a key that appears to do nothing twice
+        is a key you assume is broken.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_escape_at", 0.0) > self.ESCAPE_WINDOW_MS / 1000.0:
+            self._escapes = 0
+        self._escape_at = now
+        self._escapes = getattr(self, "_escapes", 0) + 1
+        if self._escapes < 3:
+            left = 3 - self._escapes
+            self.announce("Escape %s more time%s to stop everything"
+                          % ("one" if left == 1 else "two",
+                             "" if left == 1 else "s"))
+            return
+        self._escapes = 0
+        self.stop_all()
+
     def stop_all(self):
         # The playlist is part of "everything". Stopping its voices without
         # telling the player would leave it convinced it was still on air.
@@ -2261,7 +2323,7 @@ class DropDeckFrame(wx.Frame):
         if not self.board.warn_before_end:
             return
         try:
-            self.mixer.play_cue()
+            self.mixer.play_cue(self.board.cue_sound, self.board.cue_level_db)
         except Exception as exc:                  # pragma: no cover
             self.note("The end of track cue would not play: %s" % exc)
             return
@@ -3462,6 +3524,21 @@ class DropDeckFrame(wx.Frame):
             self.announce("Station %s, %s" % (name, self.board.stream_host))
         self._rebuild_station_menu()
 
+    def _on_stream_stats(self, _event=None):
+        """Who is listening. Opens whether or not you are on air.
+
+        Off air is a perfectly good time to ask: a station that runs
+        automation is playing to an audience all day and Drop Deck is only
+        one of the things that feeds it.
+        """
+        if not self.board.stream_host:
+            self.announce("No streaming server is set up yet")
+            self._on_settings(page=SettingsDialog.PAGE_STREAM)
+            return
+        with StreamStatsDialog(self, self._stream_settings(),
+                               on_air=self.streaming()) as dialog:
+            dialog.ShowModal()
+
     def _stream_settings(self):
         """What the board holds, in the shape the streamer wants."""
         board = self.board
@@ -3472,6 +3549,7 @@ class DropDeckFrame(wx.Frame):
                 "name": board.stream_name,
                 "description": board.stream_description,
                 "genre": board.stream_genre, "url": board.stream_url,
+                "stats_url": board.stream_stats_url,
                 "public": board.stream_public}
 
     def _on_stream_trouble(self, message):
@@ -3580,6 +3658,8 @@ class DropDeckFrame(wx.Frame):
             self.board.bed_fade_out = dialog.bed_fade_out
             self.board.warn_before_end = dialog.warn_before_end
             self.board.warn_seconds = dialog.warn_seconds
+            self.board.cue_sound = dialog.cue_sound_key
+            self.board.cue_level_db = dialog.cue_level_db
             self.board.playlist.crossfade = dialog.crossfade
             stream = dialog.stream_settings
             self.board.stream_server = stream["server"]
