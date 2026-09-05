@@ -254,8 +254,8 @@ def main():
                                   DropsLibraryDialog, FeedbackDialog,
                                   SearchDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
-                                  StreamStatsDialog, TrackCrossfadeDialog,
-                                  TrimDialog)
+                                  SourcesDialog, StreamStatsDialog,
+                                  TrackCrossfadeDialog, TrimDialog)
     from dropdeck.playlist import Track
     from dropdeck.ui import DropDeckFrame
 
@@ -300,6 +300,11 @@ def main():
         # names have to be right in.
         ("Who is listening",
          lambda: StreamStatsDialog(frame, frame._stream_settings())),
+        # With a source in it, because the controls underneath the list are
+        # disabled and unnamed until something is selected.
+        ("Audio sources",
+         lambda: SourcesDialog(frame, [{"name": "A source",
+                                        "device_name": "", "on_air": True}])),
     ]:
         try:
             dialog = build()

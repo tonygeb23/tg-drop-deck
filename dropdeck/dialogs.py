@@ -17,6 +17,7 @@ from . import audiofile
 from . import constants as C
 from . import feedback
 from . import dsp
+from . import sources
 from . import streamout
 from . import streamstats
 from . import vst
@@ -2803,6 +2804,232 @@ class FeedbackDialog(wx.Dialog):
             # refused by the server anyway, and would sit in the queue for
             # ever being retried.
             self.submit.Enable(bool(self.text))
+
+
+class SourcesDialog(wx.Dialog):
+    """Other things to put on the air besides your own voice.
+
+    Tony, 5 September 2026: "Add sources to a running stream, so in addition
+    to the microphone, it also can catch the audio from teamtalk.exe or,
+    Google Chrome chrome.exe."
+
+    A list, and the settings for whichever row you are on underneath it. Not a
+    row of little windows: with a screen reader, one list you arrow down and
+    one set of controls that follow it is far less to hear than a separate
+    dialog per source, and it is the same shape as the Voice tab.
+    """
+
+    CHANNELS = [("mix", "Both, mixed together"), ("left", "Left only"),
+                ("right", "Right only")]
+
+    def __init__(self, parent, entries=None):
+        super().__init__(parent, title="Audio sources",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.entries = [dict(entry) for entry in (entries or [])]
+        self.devices = sources.available_inputs()
+        self._loading = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self._say(outer,
+                  "Anything Windows offers as an input can go on the air here: "
+                  "a second microphone, a mixer, or another program through a "
+                  "virtual cable. To put a program on, point it at the cable "
+                  "in its own settings and choose the cable here.")
+
+        outer.Add(wx.StaticText(self, label="&Sources"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(560, 150))
+        self.list.SetName("Sources")
+        self.list.InsertColumn(0, "Name", width=150)
+        self.list.InsertColumn(1, "Device", width=250)
+        self.list.InsertColumn(2, "On air", width=70)
+        self.list.InsertColumn(3, "You hear it", width=90)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_pick)
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        add = wx.Button(self, label="&Add a source")
+        add.Bind(wx.EVT_BUTTON, self._on_add)
+        buttons.Add(add, 0, wx.RIGHT, 8)
+        self.remove = wx.Button(self, label="&Remove this one")
+        self.remove.Bind(wx.EVT_BUTTON, self._on_remove)
+        buttons.Add(self.remove, 0)
+        outer.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        grid = wx.FlexGridSizer(0, 2, 8, 8)
+        grid.AddGrowableCol(1, 1)
+
+        def field(label, make, name):
+            text = wx.StaticText(self, label=label)
+            grid.Add(text, 0, wx.ALIGN_CENTER_VERTICAL)
+            control = make()
+            name_field(control, name)
+            grid.Add(control, 1, wx.EXPAND)
+            return control
+
+        self.name = field("Call&ed", lambda: wx.TextCtrl(self), "Called")
+        self.name.Bind(wx.EVT_TEXT, self._on_edit)
+
+        self.device = field(
+            "&Device",
+            lambda: wx.Choice(self, choices=["Nothing chosen"] + [
+                "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]),
+            "Device")
+        self.device.Bind(wx.EVT_CHOICE, self._on_edit)
+
+        self.channel = field(
+            "Which &channel",
+            lambda: wx.Choice(self, choices=[t for _k, t in self.CHANNELS]),
+            "Which channel")
+        self.channel.Bind(wx.EVT_CHOICE, self._on_edit)
+
+        self.gain = field(
+            "&Gain in decibels",
+            lambda: wx.Slider(self, value=0, minValue=int(C.MIN_MIC_GAIN_DB),
+                              maxValue=int(C.MAX_MIC_GAIN_DB),
+                              style=wx.SL_HORIZONTAL),
+            "Gain in decibels")
+        self.gain.Bind(wx.EVT_SLIDER, self._on_edit)
+        outer.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self.on_air = wx.CheckBox(self, label="Put this on the a&ir")
+        self.on_air.Bind(wx.EVT_CHECKBOX, self._on_edit)
+        outer.Add(self.on_air, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.monitor = wx.CheckBox(self, label="&Hear it yourself")
+        self.monitor.SetToolTip(
+            "Off, it goes out and you do not hear it, which is right when the "
+            "sound is already coming out of your speakers from the program "
+            "itself. On, it comes back through your monitor output.")
+        self.monitor.Bind(wx.EVT_CHECKBOX, self._on_edit)
+        outer.Add(self.monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.StdDialogButtonSizer()
+        ok = wx.Button(self, wx.ID_OK)
+        ok.SetDefault()
+        row.AddButton(ok)
+        row.AddButton(wx.Button(self, wx.ID_CANCEL))
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self._refresh(0)
+        self.list.SetFocus()
+
+    def _say(self, sizer, text):
+        note = wx.StaticText(self, label=text)
+        note.Wrap(self.FromDIP(540))
+        sizer.Add(note, 0, wx.ALL, 10)
+
+    # -------------------------------------------------------------- rows --
+    @property
+    def result(self):
+        return [dict(entry) for entry in self.entries]
+
+    def _selected(self):
+        index = self.list.GetFirstSelected()
+        return index if 0 <= index < len(self.entries) else None
+
+    def _refresh(self, keep=None):
+        self.list.DeleteAllItems()
+        for row, entry in enumerate(self.entries):
+            self.list.InsertItem(row, entry.get("name") or "Source")
+            self.list.SetItem(row, 1, entry.get("device_name")
+                              or "nothing chosen")
+            self.list.SetItem(row, 2, "yes" if entry.get("on_air") else "no")
+            self.list.SetItem(row, 3, "yes" if entry.get("monitor") else "no")
+        if self.entries:
+            keep = max(0, min(keep if keep is not None else 0,
+                              len(self.entries) - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+        self._load()
+
+    def _load(self):
+        """Put the selected source into the controls underneath."""
+        index = self._selected()
+        on = index is not None
+        for control in (self.name, self.device, self.channel, self.gain,
+                        self.on_air, self.monitor, self.remove):
+            control.Enable(on)
+        self._loading = True
+        try:
+            entry = self.entries[index] if on else {}
+            self.name.SetValue(entry.get("name", "") if on else "")
+            wanted = entry.get("device_name", "")
+            found = 0
+            for at, device in enumerate(self.devices):
+                if device["name"] == wanted:
+                    found = at + 1
+                    break
+            self.device.SetSelection(found if on else 0)
+            keys = [key for key, _text in self.CHANNELS]
+            channel = entry.get("channel", "mix")
+            self.channel.SetSelection(keys.index(channel)
+                                      if channel in keys else 0)
+            self.gain.SetValue(int(round(float(entry.get("gain_db", 0.0) or 0))))
+            self.on_air.SetValue(bool(entry.get("on_air", True)))
+            self.monitor.SetValue(bool(entry.get("monitor", False)))
+        finally:
+            self._loading = False
+
+    def _on_pick(self, event):
+        self._load()
+        event.Skip()
+
+    def _on_edit(self, event):
+        """Write the controls back into the row as they are changed."""
+        if not self._loading:
+            index = self._selected()
+            if index is not None:
+                entry = self.entries[index]
+                entry["name"] = self.name.GetValue().strip() or "Source"
+                at = self.device.GetSelection() - 1
+                if 0 <= at < len(self.devices):
+                    entry["device_name"] = self.devices[at]["name"]
+                    entry["device_hostapi"] = self.devices[at]["hostapi"]
+                else:
+                    entry["device_name"] = ""
+                    entry["device_hostapi"] = ""
+                entry["channel"] = self.CHANNELS[
+                    max(0, self.channel.GetSelection())][0]
+                entry["gain_db"] = float(self.gain.GetValue())
+                entry["on_air"] = self.on_air.GetValue()
+                entry["monitor"] = self.monitor.GetValue()
+                # Only the columns, so the cursor does not move under somebody
+                # who is still typing a name.
+                self.list.SetItem(index, 0, entry["name"])
+                self.list.SetItem(index, 1, entry["device_name"]
+                                  or "nothing chosen")
+                self.list.SetItem(index, 2, "yes" if entry["on_air"] else "no")
+                self.list.SetItem(index, 3, "yes" if entry["monitor"] else "no")
+        event.Skip()
+
+    def _on_add(self, _event):
+        if len(self.entries) >= sources.MAX_SOURCES:
+            self._speak("That is as many sources as this will take")
+            return
+        self.entries.append({"name": "Source %d" % (len(self.entries) + 1),
+                             "device_name": "", "device_hostapi": "",
+                             "gain_db": 0.0, "channel": "mix",
+                             "on_air": True, "monitor": False})
+        self._refresh(len(self.entries) - 1)
+        self.name.SetFocus()
+        self.name.SelectAll()
+        self._speak("Added. Choose a device for it.")
+
+    def _on_remove(self, _event):
+        index = self._selected()
+        if index is None:
+            return
+        gone = self.entries.pop(index)
+        self._refresh(min(index, len(self.entries) - 1) if self.entries else None)
+        self._speak("Removed %s" % (gone.get("name") or "it"))
+
+    def _speak(self, text):
+        speaker = getattr(self.GetParent(), "announce_answer", None)
+        if speaker is not None:
+            speaker(text)
 
 
 class StreamStatsDialog(wx.Dialog):

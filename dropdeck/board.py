@@ -218,6 +218,10 @@ class Board:
         #: not land.
         self.stop_presses = C.DEFAULT_STOP_PRESSES
         self.stop_fade = True
+        #: Extra inputs besides the microphone: a second mic, a games call,
+        #: a browser through a virtual cable. Saved as plain dicts so an old
+        #: build opening a new board ignores them rather than falling over.
+        self.sources = []
         self.stream_public = False
         #: Put the microphone out on the stream. On by default, because a
         #: broadcast with no presenter in it is not what anybody meant, and
@@ -508,6 +512,7 @@ class Board:
             "record_folder": self.record_folder,
             "stop_presses": int(self.stop_presses),
             "stop_fade": bool(self.stop_fade),
+            "sources": [dict(entry) for entry in self.sources],
             "stream_public": bool(self.stream_public),
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
@@ -603,6 +608,9 @@ class Board:
         except (TypeError, ValueError):
             board.stop_presses = C.DEFAULT_STOP_PRESSES
         board.stop_fade = bool(data.get("stop_fade", True))
+        found = data.get("sources")
+        board.sources = ([entry for entry in found if isinstance(entry, dict)]
+                         if isinstance(found, list) else [])
         board.stream_public = bool(data.get("stream_public", False))
         board.stream_mic = bool(data.get("stream_mic", True))
         board.stream_titles = bool(data.get("stream_titles", True))

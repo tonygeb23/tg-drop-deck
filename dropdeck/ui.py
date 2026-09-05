@@ -21,6 +21,7 @@ from . import appicon
 from . import constants as C
 from . import dsp
 from . import feedback
+from . import sources
 from . import streamout
 from . import vst
 from . import globalhotkeys
@@ -30,7 +31,7 @@ from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
-                      StreamStatsDialog,
+                      SourcesDialog, StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
 from .engine import probe
@@ -57,6 +58,8 @@ ID_RECORD = wx.ID_HIGHEST + 405
 ID_RECORD_FOLDER = wx.ID_HIGHEST + 406
 #: Stop the sound you started last, without stopping the show.
 ID_STOP_LATEST = wx.ID_HIGHEST + 407
+#: Other inputs besides the microphone.
+ID_SOURCES = wx.ID_HIGHEST + 408
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
 #: anyone has, and a fixed block keeps them clear of every other id.
@@ -568,7 +571,15 @@ class DropDeckFrame(wx.Frame):
             # The plugin the board asked for, on a thread, because it takes
             # over a second and the window should be up before then.
             wx.CallAfter(self._restore_voice_plugin)
-        self.mixer.monitor_source = self.mic
+
+        #: Everything else you want on the air: a second microphone, a games
+        #: call, a browser through a virtual cable. The mixer takes one object
+        #: for monitoring and one for the air mix, so the group looks like one
+        #: input and sums the rest behind it.
+        self.sources = [sources.Source.from_dict(entry, self.mixer.samplerate)
+                        for entry in (self.board.sources or [])]
+        self.source_group = sources.SourceGroup(self.mic, self.sources)
+        self.mixer.monitor_source = self.source_group
 
         #: The stream, once there is one. None is off air, and off air is
         #: where this starts every single time: a program that could begin
@@ -623,6 +634,10 @@ class DropDeckFrame(wx.Frame):
         # replacing was running from inside it and could not delete the ground
         # it was standing on; this one can.
         wx.CallLater(3000, self._clean_update_staging)
+        # Opening a sound card takes a moment each, and a source that is not
+        # plugged in has to time out before it says so. Neither belongs in
+        # front of the window appearing.
+        wx.CallLater(1200, self.start_sources)
         # Anything queued from last time goes out on its own, and the word
         # about donating comes well after the app has said hello - the first
         # thing it says to somebody is about their board, never about money.
@@ -1075,6 +1090,9 @@ class DropDeckFrame(wx.Frame):
         self.record_item = air.Append(
             ID_RECORD, "Start &recording\tCtrl+R",
             "Record the show to a file. It does not need you to be on air")
+        air.Append(ID_SOURCES, "&Audio sources...",
+                   "Other inputs to put on the air: a second microphone, a "
+                   "mixer, or another program through a virtual cable")
         air.Append(ID_RECORD_FOLDER, "Open the recordings &folder",
                    "Where your recordings are saved")
         air.AppendSeparator()
@@ -1176,6 +1194,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_recording(), id=ID_RECORD)
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
+        self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
                   id=ID_STREAM_SETUP)
@@ -3150,7 +3169,7 @@ class DropDeckFrame(wx.Frame):
             # Moving the monitor to another card rebuilds the group, which
             # stops everything and empties the decode caches - so warm them.
             self.mixer.set_monitor_device(out_index)
-            self.mixer.monitor_source = self.mic
+            self.mixer.monitor_source = getattr(self, "source_group", self.mic)
             self.warm_cache()
         if changed_input and self._mic_open():
             self.mic.start(device=index)
@@ -3431,6 +3450,60 @@ class DropDeckFrame(wx.Frame):
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
         self._update_status()
+
+    # ------------------------------------------------------------- sources --
+    def start_sources(self):
+        """Open every source that is wanted, and say what would not open.
+
+        Said once, quietly, and only about the ones that failed. A source that
+        is not plugged in is an ordinary thing on a laptop that moves between
+        desks, and it must not turn into a dialog in front of a show.
+        """
+        missing = []
+        for source in getattr(self, "sources", []):
+            if not source.start(self.mixer.samplerate):
+                if source.wanted_on_air or source.wanted_monitor:
+                    missing.append(source.name)
+        if missing:
+            self.announce_help("These sources would not open: %s"
+                               % ", ".join(missing))
+        self._sync_air_taps()
+        self._update_status()
+        return not missing
+
+    def stop_sources(self):
+        for source in getattr(self, "sources", []):
+            try:
+                source.close()
+            except Exception:
+                pass
+
+    def apply_sources(self, entries):
+        """Replace the list of sources with what the dialog came back with."""
+        self.stop_sources()
+        self.board.sources = [dict(entry) for entry in entries]
+        self.sources = [sources.Source.from_dict(entry, self.mixer.samplerate)
+                        for entry in self.board.sources]
+        group = getattr(self, "source_group", None)
+        if group is None:
+            group = self.source_group = sources.SourceGroup(self.mic,
+                                                            self.sources)
+        else:
+            group.sources = self.sources
+        self.mixer.monitor_source = group
+        self.start_sources()
+        self._touch()
+
+    def _on_sources(self, _event=None):
+        entries = [source.to_dict() for source in getattr(self, "sources", [])]
+        with SourcesDialog(self, entries) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce_help("Nothing changed")
+                return
+            chosen = dialog.result
+        self.apply_sources(chosen)
+        self.announce_help("%d source%s" % (len(chosen),
+                                            "" if len(chosen) == 1 else "s"))
 
     def _clean_update_staging(self):
         from . import appupdate
@@ -3742,10 +3815,13 @@ class DropDeckFrame(wx.Frame):
         # The microphone goes out whether or not you can hear yourself. They
         # are different questions and this is the one about the listener. It
         # is recorded on the same terms.
-        wanted = bool(buses) and bool(self.board.stream_mic)
-        mic.on_air = wanted
-        if wanted:
-            self.mixer.primary.air_source = mic
+        mic.on_air = bool(buses) and bool(self.board.stream_mic)
+        # The group goes on air whenever anything in it is wanted there. A
+        # source is on air on its own terms: somebody putting a games call out
+        # has not necessarily got their microphone open.
+        extras = getattr(self, "sources", [])
+        if buses and (mic.on_air or any(s.wanted_on_air for s in extras)):
+            self.mixer.primary.air_source = getattr(self, "source_group", mic)
 
     def stop_stream(self, quiet=False):
         """Come off air and put everything back the way it was."""
@@ -4151,6 +4227,12 @@ class DropDeckFrame(wx.Frame):
                 self.stop_recording(quiet=True)
             except Exception:
                 pass
+        # Every extra input is a sound card being read on a thread, and one
+        # left open would go on reading a mixer that is being closed.
+        try:
+            self.stop_sources()
+        except Exception:
+            pass
         # Off air before anything else is torn down. A streaming thread left
         # running would go on reading a mixer that is being closed.
         if getattr(self, "streamer", None) is not None:

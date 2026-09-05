@@ -1260,8 +1260,12 @@ check("the status bar says so", "Mic off" in frame.status.GetStatusText(0),
       frame.status.GetStatusText(0))
 check("it shares the mixers' duck bus, which is what makes it duck a bed on "
       "another sound card", frame.mic.duck_bus is frame.mixer.duck_bus)
-check("and it is what the mixer monitors",
-      frame.mixer.monitor_source is frame.mic)
+# The mixer monitors the GROUP now, not the microphone directly. It takes one
+# object for monitoring, so from 3.2 that object holds the microphone and any
+# extra sources and sums them; the microphone is still what is in it.
+check("and it is what the mixer monitors, through the group",
+      frame.mixer.monitor_source is frame.source_group
+      and frame.source_group.mic is frame.mic)
 
 # Ducking, driven the way the microphone would drive it.
 frame.mic._publish(True)
