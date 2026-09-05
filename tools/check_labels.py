@@ -76,6 +76,62 @@ NEEDS_A_NAME = (wx.TextCtrl, wx.Choice, wx.ComboBox, wx.SpinCtrl,
                 wx.Slider)
 
 
+#: Names wx hands out when nobody chose one. Comparing against these would
+#: be comparing against noise, so a control wearing one is only checked for
+#: being silent, not for being right.
+WX_DEFAULT_NAMES = {
+    "", "panel", "text", "textctrl", "choice", "combobox", "combo",
+    "spinctrl", "spinctrldouble", "listctrl", "listbox", "checklistbox",
+    "slider", "control", "window", "staticbox", "scrolledpanel",
+}
+
+
+def tidy(name):
+    """Two ways of writing the same label, reduced to one.
+
+    Access keys, trailing colons, capitals and runs of space are all
+    differences in typography rather than in what a person hears.
+    """
+    name = (name or "").replace("&", "").strip().rstrip(":").strip()
+    return " ".join(name.lower().split())
+
+
+def intended(control):
+    """What this codebase says the control is, or nothing if it never said.
+
+    wx.SetName is not what a screen reader reads, which is the whole reason
+    this file exists. It IS a statement of intent though, written by whoever
+    built the control, and comparing intent against what Windows actually
+    says is the only way to catch a name that is present, unique, and wrong:
+    the Address box announcing "Port" passed every other check here.
+    """
+    try:
+        name = control.GetName() or ""
+    except Exception:
+        return ""
+    return "" if tidy(name) in WX_DEFAULT_NAMES else name
+
+
+def agree(wanted, spoken):
+    """Whether the codebase and Windows are talking about the same control.
+
+    Not equality. A visible label sits under a heading and inside a tab, so
+    it is often the short form of the name the code uses: the Output tab says
+    "Music Beds" where the code says "Music Beds output", and a listener has
+    both the tab and the heading for the rest. One containing the other is
+    the same control described at two lengths.
+
+    Two DIFFERENT controls almost never do that, which is what this is for.
+    "Address" against "Port", or "Mount point" against "User name", fails on
+    sight, and so does every off by one: adjacent fields are adjacent because
+    they ask different questions.
+    """
+    wanted, spoken = tidy(wanted), tidy(spoken)
+    if not wanted or not spoken:
+        return True
+    return wanted in spoken or spoken in wanted
+
+
 def say(label, ok, detail=""):
     CHECKED[0] += 1
     if not ok:
@@ -135,7 +191,7 @@ def audit(title, window):
     controls = tab_order(window)
     say("%s: has controls to tab through" % title, bool(controls), len(controls))
 
-    silent, heard = [], {}
+    silent, wrong, heard = [], [], {}
     seen = set()
     for control in controls:
         if isinstance(control, SPEAKS_FOR_ITSELF):
@@ -156,9 +212,21 @@ def audit(title, window):
         else:
             heard.setdefault(spoken, 0)
             heard[spoken] += 1
+            wanted = intended(control)
+            if wanted and not agree(wanted, spoken):
+                wrong.append("%s should be %r, Windows says %r"
+                             % (type(control).__name__, wanted, spoken))
 
     say("%s: every box says what it is, asked of Windows" % title,
         not silent, "; ".join(silent))
+
+    # The one an earlier version of this file could not see. A control whose
+    # accessible name is present and unique can still be the WRONG name: a
+    # box built before its own label inherits the label of the row above, so
+    # every field on the tab announces the previous field. Both audits missed
+    # it; NVDA did not.
+    say("%s: and says the right one, not the one above it" % title,
+        not wrong, "; ".join(wrong))
 
     repeated = [n for n, count in heard.items() if count > 1]
     say("%s: and no two of them say the same thing" % title,

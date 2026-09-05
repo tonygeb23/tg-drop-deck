@@ -232,6 +232,14 @@ class MicChain:
         self.enabled = True
         #: A VST3, or None. See vst.py.
         self.plugin = None
+        #: Where it came from, so it can be found again next time. Loading a
+        #: plugin takes over a second, so nothing is loaded here: this only
+        #: remembers what was asked for, and whoever owns the chain loads it
+        #: when it suits them.
+        self.plugin_path = None
+        self.wanted_plugin = (settings or {}).get("plugin") or None
+        wanted = (settings or {}).get("plugin_values")
+        self.wanted_plugin_values = dict(wanted) if isinstance(wanted, dict) else {}
         #: How much the chain pulled the loudest moment down, in decibels.
         #: Measured rather than asked of the compressor, because pedalboard
         #: does not report it and a number you can hear is worth having.
@@ -381,17 +389,37 @@ class MicChain:
         self._ceiling.ceiling_db = float(s["limit_ceiling"])
         self._ceiling.release_ms = float(s["limit_release"])
 
-    def set_plugin(self, plugin):
+    def set_plugin(self, plugin, path=None):
         """Put a plugin in the chain, or take one out.
 
         The plugin must already be LOADED. Loading takes over a second and
         runs the plugin's own start up code; doing that while holding the
         lock would stall the audio thread for the whole of it, which is a
         gap in the sound rather than a race.
+
+        ``path`` is where it was loaded from, kept so the same plugin comes
+        back next time the app opens. Without it, choosing a plugin lasted
+        exactly as long as the session did.
         """
         with self._lock:
             self.plugin = plugin
+            self.plugin_path = path if plugin is not None else None
+            if plugin is None:
+                self.wanted_plugin = None
+                self.wanted_plugin_values = {}
         self.rebuild()
+
+    def plugin_values(self):
+        """Every plugin knob and its value, or nothing if there is no plugin."""
+        from . import vst
+        with self._lock:
+            plugin = self.plugin
+        if plugin is None:
+            return {}
+        try:
+            return vst.snapshot(plugin, self._lock)
+        except Exception:
+            return {}
 
     # --------------------------------------------------------------- audio --
     def process(self, block):
@@ -519,4 +547,14 @@ class MicChain:
         return out
 
     def to_dict(self):
-        return dict(self.settings)
+        """Everything worth writing down, including which plugin and how it is
+        set. The plugin used to be left out, so a compressor survived a
+        restart and the effect chosen to go after it did not."""
+        out = dict(self.settings)
+        path = self.plugin_path or self.wanted_plugin
+        if path:
+            out["plugin"] = path
+            values = self.plugin_values() or self.wanted_plugin_values
+            if values:
+                out["plugin_values"] = dict(values)
+        return out

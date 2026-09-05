@@ -172,7 +172,16 @@ def run(frame, songs, state):
     frame.Bind(wx.EVT_CHAR_HOOK,
                lambda e: (arrived.append(e.GetKeyCode()), e.Skip()))
 
-    def press(key):
+    def press(key, where=None):
+        """Send a key, and be sure it went where the check thinks it did.
+
+        ``where`` is the control the check is about. A synthesised keystroke
+        goes to whatever holds the foreground and the focus at that instant,
+        and on a desktop somebody is using those move: a key that landed in
+        another control looks exactly like a key the app mishandled. It is
+        not, and calling it a failure would be a lie about the app, so it is
+        put back and, if it will not stay, the run is skipped instead.
+        """
         for attempt in range(3):
             if u32.GetForegroundWindow() != frame.GetHandle():
                 focused = wx.Window.FindFocus()
@@ -181,10 +190,20 @@ def run(frame, songs, state):
                 if focused is not None:
                     focused.SetFocus()
                     pump(150)
+            if where is not None and not _within(wx.Window.FindFocus(), where):
+                where.SetFocus()
+                pump(200)
+                if not _within(wx.Window.FindFocus(), where):
+                    continue
             before = len(arrived)
             sim.Char(key)
             pump(320)
             if len(arrived) > before:
+                # And it has to have still been ours when it landed, or what
+                # follows is about somebody else's window.
+                if where is not None and not _within(wx.Window.FindFocus(),
+                                                     where):
+                    continue
                 return True
         state["lost"] = True
         raise Skipped()
@@ -225,7 +244,7 @@ def run(frame, songs, state):
     frame.trigger = lambda index: pads.append(
         (index, frame._accelerators_typing, repr(wx.Window.FindFocus())))
     was = panel.crossfade.GetTextValue()
-    press(ord("8"))
+    press(ord("8"), panel.crossfade)
     frame.trigger = real_trigger
     typed = panel.crossfade.GetTextValue()
     # The value it lands on depends on where the caret was and on the box's
@@ -236,6 +255,8 @@ def run(frame, songs, state):
     check("and no pad was fired by typing it", not pads, pads)
 
     # Tab out, which is what commits a typed value.
+    # No `where` on this one: Tab is expected to take focus OUT of the box,
+    # so checking that focus stayed there afterwards would skip every run.
     press(wx.WXK_TAB)
     check("leaving the box applies what was typed",
           frame.board.playlist.crossfade != 3.0,
@@ -300,9 +321,14 @@ def run(frame, songs, state):
     focus_on(panel.list)
     panel.select(0)
     pump(250)
-    press(ord("0"))          # "03 Charlie" begins with a zero, as files do
-    check("a keypress moves the cursor inside the list",
-          panel.list.GetFocusedItem() >= 0, panel.list.GetFocusedItem())
+    started_on = panel.list.GetFocusedItem()
+    press(ord("D"), panel.list)   # Delta, the one row starting with a letter
+    landed = panel.list.GetFocusedItem()
+    # It has to MOVE. This used to ask whether the cursor was on a row at all,
+    # which it already was, so it passed whether or not typing a character did
+    # anything: exactly the thing it exists to prove.
+    check("typing a title's first letter moves the cursor to that row",
+          started_on == 0 and landed == 3, "%s then %s" % (started_on, landed))
     check("and the first cell of a row is its title, with no number in front",
           panel.cell(1, 0) == "02 Bravo", panel.cell(1, 0))
 
@@ -324,7 +350,13 @@ def main():
     app = wx.App(redirect=False)
     tmp = tempfile.mkdtemp(prefix="dropdeck-live-")
     songs = [tone(os.path.join(tmp, name), 3.0, freq) for name, freq in (
-        ("01 Alpha.wav", 220), ("02 Bravo.wav", 440), ("03 Charlie.wav", 660))]
+        ("01 Alpha.wav", 220), ("02 Bravo.wav", 440), ("03 Charlie.wav", 660),
+        # A title starting with a LETTER, because the digits belong to the
+        # pads and always will. First letter navigation is a question about
+        # letters; asking it with a file called "03 Charlie" was asking
+        # whether pad 3 fires, which is a different check entirely and one
+        # this file already makes.
+        ("Delta.wav", 880))]
     lock = drop_foreground_lock()
     frame = DropDeckFrame()
     frame.Show()
@@ -365,6 +397,17 @@ def main():
     print("\n%d/%d checks passed" % (len(CHECKS) - len(failed), len(CHECKS)))
     for name in failed:
         print("  FAILED: " + name)
+    if failed:
+        # Said plainly, because this file presses real keys at a real
+        # desktop. Anything that takes the foreground while it runs, a
+        # notification, another window opening, a second copy of this, gets
+        # the keystroke instead, and the check that follows is then about
+        # nothing. Most of that is caught and skipped; some lands as a
+        # failure. One quiet re-run is the difference between a fault and a
+        # busy machine.
+        print()
+        print("  These press real keys at the real desktop. Run it again")
+        print("  with nothing else going on before believing a failure.")
     return 1 if failed else 0
 
 

@@ -21,6 +21,7 @@ from . import constants as C
 from . import dsp
 from . import feedback
 from . import streamout
+from . import vst
 from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
@@ -550,6 +551,9 @@ class DropDeckFrame(wx.Frame):
             self.mic.chain = dsp.MicChain(self.mixer.samplerate,
                                           self.board.voice_settings)
             self.mic.chain.enabled = bool(self.board.voice_on)
+            # The plugin the board asked for, on a thread, because it takes
+            # over a second and the window should be up before then.
+            wx.CallAfter(self._restore_voice_plugin)
         self.mixer.monitor_source = self.mic
 
         #: The stream, once there is one. None is off air, and off air is
@@ -3197,11 +3201,85 @@ class DropDeckFrame(wx.Frame):
             for button, slot in zip(self.pages[bank].buttons,
                                     board.bank_slots(bank)):
                 button.set_slot(slot)
+        self._apply_board_voice(board)
         self._playing = set()
         self._build_accelerators()
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
         self._update_status()
+
+    def _apply_board_voice(self, board):
+        """Move a newly opened board's microphone settings onto the live one.
+
+        Without this, opening a board left the microphone and the voice chain
+        on the PREVIOUS board's settings, and the next time Preferences was
+        okayed those stale values were written back over what the new board
+        had saved. The board you opened quietly became the board you left.
+        """
+        mic = getattr(self, "mic", None)
+        if mic is None:
+            return
+        mic.gain_db = board.mic_gain_db
+        mic.channel = board.mic_channel
+        mic.monitor = bool(board.mic_monitor)
+        chain = getattr(mic, "chain", None)
+        if chain is None:
+            return
+        chain.update(board.voice_settings or {})
+        chain.enabled = bool(board.voice_on)
+        wanted = (board.voice_settings or {}).get("plugin") or None
+        if wanted != chain.plugin_path:
+            chain.set_plugin(None)
+            chain.wanted_plugin = wanted
+            chain.wanted_plugin_values = dict(
+                (board.voice_settings or {}).get("plugin_values") or {})
+            self._restore_voice_plugin()
+
+    def _restore_voice_plugin(self):
+        """Load the plugin the board asked for, without holding the app up.
+
+        A VST3 takes over a second to load and runs its own start up code, so
+        this happens on a thread of its own and drops the plugin into the
+        chain when it is ready. set_plugin takes the chain's lock, so the
+        microphone can be live throughout.
+        """
+        chain = getattr(getattr(self, "mic", None), "chain", None)
+        if chain is None or not getattr(chain, "wanted_plugin", None):
+            return
+        path = chain.wanted_plugin
+        values = dict(getattr(chain, "wanted_plugin_values", {}) or {})
+
+        def work():
+            try:
+                plugin = vst.load(path)
+            except Exception as exc:
+                wx.CallAfter(self._voice_plugin_failed, path, exc)
+                return
+            if values:
+                try:
+                    vst.apply(plugin, values, chain._lock)
+                except Exception:
+                    pass
+            wx.CallAfter(self._voice_plugin_ready, chain, plugin, path)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _voice_plugin_ready(self, chain, plugin, path):
+        if chain is not getattr(getattr(self, "mic", None), "chain", None):
+            return                    # the board moved on while it was loading
+        chain.set_plugin(plugin, path)
+        chain.wanted_plugin = None
+        chain.wanted_plugin_values = {}
+
+    def _voice_plugin_failed(self, path, exc):
+        """Say so once, in the status line, and leave the rest alone.
+
+        A plugin that has been uninstalled, or a board carried to another
+        machine, is an ordinary thing rather than an error worth a dialog.
+        The setting is kept, so plugging the machine back in brings it back.
+        """
+        self.announce_help("The plugin %s could not be loaded: %s"
+                           % (os.path.basename(path), exc))
 
     def _load_into(self, path, keep_path=True):
         try:
@@ -3480,7 +3558,16 @@ class DropDeckFrame(wx.Frame):
         with SettingsDialog(self, self.board, self.mixer, mic=self.mic,
                             page=page) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
-                self.announce_help("Nothing changed")
+                # The Voice tab has been changing the live chain all the while,
+                # so "nothing changed" is only true once it is put back.
+                undone = dialog.restore_voice()
+                dialog.restore_stream()
+                self.announce_help("Voice settings put back"
+                                   if undone else "Nothing changed")
+                # A station saved on the Streaming tab is a deliberate act and
+                # survives Cancel, so the board still has to reach the disk.
+                if self.board.dirty:
+                    self._save_timer.Start(2000, oneShot=True)
                 return
             index, name, hostapi = dialog.chosen_device
             mic_said = self._apply_mic_settings(dialog)
@@ -3715,16 +3802,29 @@ class DropDeckFrame(wx.Frame):
         return super().Destroy()
 
     def _on_close(self, event):
+        # Saved FIRST, and before anything is torn down, because if it fails
+        # the answer might be not to close at all. This used to be a bare try
+        # and pass at the end of the shutdown: a full disk, a read only folder
+        # or a file Dropbox had locked took the whole evening's work with it
+        # and said nothing whatsoever.
+        try:
+            self.board.save()
+        except Exception as exc:
+            answer = wx.MessageBox(
+                "The board could not be saved, so anything you have changed "
+                "this session would be lost.\n\n%s\n\nClose anyway?" % exc,
+                "Save failed", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_ERROR, self)
+            if answer != wx.YES and event.CanVeto():
+                event.Veto()
+                self.announce("The board was not saved. Try File then Save as.")
+                return
+
         self._refresh_timer.Stop()
         self._save_timer.Stop()
         self.stop_background_work()
         # Give every global combination back to the rest of the system.
         try:
             self.hotkeys.stop()
-        except Exception:
-            pass
-        try:
-            self.board.save()
         except Exception:
             pass
         self.mixer.close()

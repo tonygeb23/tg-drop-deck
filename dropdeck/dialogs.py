@@ -213,6 +213,19 @@ class AssignHotkeyDialog(wx.Dialog):
             self.EndModal(wx.ID_CANCEL)
             return
 
+        # Whose keystroke this is. CHAR_HOOK sees everything before any
+        # control does, which is what makes capturing hotkeys possible and
+        # what made the buttons useless: Enter meant OK wherever you were
+        # standing, so Enter on Cancel saved the hotkey you were cancelling,
+        # and Space was refused as a reserved key so no button could be
+        # pressed with it at all. On a button, Enter and Space belong to the
+        # button.
+        on_button = isinstance(wx.Window.FindFocus(), wx.Button)
+        if on_button and code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER,
+                                  wx.WXK_SPACE, wx.WXK_NUMPAD_SPACE):
+            event.Skip()
+            return
+
         modifiers = 0
         if event.AltDown():
             modifiers |= MOD_ALT
@@ -900,7 +913,10 @@ class SettingsDialog(wx.Dialog):
         self.monitor_choices = ["Same as the soundboard"] + [
             "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]
         self.mic_output = wx.Choice(panel, choices=self.monitor_choices)
-        self.mic_output.SetName("Monitor output")
+        # The same words as the label in front of it, which is what a
+        # screen reader actually reads. Two names for one control is
+        # how a codebase loses track of what a listener hears.
+        self.mic_output.SetName("Hear yourself through")
         self.mic_output.SetSelection(self._monitor_selection())
         self.mic_output.SetToolTip(
             "Put monitoring on your headphones and leave the show on the main "
@@ -932,6 +948,20 @@ class SettingsDialog(wx.Dialog):
         """
         panel, sizer = self._page("Voice")
         self.chain = getattr(self.mic, "chain", None) if self.mic else None
+        # Everything on this tab changes the chain that is RUNNING, because a
+        # compressor you cannot hear while you set it is a compressor set by
+        # guesswork. That makes Cancel a promise this has to keep, so the
+        # whole state is written down here and put back if Cancel is what
+        # gets pressed.
+        self._voice_before = None
+        if self.chain is not None:
+            self._voice_before = {
+                "settings": dict(self.chain.settings),
+                "enabled": bool(self.chain.enabled),
+                "plugin": self.chain.plugin,
+                "plugin_path": self.chain.plugin_path,
+                "plugin_values": self.chain.plugin_values(),
+            }
 
         if not dsp.available():
             self._note(panel, sizer,
@@ -948,6 +978,10 @@ class SettingsDialog(wx.Dialog):
             "Off passes your voice through untouched. The quickest way to "
             "hear what the chain is doing is to turn it off and on while you "
             "talk.")
+        # Live, like everything else on this tab. It used to wait for OK,
+        # which made the one control whose whole purpose is an A against a B
+        # the one control you could not hear.
+        self.voice_on.Bind(wx.EVT_CHECKBOX, self._on_voice_enabled)
         sizer.Add(self.voice_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self._label(panel, sizer, "&Settings")
@@ -959,25 +993,26 @@ class SettingsDialog(wx.Dialog):
         self.voice_list.InsertColumn(1, "Value", width=140)
         self.voice_list.SetToolTip(
             "Up and down to choose a setting, left and right to change it. "
-            "Page up and page down move in bigger steps, and Home and End go "
-            "to the ends.")
+            "Hold shift with left or right for a bigger step.")
         self.voice_list.Bind(wx.EVT_KEY_DOWN, self._on_voice_key)
         sizer.Add(self.voice_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
         self._note(panel, sizer,
-                   "Left and right change the setting you are on.")
+                   "Left and right change the setting you are on. Hold shift "
+                   "for a bigger step.")
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         self._label(panel, sizer, "&Plugin")
+        self._plugin_paths = [None] + [path for _name, path in vst.installed()]
         names = ["None"] + [name for name, _path in vst.installed()]
         self.voice_plugin = wx.Choice(panel, choices=names)
         name_field(self.voice_plugin, "Plugin")
-        self.voice_plugin.SetSelection(0)
-        current = getattr(self.chain, "plugin", None) if self.chain else None
-        if current is not None:
-            wanted = getattr(current, "name", "")
-            if wanted in names:
-                self.voice_plugin.SetSelection(names.index(wanted))
+        # By PATH, not by name. Two plugins can share a name, and the one that
+        # is loaded is the one on disk at that path.
+        loaded = getattr(self.chain, "plugin_path", None) if self.chain else None
+        self.voice_plugin.SetSelection(
+            self._plugin_paths.index(loaded)
+            if loaded in self._plugin_paths else 0)
         self.voice_plugin.SetToolTip(
             "A VST3 effect, added after the compressor and before the "
             "limiter. Its own window is never opened; its settings appear in "
@@ -1021,11 +1056,16 @@ class SettingsDialog(wx.Dialog):
     def _on_voice_key(self, event):
         """Left and right adjust; everything else is the list's own."""
         key = event.GetKeyCode()
-        steps = {wx.WXK_LEFT: -1, wx.WXK_RIGHT: 1,
-                 wx.WXK_PAGEUP: 10, wx.WXK_PAGEDOWN: -10}.get(key)
+        # Page up and page down are left alone, because in a list of sixty
+        # settings they are how you get around, and taking them to mean
+        # "bigger step" costs more than it gives. Shift with an arrow is the
+        # bigger step instead, on the same axis as the ordinary one.
+        steps = {wx.WXK_LEFT: -1, wx.WXK_RIGHT: 1}.get(key)
         if steps is None:
             event.Skip()
             return
+        if event.ShiftDown():
+            steps *= 10
         row = self.voice_list.GetFirstSelected()
         if row < 0 or row >= len(getattr(self, "_voice_params", [])):
             event.Skip()
@@ -1037,6 +1077,13 @@ class SettingsDialog(wx.Dialog):
         # changed under it and this is the whole point of the screen.
         self._say_voice(param.describe())
 
+    def _on_voice_enabled(self, _event):
+        if self.chain is None:
+            return
+        self.chain.enabled = self.voice_on.GetValue()
+        self._say_voice("Processing on" if self.chain.enabled
+                        else "Processing off. The settings below are kept.")
+
     def _say_voice(self, text):
         frame = self.GetParent()
         speak = getattr(frame, "announce_answer", None)
@@ -1047,13 +1094,15 @@ class SettingsDialog(wx.Dialog):
         """Load, or unload, the VST3 in the chain."""
         if self.chain is None:
             return
+        picked = self.voice_plugin.GetSelection()
         choice = self.voice_plugin.GetStringSelection()
-        if choice == "None":
+        path = (self._plugin_paths[picked]
+                if 0 <= picked < len(self._plugin_paths) else None)
+        if path is None:
             self.chain.set_plugin(None)
             self._refresh_voice()
             self._say_voice("No plugin")
             return
-        path = dict(vst.installed()).get(choice)
         wx.BeginBusyCursor()
         try:
             plugin = vst.load(path)
@@ -1063,7 +1112,7 @@ class SettingsDialog(wx.Dialog):
             return
         finally:
             wx.EndBusyCursor()
-        self.chain.set_plugin(plugin)
+        self.chain.set_plugin(plugin, path)
         self._refresh_voice()
         self._say_voice("%s loaded, %d settings"
                         % (choice, len(self.chain.plugin_parameters())))
@@ -1105,6 +1154,44 @@ class SettingsDialog(wx.Dialog):
             return
         self._refresh_voice(self.voice_list.GetFirstSelected())
         self._say_voice("%d settings restored" % restored)
+
+    def restore_stream(self):
+        """Put the board's live stream settings back, as Cancel promises."""
+        before = getattr(self, "_stream_before", None)
+        if not before:
+            return False
+        changed = any(getattr(self.board, field) != value
+                      for field, value in before.items())
+        for field, value in before.items():
+            setattr(self.board, field, value)
+        return changed
+
+    def restore_voice(self):
+        """Put the voice chain back the way this window found it.
+
+        Called when the window is cancelled. Every other tab collects its
+        answers and hands them over on OK, so cancelling them costs nothing;
+        this one has been changing the live chain all along so that the
+        presenter can hear what they are doing, and without this Cancel meant
+        "keep the changes but do not save them", which is the worst of both.
+        """
+        before = getattr(self, "_voice_before", None)
+        if before is None or self.chain is None:
+            return False
+        changed = (dict(self.chain.settings) != before["settings"]
+                   or bool(self.chain.enabled) != before["enabled"]
+                   or self.chain.plugin is not before["plugin"])
+        self.chain.enabled = before["enabled"]
+        self.chain.update(before["settings"])
+        if self.chain.plugin is not before["plugin"]:
+            self.chain.set_plugin(before["plugin"], before["plugin_path"])
+        if before["plugin"] is not None and before["plugin_values"]:
+            try:
+                vst.apply(before["plugin"], before["plugin_values"],
+                          self.chain._lock)
+            except Exception:
+                pass
+        return changed
 
     def _build_stream_tab(self):
         """Where the show goes, and a button that proves it before air.
@@ -1291,6 +1378,12 @@ class SettingsDialog(wx.Dialog):
             panel, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 60),
             value="Not tested yet.")
         self.stream_result.SetName("Test result")
+        # Choosing a saved station fills these boxes by loading it INTO the
+        # board, so without this Cancel left the board on whichever station
+        # was last clicked. Saving or forgetting a station is a deliberate
+        # act and stays; which one is current does not.
+        self._stream_before = {field: getattr(self.board, field)
+                               for field in self._stream_controls()}
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
         self._refresh_stations()
@@ -1879,6 +1972,9 @@ class NativePreview:
         self._played = None
         self._started_at = 0.0
         self._timer = None
+        #: Files that would not play. Kept so a broken one is mentioned once
+        #: rather than retried every tenth of a second in silence.
+        self._refused = set()
         #: What switches it. Read from the keyboard rather than registered, so
         #: it is only ours while a window of ours is in front.
         self.key_label = "Alt+P"
@@ -1971,6 +2067,11 @@ class NativePreview:
         return False
 
     # ---------------------------------------------------------------- work --
+    def _say(self, text):
+        speaker = getattr(self.frame, "speaker", None)
+        if speaker is not None:
+            speaker.say(text)
+
     def _silence(self):
         self._played = None
         if self.mixer is not None:
@@ -1995,11 +2096,23 @@ class NativePreview:
         # on top of that takes the name away.
         if (time.monotonic() - self._changed_at) * 1000.0 < C.PREVIEW_DELAY_MS:
             return
+        if selected in self._refused:
+            return
         if not audiofile.is_supported(selected):
+            self._refused.add(selected)
+            self._say("%s will not play here"
+                      % os.path.basename(selected))
             return
         try:
             self.mixer.play_preview(selected)
-        except Exception:
+        except Exception as exc:
+            # Said, and remembered. This used to return in silence and then
+            # try the same broken file again on the next tick, so arrowing
+            # onto a damaged sound was a preview that simply stopped working
+            # with no reason given.
+            self._refused.add(selected)
+            self._say("%s would not play: %s"
+                      % (os.path.basename(selected), exc))
             return
         self._played = selected
         self._started_at = time.monotonic()

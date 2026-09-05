@@ -1183,10 +1183,16 @@ check("named for what is on them",
 check("Ctrl+Shift+M opens it on the microphone tab",
       prefs.tabs.GetSelection() == SettingsDialog.PAGE_MIC,
       prefs.tabs.GetSelection())
+# The names this codebase uses. What a screen reader actually says is the
+# static text in front of each control, which only tools/check_labels.py can
+# ask, and the two now have to agree: "Monitor output" here against "Hear
+# yourself through" on screen was one control with two names, which is how a
+# codebase loses track of what a listener hears.
 check("the microphone controls are named for a screen reader",
       prefs.mic_device.GetName() == "Microphone"
-      and prefs.mic_output.GetName() == "Monitor output"
-      and prefs.mic_gain.GetName() == "Microphone gain in decibels")
+      and prefs.mic_output.GetName() == "Hear yourself through"
+      and prefs.mic_gain.GetName() == "Microphone gain in decibels",
+      prefs.mic_output.GetName())
 check("the gain runs both ways from zero",
       prefs.mic_gain.GetMin() == int(C.MIN_MIC_GAIN_DB)
       and prefs.mic_gain.GetMax() == int(C.MAX_MIC_GAIN_DB))

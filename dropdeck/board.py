@@ -416,6 +416,10 @@ class Board:
             return None
         self.stream_name = name
         entry = self.station_settings()
+        # Worth saving. Without this a station saved in Preferences and
+        # then cancelled out of was gone by the next launch, which is a
+        # password somebody has to go and find again.
+        self.dirty = True
         for index, station in enumerate(self.stream_stations):
             if station.get("stream_name") == name:
                 self.stream_stations[index] = entry
@@ -427,7 +431,10 @@ class Board:
         before = len(self.stream_stations)
         self.stream_stations = [s for s in self.stream_stations
                                 if s.get("stream_name") != name]
-        return len(self.stream_stations) != before
+        gone = len(self.stream_stations) != before
+        if gone:
+            self.dirty = True
+        return gone
 
     def to_dict(self):
         return {
