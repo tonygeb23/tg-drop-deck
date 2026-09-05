@@ -448,7 +448,14 @@ class Mixer:
                     keep.append(voice)
             self._voices = keep
         for voice in dead:
-            voice.close()
+            # Guarded for the same reason render() is: this runs inside the
+            # audio callback, and sounddevice aborts the stream on a raise.
+            # Closing a voice is releasing a file handle, and a file handle
+            # that will not close is not worth a silent sound card.
+            try:
+                voice.close()
+            except Exception:
+                pass
 
     def _duck_ramp(self, frames, voices):
         """Where the beds should sit this block, given what else is playing."""
@@ -505,7 +512,16 @@ class Mixer:
             duck = self._duck_ramp(frames, voices)
             fader = self._playlist_ramp(frames)
             for voice in voices:
-                block = voice.render(frames, duck)
+                # Guarded, because sounddevice returns paAbort when a callback
+                # raises and nothing here restarts a stopped stream. One
+                # malformed voice would silence that sound card for the rest
+                # of the show, which is a far worse outcome than one sound
+                # not playing.
+                try:
+                    block = voice.render(frames, duck)
+                except Exception:
+                    voice.finished = True
+                    continue
                 # A voice can only be rendered once, because rendering moves
                 # it along. So the on air sum is built here beside the one
                 # going to the speakers rather than by a second pass over the
@@ -565,7 +581,10 @@ class Mixer:
         if frames and float(np.abs(air).max()) > C.SOFT_CLIP_FROM:
             _soft_clip(air)
         try:
-            tap.write(self.key, air)
+            # With the rate, because a bank on a card that would only open at
+            # 44100 has to be converted before it is summed with a main output
+            # at 48000, not simply added as though they matched.
+            tap.write(self.key, air, self.samplerate)
         except Exception:
             pass
 
@@ -699,6 +718,16 @@ class MixerGroup:
         previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db,
                     self.bed_fade_in, self.bed_fade_out, self.playlist_gain)
         monitor = self.monitor_source
+        # The stream, and the microphone feeding it. Rebuilding replaces every
+        # mixer, and a new mixer has no tap, so changing an output device while
+        # on air used to take the stream off it: nothing wrote to the ring, the
+        # streamer waited five seconds, decided the audio had stopped and
+        # reconnected forever, silently. The presenter was told "reconnecting"
+        # rather than "your stream is dead", and only coming off air and back
+        # fixed it.
+        air_tap = self.air_tap
+        air_source = self.air_source
+        monitor_only = self.playlist_monitor_only
         self.stop_all(fade_out=0.0)
         self.bank_devices = dict(bank_devices or {})
         self._build()
@@ -712,6 +741,10 @@ class MixerGroup:
         # Rebuilding replaced every mixer, so the monitor has to be re-attached
         # or it would go on writing into an output nothing is draining.
         self.monitor_source = monitor
+        self.playlist_monitor_only = monitor_only
+        if air_tap is not None:
+            self.air_tap = air_tap
+            self.air_source = air_source
         return not self.problems
 
     def distinct_device_count(self):
@@ -830,6 +863,29 @@ class MixerGroup:
     @property
     def playlist_gain(self):
         return self.primary.playlist_gain
+
+    @property
+    def air_tap(self):
+        """Where the on air mix goes, across every card at once."""
+        return self.primary.air_tap
+
+    @air_tap.setter
+    def air_tap(self, tap):
+        for mixer in self._mixers.values():
+            mixer.air_tap = tap
+
+    @property
+    def air_source(self):
+        return self.primary.air_source
+
+    @air_source.setter
+    def air_source(self, source):
+        # Only the primary reads the microphone. Every mixer reading it would
+        # take the same audio away from each other and the voice would arrive
+        # in pieces.
+        for mixer in self._mixers.values():
+            mixer.air_source = None
+        self.primary.air_source = source
 
     @property
     def playlist_monitor_only(self):

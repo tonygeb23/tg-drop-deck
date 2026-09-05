@@ -86,11 +86,29 @@ def load(path):
         raise LoadFailed("%s is an instrument, not an effect, so it would "
                          "replace your voice rather than change it"
                          % os.path.basename(path))
+    # Ask for the parameters HERE, while the plugin is still off the chain and
+    # nothing is processing through it. pedalboard builds its parameter
+    # objects lazily, and building them sweeps a thousand values per
+    # parameter, writing and restoring each one. Doing that on first access
+    # from the dialog means a thousand unsynchronised writes into a plugin
+    # the microphone callback is already inside, which is the other half of
+    # "it almost crashed when I was moving around and loading vsts".
+    try:
+        list(plugin.parameters.items())
+    except Exception:
+        pass
     return plugin
 
 
-def parameters(plugin):
+def parameters(plugin, lock=None):
     """The plugin's own knobs, in the shape the accessible list wants.
+
+    ``lock`` is the chain's lock, and every read and write of a plugin
+    parameter is taken under it. pedalboard's own header says a plugin's
+    internals may not be thread safe and its chain takes a mutex per plugin
+    when processing; the parameter bindings take nothing at all. So a left
+    arrow in the settings list is a write into a plugin the audio thread is
+    inside unless something holds them apart, and this is that something.
 
     Values are read and written through the PLUGIN, not through the parameter
     object. The parameter's raw_value is normalised nought to one, so reading
@@ -111,13 +129,29 @@ def parameters(plugin):
     out = []
     for key, param in items:
         try:
-            out.append(_wrap(plugin, key, param))
+            out.append(_wrap(plugin, key, param, lock))
         except Exception:
             continue           # a knob nobody can describe is left out
     return [p for p in out if p is not None]
 
 
-def _wrap(plugin, key, param):
+class _Guard:
+    """A lock that is optional, so the same code works without one."""
+
+    def __init__(self, lock):
+        self._lock = lock
+
+    def __enter__(self):
+        if self._lock is not None:
+            self._lock.acquire()
+
+    def __exit__(self, *_exc):
+        if self._lock is not None:
+            self._lock.release()
+        return False
+
+
+def _wrap(plugin, key, param, lock=None):
     """One plugin parameter as a Parameter, in the units it really uses.
 
     The order of these three cases matters. A VST3 fills in valid_values for
@@ -135,10 +169,12 @@ def _wrap(plugin, key, param):
 
     if isinstance(low, bool) or isinstance(high, bool):
         def get_switch(k=key):
-            return 1.0 if getattr(plugin, k) else 0.0
+            with _Guard(lock):
+                return 1.0 if getattr(plugin, k) else 0.0
 
         def put_switch(value, k=key):
-            setattr(plugin, k, bool(round(value)))
+            with _Guard(lock):
+                setattr(plugin, k, bool(round(value)))
 
         return Parameter(key, label, get_switch, put_switch, 0.0, 1.0, 1.0,
                          "", 0, choices=["off", "on"])
@@ -153,12 +189,14 @@ def _wrap(plugin, key, param):
 
         def get_number(k=key, fallback=low):
             try:
-                return float(getattr(plugin, k))
+                with _Guard(lock):
+                    return float(getattr(plugin, k))
             except (TypeError, ValueError, AttributeError):
                 return fallback
 
         def put_number(value, k=key):
-            setattr(plugin, k, float(value))
+            with _Guard(lock):
+                setattr(plugin, k, float(value))
 
         return Parameter(key, label, get_number, put_number, low, high,
                          float(step), unit,
@@ -170,12 +208,14 @@ def _wrap(plugin, key, param):
 
     def get_choice(k=key, c=choices):
         try:
-            return float(c.index(str(getattr(plugin, k))))
+            with _Guard(lock):
+                return float(c.index(str(getattr(plugin, k))))
         except (ValueError, AttributeError):
             return 0.0
 
     def put_choice(value, k=key, c=choices):
-        setattr(plugin, k, c[max(0, min(len(c) - 1, int(round(value))))])
+        with _Guard(lock):
+            setattr(plugin, k, c[max(0, min(len(c) - 1, int(round(value))))])
 
     return Parameter(key, label, get_choice, put_choice, 0.0,
                      float(len(choices) - 1), 1.0, "", 0, choices=choices)
@@ -202,19 +242,19 @@ def _pretty(key):
 # Presets, as files
 # ---------------------------------------------------------------------------
 
-def snapshot(plugin):
+def snapshot(plugin, lock=None):
     """Every parameter and its value, as something that can be written down."""
     out = {}
-    for param in parameters(plugin):
+    for param in parameters(plugin, lock):
         out[param.key] = param.value
     return out
 
 
-def apply(plugin, values):
+def apply(plugin, values, lock=None):
     """Put a snapshot back. Anything the plugin no longer has is skipped."""
     if not values:
         return 0
-    known = {param.key: param for param in parameters(plugin)}
+    known = {param.key: param for param in parameters(plugin, lock)}
     restored = 0
     for key, value in values.items():
         param = known.get(key)
@@ -225,18 +265,18 @@ def apply(plugin, values):
     return restored
 
 
-def save_preset(plugin, path, name=""):
+def save_preset(plugin, path, name="", lock=None):
     """Write the plugin's settings where somebody can find them again."""
     data = {"plugin": getattr(plugin, "name", ""), "name": name or
             os.path.splitext(os.path.basename(path))[0],
-            "values": snapshot(plugin)}
+            "values": snapshot(plugin, lock)}
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
     return path
 
 
-def load_preset(plugin, path):
+def load_preset(plugin, path, lock=None):
     """Read a preset back. Returns how many settings it managed to restore."""
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
-    return apply(plugin, (data or {}).get("values") or {})
+    return apply(plugin, (data or {}).get("values") or {}, lock)

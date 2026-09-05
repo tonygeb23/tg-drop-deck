@@ -22,6 +22,8 @@ The thing worth being careful about:
 import os
 import sys
 import tempfile
+import threading
+import time
 
 import numpy as np
 import soundfile as sf
@@ -293,6 +295,122 @@ check("matching rates resample nothing at all", not mic.resampling)
 for _ in range(2):
     feed(mic, C.BLOCKSIZE, amplitude=0.5)
 check("and still monitor", rms(mic.read(C.BLOCKSIZE)) > 0.2)
+
+# The level was never the question. A microphone with no resampler at all
+# still delivers a full strength block: it is simply the wrong SPEED. So this
+# measures the pitch, which is the thing a listener would actually notice.
+#
+# It matters because the resampler spent a version nested inside a check for
+# a voice processing chain, so a copy built without pedalboard had none, and
+# went out a tone and a half sharp with nothing to say why.
+def at_own_rate(mic, seconds, hz=1000.0):
+    """Play a tone at the microphone's rate and collect what comes out."""
+    mic._reset_ring()
+    pieces = []
+    position = 0
+    while position < int(mic.samplerate * seconds):
+        moment = (np.arange(position, position + C.BLOCKSIZE)
+                  / float(mic.samplerate))
+        wave = (0.5 * np.sin(2 * np.pi * hz * moment)).astype(np.float32)
+        mic._callback(wave[:, None], C.BLOCKSIZE, None, None)
+        position += C.BLOCKSIZE
+        if mic._monitor.available:
+            pieces.append(mic._monitor.read(mic._monitor.available))
+    return np.concatenate(pieces)[:, 0].astype(np.float64)
+
+
+def pitch_of(signal, rate):
+    spectrum = np.abs(np.fft.rfft(signal * np.hanning(len(signal))))
+    return float(np.fft.rfftfreq(len(signal), 1.0 / rate)[int(np.argmax(spectrum))])
+
+
+slow = MicInput(duck_bus=DuckBus(), samplerate=48000, monitor=True)
+slow.samplerate = 44100
+slow.stream = object()
+slow.chain = None                     # the state a copy without pedalboard is in
+slow._reset_ring()
+check("a microphone with no voice processing still has a resampler",
+      slow._resampler is not None)
+heard = at_own_rate(slow, 1.0)
+check("a second in is a second out at the output's rate",
+      abs(len(heard) - 48000) < 1200, "%d frames" % len(heard))
+check("and it comes out at the pitch it went in at",
+      abs(pitch_of(heard, 48000) - 1000.0) < 6.0,
+      "%.1f Hz, played 1000" % pitch_of(heard, 48000))
+check("which is a check that could tell the difference",
+      abs(pitch_of(heard, 44100) - 1000.0) > 30.0,
+      "%.1f Hz read at the wrong rate" % pitch_of(heard, 44100))
+slow.stream = None
+slow.close()
+
+# The output callback takes the same lock to read the monitor, so the capture
+# callback must not hold it across the resample. soxr allocates, and a hitch
+# on the microphone thread would otherwise become a hitch in the music.
+class Slow:
+    def __init__(self, mic):
+        self.mic = mic
+        self.free = []
+
+    def resample_chunk(self, block):
+        got = self.mic._lock.acquire(blocking=False)
+        if got:
+            self.mic._lock.release()
+        self.free.append(got)
+        time.sleep(0.01)
+        return block
+
+
+held = MicInput(duck_bus=DuckBus(), samplerate=48000, monitor=True)
+held.samplerate = 44100
+held.stream = object()
+held._reset_ring()
+watcher = Slow(held)
+held._resampler = watcher
+for _ in range(5):
+    feed(held, C.BLOCKSIZE)
+check("the lock is free while the resampler is working",
+      watcher.free and all(watcher.free), watcher.free)
+
+waits = []
+stop = threading.Event()
+
+
+def capturing():
+    while not stop.is_set():
+        feed(held, C.BLOCKSIZE)
+
+
+def monitoring():
+    while not stop.is_set():
+        began = time.perf_counter()
+        held.read(C.BLOCKSIZE)
+        waits.append(time.perf_counter() - began)
+        time.sleep(0.001)
+
+
+spun = [threading.Thread(target=capturing, daemon=True),
+        threading.Thread(target=monitoring, daemon=True)]
+for thread in spun:
+    thread.start()
+time.sleep(1.0)
+stop.set()
+for thread in spun:
+    thread.join(timeout=5)
+check("so the output never waits a resample to read the monitor",
+      waits and max(waits) < 0.005,
+      "worst read %.2f ms against a 10 ms resample" % (max(waits) * 1000))
+check("and it really was reading throughout", len(waits) > 50, len(waits))
+
+held._resampler = type("Broken", (), {
+    "resample_chunk": lambda self, block: 1 / 0})()
+before = held._monitor.available
+held._callback(np.zeros((C.BLOCKSIZE, 1), dtype=np.float32) + 0.1,
+               C.BLOCKSIZE, None, None)
+check("a resampler that throws does not take the callback with it",
+      held._monitor.available == before)
+held.stream = None
+held.close()
+
 
 # The other half: the OUTPUT moves to a device with a different rate.
 mic.stream = None

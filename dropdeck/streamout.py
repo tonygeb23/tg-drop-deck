@@ -40,6 +40,7 @@ import urllib.parse
 import urllib.request
 
 import numpy as np
+import soxr
 
 try:
     import av
@@ -68,6 +69,16 @@ class AirBus:
     behind gives silence for the frames it does not have; one that is running
     ahead has its oldest frames dropped. Both are inaudible at these sizes and
     neither accumulates.
+
+    Drift is not the same thing as a different RATE, and this used to confuse
+    the two. A bank sent to a card that will only open at 44100, while the
+    main output runs at 48000, delivers 44100 frames a second into a ring the
+    encoder drains 48000 times a second. That is not a few milliseconds an
+    hour: it is four thousand frames a minute, so the ring runs dry, that
+    card gets nothing but gaps, and the ring being read at the pace of the
+    slowest one leaves the faster ring overflowing and dropping. Each card is
+    converted to the bus rate as it arrives instead, which is the same thing
+    the microphone does and for the same reason.
     """
 
     def __init__(self, samplerate, seconds=None):
@@ -75,6 +86,13 @@ class AirBus:
         self.frames = int(self.samplerate * (seconds or C.AIR_RING_SECONDS))
         self._lock = threading.Lock()
         self._rings = {}
+        #: One per card that is not already at the bus rate, kept because
+        #: resampling each block on its own would click at every boundary.
+        self._rates = {}
+        #: How long a ring may stay empty before it stops holding the stream
+        #: up. One ring length, which is a lifetime for a scheduling hiccup
+        #: and nothing at all to a listener.
+        self._patience = float(seconds or C.AIR_RING_SECONDS)
         #: Blocks thrown away because the encoder could not keep up. The
         #: presenter is told, because silent dropouts are how a stream lies.
         self.dropped = 0
@@ -83,12 +101,17 @@ class AirBus:
         ring = self._rings.get(key)
         if ring is None:
             ring = {"buf": np.zeros((self.frames, CHANNELS), dtype=np.float32),
-                    "write": 0, "filled": 0}
+                    "write": 0, "filled": 0, "seen": time.monotonic()}
             self._rings[key] = ring
         return ring
 
-    def write(self, key, block):
-        """Called from an audio callback. Must not block and must not raise."""
+    def write(self, key, block, rate=None):
+        """Called from an audio callback. Must not block and must not raise.
+
+        ``rate`` is the rate this card is actually running at. Left out, it is
+        taken to be the bus rate, which is what a single output always is.
+        """
+        block = self._at_bus_rate(key, block, rate)
         n = len(block)
         if not n:
             return
@@ -114,12 +137,53 @@ class AirBus:
             if was + n > self.frames:
                 self.dropped += 1
 
+    def _at_bus_rate(self, key, block, rate):
+        """Convert a card running at its own rate into the bus's.
+
+        Outside the lock on purpose: soxr allocates, and this is an audio
+        callback that another card may be waiting behind. The resamplers are
+        looked up by key and only ever touched by that card's own callback.
+        """
+        if not rate or int(rate) == self.samplerate:
+            if key in self._rates:
+                del self._rates[key]
+            return block
+        rate = int(rate)
+        held = self._rates.get(key)
+        if held is None or held[0] != rate:
+            held = (rate, soxr.ResampleStream(rate, self.samplerate, CHANNELS,
+                                              dtype="float32"))
+            self._rates[key] = held
+        try:
+            return held[1].resample_chunk(block)
+        except Exception:
+            return block[:0]
+
     def available(self):
-        """Frames the thinnest ring can supply. What can be read right now."""
+        """How much can be read right now.
+
+        The thinnest ring that is still ALIVE, not the thinnest ring. A card
+        that has stopped writing, because it was unplugged or because a
+        device change replaced its mixer, would otherwise pin this at nought
+        for ever: the live ring keeps filling, overflows, and the whole
+        stream goes silent on account of a card nobody is listening to.
+
+        A ring counts as alive until it has been empty for longer than the
+        ring is long, which is far more than any ordinary scheduling hiccup
+        and far less than a listener would sit through.
+        """
+        now = time.monotonic()
         with self._lock:
             if not self._rings:
                 return 0
-            return min(r["filled"] for r in self._rings.values())
+            alive = []
+            for ring in self._rings.values():
+                if ring["filled"]:
+                    ring["seen"] = now
+                    alive.append(ring["filled"])
+                elif now - ring.get("seen", now) <= self._patience:
+                    alive.append(0)
+            return min(alive) if alive else 0
 
     def read(self, frames):
         """Take a block, summing every card. Short rings contribute silence."""
@@ -145,6 +209,7 @@ class AirBus:
         with self._lock:
             self._rings = {}
             self.dropped = 0
+        self._rates = {}
 
 
 # ---------------------------------------------------------------------------
@@ -729,8 +794,25 @@ class Streamer:
         spec = FORMATS.get(fmt) or FORMATS["mp3"]
         bitrate = int(self.settings.get("bitrate", 128))
 
+        # Built first, because the sink has to be told the rate the encoder
+        # settled on. Everything after this point is inside a try, because a
+        # server that is down or a password that is wrong raises out of
+        # connect() and an encoder that is never assigned is never closed:
+        # a FFmpeg codec context and its buffers, leaked once per attempt,
+        # and the reconnect loop attempts every few seconds all night.
         encoder = Encoder(self._on_bytes, fmt=fmt,
                           samplerate=self.bus.samplerate, bitrate=bitrate)
+        try:
+            return self._connect(encoder, factory, spec, bitrate)
+        except Exception:
+            try:
+                encoder.close()
+            except Exception:
+                pass
+            raise
+
+    def _connect(self, encoder, factory, spec, bitrate):
+        """The half that can fail. Split out so the encoder can be closed."""
         sink = factory(
             host=self.settings.get("host", ""),
             port=int(self.settings.get("port", 8000)),

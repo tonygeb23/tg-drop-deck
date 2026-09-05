@@ -3537,18 +3537,18 @@ class DropDeckFrame(wx.Frame):
         self.board.device_hostapi = hostapi
         self.board.bank_devices = bank_devices
 
-        # A microphone monitored into an output that has just moved to a
-        # device with another rate would be sharp or flat by however far the
-        # two differ. It reopens itself if it is live.
-        mic = getattr(self, "mic", None)
-        if mic is not None:
-            mic.set_output_rate(self.mixer.samplerate)
-
         if device_changed or routing_changed:
             # Re-routing stops everything and clears every decode cache, because
             # cached audio was resampled for the old device's rate. Warm it again
             # rather than making the next key press pay for it.
             self.mixer.set_bank_devices(self._resolve_bank_devices())
+            # AFTER the mixers have actually moved. Asking before meant
+            # handing the microphone the old primary's rate, which is the one
+            # it already had, so the call did nothing and the microphone kept
+            # monitoring and broadcasting at the wrong speed.
+            mic = getattr(self, "mic", None)
+            if mic is not None:
+                mic.set_output_rate(self.mixer.samplerate)
             self.warm_cache()
 
             if self.mixer.problems:

@@ -84,15 +84,24 @@ def main():
             time.sleep(BLOCK / float(RATE) * 0.35)
 
     def fiddler():
-        """A person arrowing through the settings list, fast."""
+        """A person arrowing through the settings list, fast.
+
+        Including the PLUGIN's parameters, which is the half that actually
+        crashed: pedalboard guards its own processing with a mutex per plugin
+        and guards its parameter bindings with nothing at all, so a left arrow
+        was a write into a plugin the audio thread was inside.
+        """
         rng = random.Random(11)
         while not stop.is_set():
-            params = chain.parameters()
+            params = chain.parameters() + chain.plugin_parameters()
+            if not params:
+                time.sleep(0.005)
+                continue
             param = rng.choice(params)
             param.nudge(rng.choice([-3, -1, 1, 3]))
             counts["params"] += 1
-            if param.key.endswith("_on"):
-                counts["switches"] += 1
+            # Reading is as unsynchronised as writing, so read it back too.
+            param.spoken()
             time.sleep(0.001)
 
     def switcher():

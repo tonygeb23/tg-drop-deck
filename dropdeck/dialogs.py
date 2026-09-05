@@ -1000,9 +1000,9 @@ class SettingsDialog(wx.Dialog):
         if self.chain is None:
             return []
         params = list(self.chain.parameters())
-        plugin = getattr(self.chain, "plugin", None)
-        if plugin is not None:
-            params.extend(vst.parameters(plugin))
+        # Through the chain, so every read and write of a plugin parameter is
+        # taken under the same lock the audio thread uses.
+        params.extend(self.chain.plugin_parameters())
         return params
 
     def _refresh_voice(self, keep=0):
@@ -1066,7 +1066,7 @@ class SettingsDialog(wx.Dialog):
         self.chain.set_plugin(plugin)
         self._refresh_voice()
         self._say_voice("%s loaded, %d settings"
-                        % (choice, len(vst.parameters(plugin))))
+                        % (choice, len(self.chain.plugin_parameters())))
 
     def _on_voice_save_preset(self, _event):
         plugin = getattr(self.chain, "plugin", None) if self.chain else None
@@ -1080,7 +1080,7 @@ class SettingsDialog(wx.Dialog):
                 return
             path = dialog.GetPath()
         try:
-            vst.save_preset(plugin, path)
+            vst.save_preset(plugin, path, lock=self.chain._lock)
         except OSError as exc:
             self._say_voice("Could not save it: %s" % exc)
             return
@@ -1098,7 +1098,8 @@ class SettingsDialog(wx.Dialog):
                 return
             path = dialog.GetPath()
         try:
-            restored = vst.load_preset(plugin, path)
+            restored = vst.load_preset(plugin, path,
+                                       lock=self.chain._lock)
         except (OSError, ValueError) as exc:
             self._say_voice("Could not open it: %s" % exc)
             return

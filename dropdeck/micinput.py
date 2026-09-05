@@ -389,17 +389,24 @@ class MicInput:
         with self._lock:
             self._monitor.clear()
             self._air.clear()
-        chain = self.chain
-        if chain is not None:
-            # Envelopes and filters remember the last thing they heard, and
-            # the last thing they heard was a different microphone.
-            chain.reset()
+        # The resampler is NOT conditional on there being a voice chain. It
+        # ended up nested inside that check when the processing went in, so a
+        # copy without pedalboard had no resampler at all and the microphone
+        # went into the rings at its own rate while being drained at the
+        # output's: monitoring and broadcasting sharp or flat by however far
+        # the two differ.
+        with self._lock:
             if self.samplerate != self.output_rate:
                 self._resampler = soxr.ResampleStream(
                     self.samplerate, self.output_rate, CHANNELS,
                     dtype="float32")
             else:
                 self._resampler = None
+        chain = self.chain
+        if chain is not None:
+            # Envelopes and filters remember the last thing they heard, and
+            # the last thing they heard was a different microphone.
+            chain.reset()
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -426,14 +433,23 @@ class MicInput:
         # One channel up the middle of both. Written into the rings under the
         # lock; each reader drains its own from its own callback.
         stereo = np.repeat(block[:, None], CHANNELS, axis=1)
-        with self._lock:
-            if self._resampler is not None:
-                # The microphone and the speakers are on different clocks and
-                # different rates. Resampled once here, so both readers only
-                # ever deal in the output's rate and can add it straight in.
-                stereo = self._resampler.resample_chunk(stereo)
-                if not len(stereo):
-                    return
+        # Resampled OUTSIDE the lock. soxr allocates, and the output callback
+        # takes this same lock to read the monitor, so holding it across the
+        # resample couples two real time threads: a hitch on the microphone
+        # thread became a hitch in the show. The resampler is only ever
+        # touched by this callback and by _reset_ring, which stops the stream
+        # first, so it needs no lock of its own.
+        resampler = self._resampler
+        if resampler is not None:
+            # The microphone and the speakers are on different clocks and
+            # different rates. Resampled once here, so both readers only ever
+            # deal in the output's rate and can add it straight in.
+            try:
+                stereo = resampler.resample_chunk(stereo)
+            except Exception:
+                return
+            if not len(stereo):
+                return
 
         # Processed OUTSIDE the lock. It is only a tenth of a millisecond, but
         # the output callback takes this same lock to read the monitor, and

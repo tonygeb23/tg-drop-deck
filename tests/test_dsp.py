@@ -376,5 +376,65 @@ check("the settings survive being handed out and put back",
       == dsp.MicChain(RATE).to_dict())
 
 
+print()
+print("The limiter across block boundaries")
+
+
+def by_hand(signal, rate, ceiling_db=-1.0, release_ms=100.0):
+    """The recurrence written out one sample at a time, as the truth."""
+    ceiling = 10.0 ** (ceiling_db / 20.0)
+    rise = 20.0 / (release_ms * 0.001 * rate)
+    gain_db = 0.0
+    out = np.empty(len(signal), dtype=np.float64)
+    for i, sample in enumerate(np.abs(signal).max(axis=1)):
+        target = min(0.0, -20.0 * np.log10(max(sample, 1e-12) / ceiling))
+        gain_db = min(target, gain_db + rise)
+        out[i] = min(gain_db, 0.0)
+    return out
+
+
+# Loud enough to pin the limiter, then quiet, so it spends its time recovering
+# and every block boundary is a chance to lose a sample of release. Square
+# rather than a sine, because the gain applied to a sample is measured by
+# dividing by it, and a sine spends a lot of its time at nought.
+def square(seconds, level):
+    n = int(RATE * seconds)
+    edge = np.resize([level, -level], n).astype(np.float32)
+    return np.repeat(edge[:, None], 2, axis=1)
+
+
+ramped = np.concatenate([square(0.05, 1.0), square(0.45, 0.03)])
+wanted = by_hand(ramped, RATE)
+
+limiter = dsp.Ceiling(RATE)
+blocks = [limiter.process(ramped[i:i + 512])
+          for i in range(0, len(ramped), 512)]
+got = np.concatenate(blocks)
+applied = 20.0 * np.log10(np.abs(got).max(axis=1)
+                          / np.abs(ramped).max(axis=1))
+worst = float(np.max(np.abs(applied - wanted)))
+check("block by block matches the recurrence sample by sample",
+      worst < 0.001, "worst %.4f dB out" % worst)
+
+# The same audio in one block has to give the same answer as in a hundred.
+one = dsp.Ceiling(RATE).process(ramped)
+check("and one long block gives the same answer as many short ones",
+      float(np.abs(one - got).max()) < 1e-5,
+      float(np.abs(one - got).max()))
+
+# A block of one sample is the degenerate case, and it used to be wrong.
+singles = dsp.Ceiling(RATE)
+grain = np.concatenate([singles.process(ramped[i:i + 1])
+                        for i in range(0, 4000)])
+check("even fed a single sample at a time",
+      float(np.abs(grain - got[:4000]).max()) < 1e-5,
+      float(np.abs(grain - got[:4000]).max()))
+
+# And it still keeps its promise, which is the reason it exists.
+peak_db = db(float(np.abs(got).max()))
+check("while never letting anything past the ceiling", peak_db <= -0.99,
+      "%.2f dB" % peak_db)
+
+
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)

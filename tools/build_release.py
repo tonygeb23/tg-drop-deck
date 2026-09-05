@@ -132,6 +132,11 @@ def build_executable():
         # It is what plays an m4a; without it that whole family is refused.
         "--collect-all", "av",
         "--collect-all", "mutagen",
+        # The voice processing: JUCE DSP and the VST3 host, both
+        # native code beside the package. Without it a built copy has
+        # no compressor, no gate and no plugins, and the microphone
+        # goes out raw with nothing to say why.
+        "--collect-all", "pedalboard",
         # Only the tools need these. Leaving them out saves about 60 MB.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",

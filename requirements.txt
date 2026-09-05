@@ -9,3 +9,6 @@ accessible_output2
 av
 # Artist and title out of the file's own tags. Pure Python, decodes nothing.
 mutagen
+# Compressor, gate, equaliser and limiter, and the VST3 host behind
+# the voice tab. Without it the microphone goes out unprocessed.
+pedalboard

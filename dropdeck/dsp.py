@@ -198,7 +198,12 @@ class Ceiling:
         rise = 20.0 / (self.release_ms * 0.001 * self.samplerate)
         ramp = rise * np.arange(len(block), dtype=np.float64)
         seeded = np.empty(len(block) + 1, dtype=np.float64)
-        seeded[0] = self._gain_db
+        # Plus one sample of release. The carried gain is where the LAST block
+        # ended, and the recurrence says the first sample of this one is
+        # min(target[0], previous + rise): the running minimum below indexes
+        # the carry at k = -1, so its ramp term is rise, not nought. Without
+        # it every block boundary quietly ate one sample of recovery.
+        seeded[0] = self._gain_db + rise
         seeded[1:] = target_db - ramp
         gain_db = ramp + np.minimum.accumulate(seeded)[1:]
         gain_db = np.minimum(gain_db, 0.0)
@@ -232,11 +237,15 @@ class MicChain:
         #: does not report it and a number you can hear is worth having.
         self.gain_reduction_db = 0.0
         self._board = None
-        #: Held while the chain is used and while it is rebuilt, so the two
-        #: never overlap. Rebuilding hands pedalboard a fresh set of objects,
-        #: and handing a plugin to a new Pedalboard calls into that plugin at
-        #: the same moment the audio thread may be inside its processBlock.
-        #: That is a crash in C++, not an exception in Python, and it is what
+        #: Held while the chain is used, while it is rebuilt, and while any
+        #: plugin parameter is read or written. That last one is the real
+        #: hazard and it was missed the first time round: constructing a
+        #: Pedalboard only stores pointers and its own processing takes a
+        #: mutex per plugin, but the parameter bindings take nothing, and
+        #: reading a plugin's parameters the first time sweeps a thousand
+        #: values per knob, writing and restoring each. A thousand
+        #: unsynchronised writes into a plugin the audio thread is inside is
+        #: a crash in C++ rather than an exception in Python, and it is what
         #: Tony saw as "it almost crashed when I was moving around and
         #: loading vsts".
         #:
@@ -424,16 +433,30 @@ class MicChain:
             return block
 
     def reset(self):
-        """Forget every envelope and filter, for a fresh start."""
-        if self._board is not None:
-            try:
-                self._board.reset()
-            except Exception:
-                pass
+        """Forget every envelope and filter, for a fresh start.
+
+        Under the lock. A VST3's reset() runs its own code, and the microphone
+        stream is already live by the time this is called: _try_open starts the
+        capture callback and only then resets the rings. Resetting a plugin
+        while it is processing is the same crash by another door.
+        """
+        with self._lock:
+            if self._board is not None:
+                try:
+                    self._board.reset()
+                except Exception:
+                    pass
         self._ceiling.reset()
         self.gain_reduction_db = 0.0
 
     # ---------------------------------------------------------- the knobs --
+    def plugin_parameters(self):
+        """The plugin's knobs, guarded by this chain's lock."""
+        from . import vst
+        with self._lock:
+            plugin = self.plugin
+        return vst.parameters(plugin, self._lock) if plugin is not None else []
+
     def parameters(self, group=None):
         """Every adjustable value, described well enough to read aloud."""
         s = self.settings

@@ -969,5 +969,100 @@ frame.Destroy()
 app.Yield()
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+print()
+print("Two sound cards that do not run at the same rate")
+
+# A bank sent to a card that will only open at 44100, while the main output
+# runs at 48000. Both write a minute of audio.
+bus = AirBus(48000)
+drained = []
+overflowed_at = None
+for second in range(60):
+    for _ in range(48000 // 512):
+        bus.write("main", np.zeros((512, CHANNELS), dtype=np.float32), 48000)
+    for _ in range(44100 // 512):
+        bus.write("second", np.full((512, CHANNELS), 0.1, dtype=np.float32),
+                  44100)
+    # The encoder drains at the bus rate, the way the pump does.
+    want = bus.available()
+    if want:
+        drained.append(bus.read(want))
+    if bus.dropped and overflowed_at is None:
+        overflowed_at = second
+
+check("a minute of two cards at different rates drops nothing",
+      bus.dropped == 0, "first drop in second %s" % overflowed_at)
+total = sum(len(piece) for piece in drained)
+check("and a minute in is a minute out", abs(total - 48000 * 60) < 48000,
+      "%d frames of %d" % (total, 48000 * 60))
+mixed = np.concatenate(drained) if drained else np.zeros((1, CHANNELS))
+check("with the slower card actually in the mix, not gaps",
+      float(np.abs(mixed).min()) > 0.05,
+      "quietest sample %.3f" % float(np.abs(mixed).min()))
+
+# And the pitch, because the point is that it is converted, not just counted.
+# A tone from the 44100 card has to come out at the pitch it went in.
+bus = AirBus(48000)
+pieces = []
+position = 0
+while position < 44100 * 2:
+    moment = np.arange(position, position + 512) / 44100.0
+    wave = (0.5 * np.sin(2 * np.pi * 1000 * moment)).astype(np.float32)
+    bus.write("odd", np.repeat(wave[:, None], CHANNELS, axis=1), 44100)
+    position += 512
+    got = bus.available()
+    if got:
+        pieces.append(bus.read(got))
+heard = np.concatenate(pieces)[:, 0].astype(np.float64)
+window = heard * np.hanning(len(heard))
+loudest = int(np.argmax(np.abs(np.fft.rfft(window))))
+hz = np.fft.rfftfreq(len(heard), 1.0 / 48000)[loudest]
+check("and at the pitch it was played at, not four per cent sharp",
+      abs(hz - 1000.0) < 5.0, "%.1f Hz, sent 1000" % hz)
+
+# One card at the bus rate keeps the straight path, with no resampler at all.
+plain = AirBus(48000)
+plain.write("main", np.ones((512, CHANNELS), dtype=np.float32), 48000)
+check("a card already at the bus rate is not resampled",
+      not plain._rates and plain.available() == 512)
+
+print()
+print("An encoder is not left behind when the server refuses")
+
+closed = []
+real_close = Encoder.close
+
+
+def counting_close(self):
+    closed.append(self)
+    return real_close(self)
+
+
+class Refuses(streamout.IcecastSink):
+    def connect(self):
+        raise streamout.SinkError("no")
+
+
+streamout.Encoder.close = counting_close
+streamout.SERVERS["refuses"] = ("Refuses", Refuses)
+try:
+    streamer = Streamer(AirBus(48000), {"server": "refuses", "host": "x",
+                                        "port": 8000, "format": "mp3",
+                                        "bitrate": 128})
+    for _ in range(20):
+        try:
+            streamer._build()
+        except Exception:
+            pass
+    check("twenty refused connections close twenty encoders",
+          len(closed) == 20, len(closed))
+    check("and none of them is left as the live one",
+          streamer._encoder is None)
+finally:
+    streamout.Encoder.close = real_close
+    del streamout.SERVERS["refuses"]
+
+
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)
