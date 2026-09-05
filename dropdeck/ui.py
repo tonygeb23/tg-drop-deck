@@ -1828,12 +1828,21 @@ class DropDeckFrame(wx.Frame):
         self.stop_all()
 
     def stop_all(self):
+        # Asked BEFORE anything is stopped. The playlist is stopped first, so
+        # by the time the mixer counted what it had silenced the playlist's
+        # voices were already gone, and stopping a song mid show announced
+        # "Nothing was playing".
+        #
+        # Tony, 5 September 2026: "it says 'nothing was playing' when I hit
+        # escape 3 times, and yes, something was playing. lol."
+        was_playing = bool(self.player.playing)
         # The playlist is part of "everything". Stopping its voices without
         # telling the player would leave it convinced it was still on air.
         self.player.stop(fade_out=None, quiet=True)
         self._player_timer.Stop()
         count = self.mixer.stop_all()
-        self.announce_help("Everything stopped" if count else "Nothing was playing")
+        self.announce_help("Stopping playback" if (count or was_playing)
+                           else "Nothing was playing")
 
     # -------------------------------------------------------------- volumes --
     def _nudge(self, which, direction):

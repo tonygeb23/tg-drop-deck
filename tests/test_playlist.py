@@ -775,17 +775,31 @@ panel._on_key(ctrl_a)
 check("Ctrl+Shift+A is left alone too, it belongs to the stats window",
       ctrl_a.skipped)
 
-# Shift and Enter segues: what is on air fades out under the one you chose.
+# Shift and Enter segues. Through the CHAR HOOK, because that is the only
+# place a list view is given Return: EVT_KEY_DOWN never sees it, and Windows
+# raises ITEM_ACTIVATED only for a plain one. This check used to go through
+# _on_key, where it passed while the app did nothing at all, which is how the
+# key shipped broken. tools/check_keyboard.py presses it for real.
 frame.play_playlist(0)
 was = frame.player.current.display_name
 panel.select(2)
 shift_enter = _Key(wx.WXK_RETURN, shift=True)
-panel._on_key(shift_enter)
+panel._on_char_hook(shift_enter)
 check("Shift+Enter segues into the selected track",
       frame.player.playing and frame.player.current.display_name != was,
       frame.player.current.display_name)
 check("and the key is not passed on to become a plain Enter",
       not shift_enter.skipped)
+# A plain Enter has to go straight past, or it would stop playing from the row.
+plain_enter = _Key(wx.WXK_RETURN)
+panel._on_char_hook(plain_enter)
+check("a plain Enter is left alone, so it still plays from the row",
+      plain_enter.skipped)
+# And the key handler must NOT claim it, or it would be handled twice.
+through = _Key(wx.WXK_RETURN, shift=True)
+panel._on_key(through)
+check("the key handler leaves Return alone, because it never gets one anyway",
+      through.skipped)
 frame.stop_playlist(quiet=True)
 
 # ---------------------------------------------------------------------------

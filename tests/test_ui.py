@@ -145,7 +145,9 @@ def main():
     check("playing announces the name", "test beep" in frame.speaker.last_message,
           frame.speaker.last_message)
     frame.stop_all()
-    check("stop all announces", frame.speaker.last_message == "Everything stopped",
+    # "Everything stopped" until 3.1. It was said whether or not anything had
+    # been, and a song playing on its own got "Nothing was playing" instead.
+    check("stop all announces", frame.speaker.last_message == "Stopping playback",
           frame.speaker.last_message)
     frame.stop_all()
     check("stop all with nothing playing says so",

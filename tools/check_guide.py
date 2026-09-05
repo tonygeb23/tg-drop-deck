@@ -176,15 +176,19 @@ def main():
 
     panel = frame.playlist_panel
     unclaimed = []
-    for name, press in (
-            ("Alt+Up", Press(wx.WXK_UP, alt=True)),
-            ("Alt+Down", Press(wx.WXK_DOWN, alt=True)),
-            ("Alt+Home", Press(wx.WXK_HOME, alt=True)),
-            ("Alt+End", Press(wx.WXK_END, alt=True)),
-            ("Shift+Enter", Press(wx.WXK_RETURN, shift=True)),
-            ("Shift+A", Press(ord("A"), shift=True)),
-            ("Shift+U", Press(ord("U"), shift=True))):
-        panel._on_key(press)
+    # Shift+Enter goes through the char hook and the rest through the key
+    # handler, because a list view is never given Return through the second.
+    # Asking the wrong door is exactly how Shift+Enter shipped broken.
+    for name, press, door in (
+            ("Alt+Up", Press(wx.WXK_UP, alt=True), panel._on_key),
+            ("Alt+Down", Press(wx.WXK_DOWN, alt=True), panel._on_key),
+            ("Alt+Home", Press(wx.WXK_HOME, alt=True), panel._on_key),
+            ("Alt+End", Press(wx.WXK_END, alt=True), panel._on_key),
+            ("Shift+Enter", Press(wx.WXK_RETURN, shift=True),
+             panel._on_char_hook),
+            ("Shift+A", Press(ord("A"), shift=True), panel._on_key),
+            ("Shift+U", Press(ord("U"), shift=True), panel._on_key)):
+        door(press)
         if press.skipped:
             unclaimed.append(name)
     check("and the running order really takes the keys it is excused for",

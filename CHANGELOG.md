@@ -9,6 +9,11 @@ after a couple of seconds. The Stop everything button still does it in one,
 because pressing a button called Stop everything is not something you do by
 mistake.
 
+**Stopping says it is stopping.** The playlist was stopped before the mixer
+counted what it had silenced, so stopping a song that was playing on its own
+announced "Nothing was playing". It says "Stopping playback" now, and says
+nothing was playing only when nothing was.
+
 **Alt+Home and Alt+End** send the track you are on to the top of the running
 order or to the end. Alt+Up thirty times was not a way to move a song, and
 counting the presses to know where you had got to was worse.

@@ -181,6 +181,11 @@ class PlaylistPanel(wx.Panel):
         self.list.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_ticked)
         self.list.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_ticked)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        # Return does not reach EVT_KEY_DOWN on a list view, and Windows only
+        # raises ITEM_ACTIVATED for a PLAIN Return, so Shift+Enter is
+        # invisible to both. The char hook sees keys before any control eats
+        # them, which is the only place it can be caught.
+        self.list.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self.list.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
         self.list.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
         self.crossfade.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_crossfade)
@@ -559,14 +564,11 @@ class PlaylistPanel(wx.Panel):
                                         wx.WXK_NUMPAD_HOME, wx.WXK_NUMPAD_END):
             self.move_to_end(code in (wx.WXK_HOME, wx.WXK_NUMPAD_HOME))
             return
-        # Shift and Enter: bring this one up and take what is on air down
-        # under it, at the crossfade length. The same thing the right click
-        # menu calls Segue, which until now had no key.
-        if (code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
-                and event.ShiftDown() and not event.ControlDown()
-                and not event.AltDown()):
-            self.segue_to_selected()
-            return
+        # Shift and Enter is NOT here. A list view never gets Return through
+        # EVT_KEY_DOWN at all, which is the same thing that stopped plain
+        # Enter working two releases ago, and putting it here made it look
+        # right in a test that called this method by hand while doing nothing
+        # whatsoever to the app. See _on_char_hook.
         # Shift with A or U ticks or unticks the lot. Plain letters are left
         # alone, because plain letters are how you find a track by typing its
         # name.
@@ -660,6 +662,24 @@ class PlaylistPanel(wx.Panel):
             self.frame.announce("There is nothing in the running order yet")
             return
         self.frame.set_track_crossfade(index)
+
+    def _on_char_hook(self, event):
+        """Shift and Enter: cross into the track the cursor is on.
+
+        Tony, 5 September 2026: "shift enter did not work. currently playing
+        one song that's checked along with another checked track, didn't fade
+        out and cross fade."
+
+        Only Shift+Enter is taken here. Plain Enter is left alone so it goes
+        on raising ITEM_ACTIVATED, which is what plays from the row, and
+        anything with Ctrl belongs to the accelerator map.
+        """
+        if (event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+                and event.ShiftDown() and not event.ControlDown()
+                and not event.AltDown()):
+            self.segue_to_selected()
+            return
+        event.Skip()
 
     def segue_to_selected(self):
         """Bring this track up and take the one on air down under it."""

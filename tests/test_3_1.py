@@ -196,6 +196,47 @@ check("the menu item advertises no single press of its own",
       item is not None and chr(9) not in item.GetItemLabel(),
       repr(item.GetItemLabel()) if item else None)
 
+# What it SAYS when it stops. The playlist is stopped before the mixer counts
+# what it silenced, so a song playing on its own announced "Nothing was
+# playing". Tony, 5 September 2026: "it says 'nothing was playing' when I hit
+# escape 3 times, and yes, something was playing. lol."
+import numpy as np
+import soundfile as sf
+
+songs = []
+folder = tempfile.mkdtemp()
+for name in ("01 One.wav", "02 Two.wav"):
+    where = os.path.join(folder, name)
+    moment = np.arange(48000 * 5) / 48000.0
+    sf.write(where,
+             np.tile((0.2 * np.sin(2 * np.pi * 440 * moment))[:, None], (1, 2)),
+             48000)
+    songs.append(where)
+frame.playlist_panel.add_paths(songs)
+app.Yield()
+
+said = []
+real_help = frame.announce_help
+frame.announce_help = lambda text, **kw: said.append(text)
+try:
+    frame.play_playlist(0)
+    for _ in range(40):
+        app.Yield()
+    playing = frame.player.playing
+    said.clear()
+    frame.stop_all()
+    check("a playlist track really was playing, so the check means something",
+          playing)
+    check("stopping a song says it is stopping, not that nothing was on",
+          said == ["Stopping playback"], said)
+
+    said.clear()
+    frame.stop_all()
+    check("and with nothing on it still says so", said == ["Nothing was playing"],
+          said)
+finally:
+    frame.announce_help = real_help
+
 stats_keys = [e for e in entries if e.GetKeyCode() == ord("A")
               and e.GetFlags() == (wx.ACCEL_CTRL | wx.ACCEL_SHIFT)]
 check("Ctrl+Shift+A opens who is listening",

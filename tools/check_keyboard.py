@@ -172,7 +172,7 @@ def run(frame, songs, state):
     frame.Bind(wx.EVT_CHAR_HOOK,
                lambda e: (arrived.append(e.GetKeyCode()), e.Skip()))
 
-    def press(key, where=None):
+    def press(key, where=None, mods=0):
         """Send a key, and be sure it went where the check thinks it did.
 
         ``where`` is the control the check is about. A synthesised keystroke
@@ -196,8 +196,23 @@ def run(frame, songs, state):
                 if not _within(wx.Window.FindFocus(), where):
                     continue
             before = len(arrived)
+            # Anything an earlier press left held down turns this key into a
+            # different key: a stray Shift makes 1 into Shift+1, which is a
+            # different pad, and D into Shift+D.
+            for stuck in (wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT):
+                if stuck != mods:
+                    sim.KeyUp(stuck)
+            # Modifiers are held down around the key rather than passed to
+            # Char, because Char with modifiers is not reliable here: the same
+            # call delivered Shift+A on one run and nothing on the next.
+            if mods:
+                sim.KeyDown(mods)
+                pump(90)
             sim.Char(key)
-            pump(320)
+            if mods:
+                pump(90)
+                sim.KeyUp(mods)
+            pump(360)
             if len(arrived) > before:
                 # And it has to have still been ours when it landed, or what
                 # follows is about somebody else's window.
@@ -298,6 +313,79 @@ def run(frame, songs, state):
     pump(200)
 
     # -----------------------------------------------------------------------
+    print("The keys the running order owns, pressed rather than called")
+
+    # Every one of these passed a test that called the handler by hand while
+    # doing nothing at all to the app. Tony, 5 September 2026: "shift enter
+    # did not work." It never could: a list view is not given Return through
+    # EVT_KEY_DOWN, and Windows raises ITEM_ACTIVATED only for a PLAIN
+    # Return, so the one place Shift+Enter can be seen is the char hook. That
+    # is the whole reason this section exists: pressed, not called.
+    focus_on(panel.list)
+    for track in frame.board.playlist:
+        track.enabled = True
+    panel.refresh()
+    panel.select(0)
+    pump(200)
+
+    press(ord("U"), panel.list, wx.WXK_SHIFT)
+    check("Shift+U unticks every track",
+          not any(t.enabled for t in frame.board.playlist),
+          [t.enabled for t in frame.board.playlist])
+    press(ord("A"), panel.list, wx.WXK_SHIFT)
+    check("Shift+A ticks them all again",
+          all(t.enabled for t in frame.board.playlist),
+          [t.enabled for t in frame.board.playlist])
+
+    order = lambda: [t.display_name for t in frame.board.playlist]
+
+    def chosen():
+        """The track the cursor is actually on, rather than the one meant."""
+        index = panel.selection()
+        return order()[index] if index is not None else None
+
+    panel.select(2)
+    pump(250)
+    moving = chosen()
+    was = order()
+    press(wx.WXK_HOME, panel.list, wx.WXK_ALT)
+    check("Alt+Home sends the track you are on to the top",
+          order()[0] == moving, "%r: %s became %s" % (moving, was, order()))
+    panel.select(0)
+    pump(250)
+    moving = chosen()
+    press(wx.WXK_END, panel.list, wx.WXK_ALT)
+    check("Alt+End sends it to the end", order()[-1] == moving,
+          "%r: %s" % (moving, order()))
+    # Put the running order back, because the checks below are about other
+    # things and a shuffled order made two of them fail for no reason at all.
+    frame.board.playlist.tracks.sort(key=lambda t: t.display_name)
+    panel.refresh()
+    pump(200)
+
+    # And the one that was actually broken.
+    frame.stop_playlist(quiet=True)
+    pump(200)
+    focus_on(panel.list)
+    panel.select(0)
+    pump(200)
+    press(wx.WXK_RETURN)
+    playing = frame.player.current
+    started = playing.display_name if playing else None
+    target = 2 if len(frame.board.playlist) > 2 else 1
+    wanted = order()[target]
+    panel.select(target)
+    pump(250)
+    press(wx.WXK_RETURN, panel.list, wx.WXK_SHIFT)
+    now = frame.player.current
+    check("Shift+Enter crosses into the track the cursor is on",
+          now is not None and now.display_name == wanted,
+          "was %r, wanted %r, got %r"
+          % (started, wanted, now.display_name if now else None))
+    frame.stop_playlist(quiet=True)
+    pump(200)
+
+    # -----------------------------------------------------------------------
     print("Space, which has to tick and NOT play")
 
     focus_on(panel.list)
@@ -321,14 +409,30 @@ def run(frame, songs, state):
     focus_on(panel.list)
     panel.select(0)
     pump(250)
+    # Long enough for the list's own type ahead buffer to expire. Windows
+    # keeps the last second or so of typing and searches for the whole run,
+    # so a D pressed straight after other letters looks for "...d" and lands
+    # nowhere near Delta.
+    pump(1600)
+    # Where Delta actually is, rather than where it was put. It is the only
+    # row whose title starts with a letter; the rest start with digits, which
+    # belong to the pads and always will.
+    delta = next((i for i, t in enumerate(frame.board.playlist)
+                  if t.display_name.lower().startswith("d")), None)
+    panel.select(0)
+    pump(300)
     started_on = panel.list.GetFocusedItem()
-    press(ord("D"), panel.list)   # Delta, the one row starting with a letter
+    press(ord("D"), panel.list)
     landed = panel.list.GetFocusedItem()
     # It has to MOVE. This used to ask whether the cursor was on a row at all,
     # which it already was, so it passed whether or not typing a character did
     # anything: exactly the thing it exists to prove.
     check("typing a title's first letter moves the cursor to that row",
-          started_on == 0 and landed == 3, "%s then %s" % (started_on, landed))
+          delta is not None and started_on == 0 and landed == delta,
+          "%s then %s, Delta is at %s, rows are %s"
+          % (started_on, landed, delta,
+             [panel.list.GetItemText(r, 0)
+              for r in range(panel.list.GetItemCount())]))
     check("and the first cell of a row is its title, with no number in front",
           panel.cell(1, 0) == "02 Bravo", panel.cell(1, 0))
 
