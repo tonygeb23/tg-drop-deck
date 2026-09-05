@@ -245,14 +245,24 @@ def publish():
 
     print("\nUploading the installer")
     run(["scp", installer, "%s:%s/" % (SERVER, REMOTE_DOWNLOADS)])
+    # And the zip, which the manifest names for portable copies. It was not
+    # uploaded here for one release: the manifest pointed at a download that
+    # did not exist, so every portable copy that checked for updates got a
+    # 404 and was told the file had been thrown away. That is the same fault
+    # HarmonicaPlayer reported, wearing a different hat.
+    portable = zip_path()
+    print("Uploading the portable zip")
+    run(["scp", portable, "%s:%s/" % (SERVER, REMOTE_DOWNLOADS)])
     print("Uploading the manifest")
     # Manifest last, always. It is what points clients at the installer, so
     # publishing it first would offer a download that is not there yet.
     run(["scp", manifest, "%s:%s/" % (SERVER, REMOTE_UPDATES)])
     run(["ssh", SERVER,
-         "chmod 644 %s/%s %s/%s" % (REMOTE_DOWNLOADS,
-                                    os.path.basename(installer),
-                                    REMOTE_UPDATES, MANIFEST_NAME)])
+         "chmod 644 %s/%s %s/%s %s/%s" % (REMOTE_DOWNLOADS,
+                                          os.path.basename(installer),
+                                          REMOTE_DOWNLOADS,
+                                          os.path.basename(portable),
+                                          REMOTE_UPDATES, MANIFEST_NAME)])
     print("\nPublished. Verifying live...")
     verify()
 
@@ -349,7 +359,23 @@ def verify():
     size = os.path.getsize(path)
     os.remove(path)
     print("  %s  (%.1f MB, hash matched)" % (message, size / (1024.0 * 1024.0)))
-    print("\nLive feed verified.")
+
+    # The same again as a PORTABLE copy, which is offered the zip instead.
+    # Checked here because a manifest naming a zip nobody uploaded looks
+    # exactly like a successful release from this end, and like a broken
+    # update to everybody running from one.
+    if not appupdate.zip_for(info):
+        raise SystemExit("FAILED: the manifest names no portable download, "
+                         "so a copy running from the zip would be handed an "
+                         "installer.")
+    print("Downloading the portable zip it names and checking the hash")
+    path, message = appupdate.download(info, portable=True)
+    if not path:
+        raise SystemExit("FAILED, for every portable copy: %s" % message)
+    size = os.path.getsize(path)
+    os.remove(path)
+    print("  %s  (%.1f MB, hash matched)" % (message, size / (1024.0 * 1024.0)))
+    print("\nLive feed verified, for both kinds of copy.")
 
 
 if __name__ == "__main__":
