@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -455,6 +455,39 @@ A BEEP BEFORE A TRACK ENDS
   It is off until you turn it on, and a track shorter than the warning does
   not get one.
 
+RECORDING THE SHOW
+  Ctrl+R starts and stops it. It records the same mix that goes on air: every
+  sound card, the running order, and your microphone if that is set to go out.
+  The cue before a track ends and previews are never in it, because those are
+  for you rather than for the show.
+  It does NOT need you to be on air. Recording and streaming can run together
+  and neither takes audio from the other.
+  Files go to Documents, in a folder called TG Drop Deck, named Drop Deck
+  Stream 001 and counting up, so nothing you have recorded is written over.
+  Preferences, Recording tab, sets WAV, MP3, AAC or Ogg Opus, the bitrate and
+  the folder. WAV if it is going into an editor; MP3 for everything else.
+  Closing the app finishes the file first, so a recording always opens.
+
+OTHER THINGS ON THE AIR
+  On air menu, Audio sources. Anything Windows offers as an input can go out
+  with you: a second microphone, a hardware mixer, or another program.
+  For another program you need a virtual audio cable, which is a free driver
+  that looks like a speaker to one program and a microphone to another. Point
+  TeamTalk, Chrome or a game at the cable in ITS OWN settings, then choose the
+  cable here. That is the whole trick, and it works for anything.
+  Each source has a name, a gain, which channel to take, whether it goes on
+  the air, and whether you hear it yourself. Leave "hear it" off when the
+  sound already comes out of your speakers from the program itself, or you
+  will hear it twice.
+  Sources are never ducked and never go through the voice processing. Both of
+  those belong to your microphone.
+
+FEEDING OBS, OR ANY OTHER PROGRAM
+  The other direction, and it needs nothing new. Preferences, Output, sends
+  any bank to a sound card of its own, so point one at a virtual audio cable
+  and add that cable in OBS as an audio input. Twitch and YouTube then get the
+  soundboard along with everything else OBS is capturing.
+
 SAVING A RUNNING ORDER
   Playlist menu, Save the running order, writes it as an M3U playlist file.
   Open a running order loads one back in place of what is there.
@@ -533,6 +566,8 @@ PUTTING THE SHOW ON THE INTERNET
   Ctrl+Shift+B              What the stream is doing right now
   Ctrl+Shift+A              Who is listening, and what the server says is
                             playing. Works off air too
+  On air, Audio sources     Other inputs to put on the air besides your
+                            microphone
 
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come
@@ -579,10 +614,16 @@ GLOBAL
   Ctrl+D                    Ducking on or off
   Ctrl+L                    What is playing right now
   Ctrl+G                    Global hotkeys on or off
-  Escape three times        Stop everything, with a short fade. Three,
-                            because one key that silences the show is one key
-                            away from silencing it by accident. The Stop
-                            everything button does it in one press
+  Ctrl+Space                Stop the sound you started last, and leave
+                            everything else playing. Press it again for the
+                            one before that
+  Escape twice              Stop everything. More than one press because a
+                            single key that silences a live show is a single
+                            key away from silencing it by accident; how many,
+                            and whether it fades or cuts, are in Preferences,
+                            Sounds and beds. The Stop everything button does
+                            it in one press
+  Ctrl+R                    Start and stop recording
   F1                        This help
   Help, User guide          The full guide on the web, in plain English
   Ctrl+Tab                  Next bank

@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.2.0, 5 September 2026
+
+**Record the show.** `Ctrl+R` starts and stops it. It records the same mix that
+goes on air, in WAV, MP3, AAC or Ogg Opus, to Documents as `Drop Deck Stream
+001` and counting up, so nothing you have already recorded is written over. It
+does not need you to be on air, and recording and streaming can run together
+without either taking audio from the other. Closing the app finishes the file
+first, so a recording always opens.
+
+**Other things on the air.** On air menu, Audio sources. Anything Windows
+offers as an input can go out with you: a second microphone for a co-host, a
+hardware mixer, or another program entirely.
+
+For another program you need a virtual audio cable, which is a free driver
+that looks like a speaker to one program and a microphone to another. Point
+TeamTalk, Chrome or a game at the cable in its own settings, then choose the
+cable here. That is the whole trick, and it works for anything without Drop
+Deck needing to know what it is.
+
+Each source has a name, a gain, which channel to take, whether it goes on the
+air and whether you hear it yourself. Sources are never ducked and never go
+through the voice processing, because both of those belong to your microphone.
+
+**Stop one sound without stopping the show.** `Ctrl+Space` stops the sound you
+started last and leaves everything else playing, and pressing it again unwinds
+the one before that. It says which, by name.
+
+Until now there was no way to stop a single sound at all: only music beds
+toggled off, so the panic key was the only option for something that was not a
+panic. Chris Cooke found that, having never used a soundboard before: "I have
+a rather long sound file that I may only wanna play a little bit of."
+
+A slot can also be told that **pressing its key again stops it**, in its
+properties. Off by default, because effects and drops piling up is what a
+soundboard is for and a laugh landing on top of a sting is the point.
+
+**How many presses of Escape is up to you.** One to four, in Preferences,
+Sounds and beds, and it defaults to two now rather than three. You can also
+have it cut instantly instead of fading, which is what you want if you are
+riding a mixer or a fader in a DAW.
+
+**Feeding OBS.** Nothing new was needed and the guide now says how: send a
+bank to a virtual cable in Preferences, Output, and add that cable in OBS as
+an Audio Input Capture. Allen Sale asked.
+
+**The user guide has a contents**, grouped by what you are actually doing:
+getting going, running a show, your voice, on air, and everything else.
+
+
 ## 3.1.0, 5 September 2026
 
 **Portable copies replace themselves now.** A portable copy is meant to be
