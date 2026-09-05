@@ -36,7 +36,8 @@ from dropdeck import streamstats
 from dropdeck.board import Board
 from dropdeck.dialogs import SettingsDialog, StreamStatsDialog
 from dropdeck.engine import cue_tone
-from dropdeck.ui import DropDeckFrame
+from dropdeck.ui import (ID_STOP_ALL, ID_STOP_ALL_KEY,
+                         ID_STREAM_STATS, DropDeckFrame)
 
 CHECKS = []
 
@@ -176,6 +177,30 @@ check("the button says it takes three presses",
       stop_button is not None and "three" in stop_button.GetLabel(),
       stop_button.GetLabel() if stop_button else None)
 frame.stop_all = real_stop
+
+# The wiring, not just the handler. A counted Escape that never reaches the
+# counter is a stop key that does nothing at all.
+entries = frame._build_accelerators()
+escapes = [e for e in entries if e.GetKeyCode() == wx.WXK_ESCAPE]
+check("Escape is in the keyboard map exactly once", len(escapes) == 1,
+      len(escapes))
+check("and it goes to the counter rather than straight to stop",
+      escapes and escapes[0].GetCommand() == ID_STOP_ALL_KEY)
+check("with no modifier, so it is the Escape people press",
+      escapes and escapes[0].GetFlags() == wx.ACCEL_NORMAL)
+check("and it still works while a text box has focus",
+      any(e.GetKeyCode() == wx.WXK_ESCAPE
+          for e in frame._typing_accelerators))
+item = frame.GetMenuBar().FindItemById(ID_STOP_ALL)
+check("the menu item advertises no single press of its own",
+      item is not None and chr(9) not in item.GetItemLabel(),
+      repr(item.GetItemLabel()) if item else None)
+
+stats_keys = [e for e in entries if e.GetKeyCode() == ord("A")
+              and e.GetFlags() == (wx.ACCEL_CTRL | wx.ACCEL_SHIFT)]
+check("Ctrl+Shift+A opens who is listening",
+      len(stats_keys) == 1 and stats_keys[0].GetCommand() == ID_STREAM_STATS,
+      len(stats_keys))
 
 
 print()
