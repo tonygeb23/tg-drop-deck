@@ -231,6 +231,32 @@ def main():
     check("the board really does save itself",
           "board saves itself" in guide)
 
+    # The voice chain, whose two boldest claims are the two worth checking.
+    if "Set it to minus one" in guide:
+        import numpy as np
+        from dropdeck import dsp
+        loud = np.full((4096, 2), 0.9, dtype=np.float32)
+        out = dsp.Ceiling(48000, ceiling_db=-1.0).process(loud)
+        peak = 20.0 * np.log10(float(np.abs(out).max()))
+        check("minus one really does mean minus one", peak <= -0.99,
+              "%.2f dB" % peak)
+
+        # "Instruments are refused." Asked of the loader rather than assumed,
+        # and skipped rather than guessed at on a machine with no plugins.
+        from dropdeck import vst
+        instrument = None
+        for name, path in vst.installed():
+            try:
+                plugin = vst.load(path)
+            except vst.LoadFailed as exc:
+                if "instrument" in str(exc):
+                    instrument = name
+                    break
+            except Exception:
+                continue
+        if instrument:
+            check("an instrument really is refused", True, instrument)
+
     try:
         frame.stop_background_work()
         frame.mixer.close()

@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.0.0, 4 September 2026
+
+**Your voice, properly processed.** A gate, a high pass filter, a three band
+equaliser, a compressor and a true peak limiter, on the microphone, in that
+order. Every setting is a row in a list: up and down to choose one, left and
+right to change it, and it says the new value as you go. Hold `Shift` for a
+bigger step. Nothing opens a window you cannot read.
+
+The limiter is a real ceiling rather than a loudness maximiser. Set it to
+minus one and nothing leaves at minus nought point nine, which is the promise
+a broadcast limiter has to keep. It adds no delay at all, because a few
+milliseconds between your mouth and your headphones sounds like a barrel.
+
+**VST3 effects, read out loud.** Load a vocal effect and its own knobs appear
+in the same list, in plain words with real units. Presets save and open. The
+plugin's own window is never opened, so a plugin no screen reader can read
+becomes a list any screen reader can. Instruments are refused, because an
+instrument in a voice chain replaces the voice rather than changing it.
+
+Your plugin and its settings are remembered with the board.
+
+**Preferences opens on the tab you asked for and Cancel really cancels.**
+Everything on the Voice tab changes the microphone you are listening to while
+you set it, which is the point. Cancel now puts all of it back.
+
+**A board brings its microphone with it.** Opening a board applies its gain,
+its channel and its whole voice chain. It used to leave the microphone on the
+last board's settings and then write those back over the new one.
+
+**The portable copy updates itself.** Checking for updates from the zip used
+to download the installer, install a second copy somewhere else and leave a
+desktop shortcut pointing at that one, while the copy you were running stayed
+on the old version and said nothing. It now downloads a zip, unpacks it in a
+folder beside the one you are running and tells you where. HarmonicaPlayer
+found this.
+
+**Sound cards that do not run at the same speed.** A bank sent to a card that
+will only open at 44100, beside a main output at 48000, was being summed as
+though they matched: the stream started dropping audio fourteen seconds in.
+Each card is converted properly now.
+
+**Changing an output while on air no longer takes you off it.** The stream
+went silent and said "reconnecting" forever, and only coming off air and back
+fixed it. A sound card that stops responding no longer stops the broadcast
+either, and one sound that will not play can no longer silence a whole card
+for the rest of the show.
+
+**Smaller things.** Enter on Cancel in the hotkey window did what OK does, and
+`Space` did nothing on any button. A station saved in Preferences was gone by
+the next launch. A board that could not be saved on the way out was lost
+without a word; it now asks. A sound that will not decode says so instead of
+quietly stopping the preview. `Page up` and `Page down` belong to the settings
+list again.
+
+Thanks to Jerry, Shane and Brian, who all found something in this one.
+
+
 ## 2.9.1, 4 September 2026
 
 **Fields say what they are.** Tabbing the Streaming tab with NVDA announced
