@@ -51,6 +51,12 @@ ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
 #: Who is listening. Ctrl+Shift+A for audience, next to the pair above.
 ID_STREAM_STATS = wx.ID_HIGHEST + 404
+#: Recording, which is its own thing and not a kind of streaming: you record
+#: a show whether or not anybody is listening to it live.
+ID_RECORD = wx.ID_HIGHEST + 405
+ID_RECORD_FOLDER = wx.ID_HIGHEST + 406
+#: Stop the sound you started last, without stopping the show.
+ID_STOP_LATEST = wx.ID_HIGHEST + 407
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
 #: anyone has, and a fixed block keeps them clear of every other id.
@@ -955,6 +961,10 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_SEARCH, "&Search sounds...\tCtrl+F", "Find a sound by name")
         sounds.Append(ID_WHATS_PLAYING, "&What is playing\tCtrl+L")
         sounds.Append(ID_DUCK, "&Ducking on or off\tCtrl+D")
+        sounds.Append(ID_STOP_LATEST, "Stop the las&t sound" + chr(9)
+                      + "Ctrl+Space",
+                      "Stops the most recent sound and leaves everything else "
+                      "playing. Press it again for the one before that")
         sounds.Append(ID_STOP_ALL, "Stop &everything",
                       "Stops every sound, bed and the running order. "
                       "Escape three times does it from the keyboard")
@@ -1062,6 +1072,12 @@ class DropDeckFrame(wx.Frame):
                    "How many people are on the stream, and what the server "
                    "thinks is playing")
         air.AppendSeparator()
+        self.record_item = air.Append(
+            ID_RECORD, "Start &recording\tCtrl+R",
+            "Record the show to a file. It does not need you to be on air")
+        air.Append(ID_RECORD_FOLDER, "Open the recordings &folder",
+                   "Where your recordings are saved")
+        air.AppendSeparator()
         # Switching station without going through Preferences, because on a
         # show you want it on a menu, not four keystrokes into a dialog.
         self.station_menu = wx.Menu()
@@ -1157,6 +1173,9 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.say_stream_status(),
                   id=ID_STREAM_STATUS)
         self.Bind(wx.EVT_MENU, self._on_stream_stats, id=ID_STREAM_STATS)
+        self.Bind(wx.EVT_MENU, lambda _e: self.toggle_recording(), id=ID_RECORD)
+        self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
+                  id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
                   id=ID_STREAM_SETUP)
@@ -1193,6 +1212,8 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_all(), id=ID_STOP_ALL)
         self.Bind(wx.EVT_MENU, lambda _e: self._escape_pressed(),
                   id=ID_STOP_ALL_KEY)
+        self.Bind(wx.EVT_MENU, lambda _e: self.stop_latest(),
+                  id=ID_STOP_LATEST)
         self.Bind(wx.EVT_MENU, self._on_shortcuts, id=ID_SHORTCUTS)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, self._on_user_guide, id=ID_USER_GUIDE)
@@ -1249,6 +1270,8 @@ class DropDeckFrame(wx.Frame):
                                 ID_STREAM_STATUS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"),
                                 ID_STREAM_STATS),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("R"), ID_RECORD),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_SPACE, ID_STOP_LATEST),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
@@ -1712,7 +1735,8 @@ class DropDeckFrame(wx.Frame):
             f"Playlist {percent(self.mixer.playlist_gain)} (F7, F8)   "
             f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)   "
             f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
-            f"{self._air_label()} (Ctrl+B)", 0)
+            f"{self._air_label()} (Ctrl+B)"
+            + ("   RECORDING (Ctrl+R)" if self.recording() else ""), 0)
 
     def _keep_beds_off_the_playlist(self):
         """A bed and a playlist track are both music, so never both.
@@ -1794,6 +1818,18 @@ class DropDeckFrame(wx.Frame):
         # folder's pick was measured by the warmer, not stored on the slot.
         duration = None if slot.is_folder else slot.duration
 
+        # A slot set to toggle stops itself rather than playing a second copy
+        # on top. Beds do this always and are handled below; this is the same
+        # behaviour, offered to any slot that wants it, for the long file
+        # somebody only ever plays a bit of.
+        if (slot.toggle_stop and not slot.is_bed
+                and self.mixer.is_playing(index)):
+            self.mixer.stop_slot(index, fade_out=self._stop_fade())
+            self._forget_recent(index)
+            self.announce_playback("Stopped %s" % slot.display_name)
+            self._sync_button(slot, playing=False)
+            return
+
         if slot.is_bed:
             if self.mixer.is_playing(index):
                 self.mixer.stop_slot(index)
@@ -1833,6 +1869,8 @@ class DropDeckFrame(wx.Frame):
         if voice is None:
             self.announce(f"Could not play {slot.display_name}")
             return
+        # So Ctrl+Space knows which one to take back off again.
+        self._remember_played(index)
         if slot.is_folder:
             # Which one you got. The whole feature is that you did not choose,
             # so the app has to say what it chose for you.
@@ -1843,10 +1881,70 @@ class DropDeckFrame(wx.Frame):
         self.announce_playback(
             f"{slot.display_name}{', ' + length if length else ''}")
 
-    #: How long the three presses have to arrive within, in milliseconds.
-    #: Long enough to be comfortable, short enough that an Escape now and one
-    #: in a minute are not read as the same gesture.
+    #: How long the presses have to arrive within, in milliseconds. Long
+    #: enough to be comfortable, short enough that an Escape now and one in a
+    #: minute are not read as the same gesture.
     ESCAPE_WINDOW_MS = 2000
+
+    def _remember_played(self, index):
+        """Keep the order things were started in, for Ctrl+Space.
+
+        The mixer knows what is playing but not what was started last, and
+        adding a clock to every voice to find out would be work in the audio
+        path for the benefit of one key. The frame already knows: it started
+        them.
+        """
+        recent = getattr(self, "_recent", None)
+        if recent is None:
+            recent = self._recent = []
+        if index in recent:
+            recent.remove(index)
+        recent.append(index)
+        del recent[:-C.TOTAL_SLOTS]
+
+    def _forget_recent(self, index):
+        recent = getattr(self, "_recent", None)
+        if recent and index in recent:
+            recent.remove(index)
+
+    def stop_latest(self):
+        """Stop the most recent sound that is still playing, and say which.
+
+        Chris Cooke, 5 September 2026: "Is there a way to stop a sound sooner
+        than pressing the escape key four times?"
+
+        This is that, without taking overlapping away from everybody: press it
+        again and the one before that stops, so a stack of sounds unwinds in
+        the order it was built.
+        """
+        recent = list(getattr(self, "_recent", []))
+        while recent:
+            index = recent.pop()
+            if not self.mixer.is_playing(index):
+                self._forget_recent(index)
+                continue
+            slot = self.board[index]
+            self.mixer.stop_slot(index, fade_out=self._stop_fade())
+            self._forget_recent(index)
+            self._sync_button(slot, playing=False)
+            self.announce("Stopped %s" % slot.display_name)
+            return True
+        # Nothing of ours, but the running order may still be going, and
+        # somebody pressing this wants something to stop.
+        if self.player.playing:
+            self.stop_playlist()
+            return True
+        self.announce("Nothing is playing")
+        return False
+
+    def _stop_fade(self):
+        """Nought when the board says stop abruptly, otherwise the usual fade.
+
+        Chris Cooke: "I think an abrupt stop is better because if someone is
+        running a mixer, they'll either fade it out themselves or more likely
+        adjust it in their DAW."
+        """
+        return None if self.board.stop_fade else 0.0
 
     def _escape_pressed(self):
         """Escape, which takes three to stop the show.
@@ -1859,15 +1957,17 @@ class DropDeckFrame(wx.Frame):
         The count is spoken, because a key that appears to do nothing twice
         is a key you assume is broken.
         """
+        wanted = max(C.MIN_STOP_PRESSES,
+                     min(C.MAX_STOP_PRESSES, int(self.board.stop_presses)))
         now = time.monotonic()
         if now - getattr(self, "_escape_at", 0.0) > self.ESCAPE_WINDOW_MS / 1000.0:
             self._escapes = 0
         self._escape_at = now
         self._escapes = getattr(self, "_escapes", 0) + 1
-        if self._escapes < 3:
-            left = 3 - self._escapes
+        if self._escapes < wanted:
+            left = wanted - self._escapes
             self.announce("Escape %s more time%s to stop everything"
-                          % ("one" if left == 1 else "two",
+                          % (("one", "two", "three")[min(2, left - 1)],
                              "" if left == 1 else "s"))
             return
         self._escapes = 0
@@ -1886,7 +1986,8 @@ class DropDeckFrame(wx.Frame):
         # telling the player would leave it convinced it was still on air.
         self.player.stop(fade_out=None, quiet=True)
         self._player_timer.Stop()
-        count = self.mixer.stop_all()
+        count = self.mixer.stop_all(fade_out=self._stop_fade())
+        self._recent = []
         self.announce_help("Stopping playback" if (count or was_playing)
                            else "Nothing was playing")
 
@@ -2249,6 +2350,12 @@ class DropDeckFrame(wx.Frame):
         if chosen["loop"] is not None and chosen["loop"] != slot.loop:
             slot.loop = chosen["loop"]
             changes.append("loop %s" % ("on" if slot.loop else "off"))
+        if (chosen["toggle_stop"] is not None
+                and chosen["toggle_stop"] != slot.toggle_stop):
+            slot.toggle_stop = chosen["toggle_stop"]
+            changes.append("pressing again %s"
+                           % ("stops it" if slot.toggle_stop
+                              else "plays it again"))
 
         # Only bank four has a hotkey of its own. The other three are fixed by
         # the bank and the dialog does not offer to change them.
@@ -3510,14 +3617,7 @@ class DropDeckFrame(wx.Frame):
             return False
 
         self.air_bus = streamout.AirBus(self.mixer.samplerate)
-        for mixer in self.mixer.mixers:
-            mixer.air_tap = self.air_bus
-        # The microphone goes out whether or not you can hear yourself. They
-        # are different questions and this is the one about the listener.
-        mic = getattr(self, "mic", None)
-        if mic is not None and self.board.stream_mic:
-            mic.on_air = True
-            self.mixer.primary.air_source = mic
+        self._sync_air_taps()
 
         self.streamer = streamout.Streamer(
             self.air_bus, self._stream_settings(),
@@ -3527,18 +3627,136 @@ class DropDeckFrame(wx.Frame):
         self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
         return True
 
+    # ----------------------------------------------------------- recording --
+    def recording(self):
+        rec = getattr(self, "recorder", None)
+        return rec is not None and rec.running
+
+    def toggle_recording(self):
+        if self.recording():
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self):
+        """Begin taping the show. Nothing about this needs you to be on air."""
+        from . import recorder as recording
+        if self.recording():
+            return True
+        self.record_bus = streamout.AirBus(self.mixer.samplerate)
+        self._sync_air_taps()
+        self.recorder = recording.Recorder(
+            self.record_bus,
+            fmt=self.board.record_format,
+            bitrate=self.board.record_bitrate,
+            folder=self.board.record_folder or None,
+            on_state=self._on_record_state)
+        if not self.recorder.start():
+            detail = self.recorder.detail
+            self.recorder = None
+            self.record_bus = None
+            self._sync_air_taps()
+            self.announce(detail or "Recording would not start")
+            wx.MessageBox(detail or "Recording would not start.",
+                          "Recording failed", wx.OK | wx.ICON_WARNING, self)
+            return False
+        self._set_record_label(True)
+        self.announce("Recording to %s"
+                      % os.path.basename(self.recorder.path or ""))
+        self._update_status()
+        return True
+
+    def stop_recording(self, quiet=False):
+        """Finish the file and say where it is."""
+        rec, self.recorder = getattr(self, "recorder", None), None
+        path = rec.stop() if rec is not None else None
+        self.record_bus = None
+        # Streaming may still be going and wants the mix it always had.
+        self._sync_air_taps()
+        self._set_record_label(False)
+        if rec is not None and not quiet:
+            minutes, seconds = divmod(int(rec.elapsed), 60)
+            size = rec.bytes_written / (1024.0 * 1024.0)
+            self.announce("Recording saved as %s, %d minutes %d seconds, "
+                          "%.1f megabytes"
+                          % (os.path.basename(path or ""), minutes, seconds,
+                             size))
+        self._update_status()
+        return path
+
+    def _set_record_label(self, on):
+        item = getattr(self, "record_item", None)
+        if item is not None:
+            item.SetItemLabel(("Stop &recording\tCtrl+R" if on
+                               else "Start &recording\tCtrl+R"))
+
+    def _on_record_state(self, state, detail):
+        from . import recorder as recording
+        if state == recording.FAILED:
+            wx.CallAfter(self._record_failed, detail)
+
+    def _record_failed(self, detail):
+        """Said out loud, because a recording that stopped by itself is the
+        kind of thing you find out about afterwards otherwise."""
+        self.recorder = None
+        self.record_bus = None
+        self._sync_air_taps()
+        self._set_record_label(False)
+        self.announce(detail or "The recording stopped")
+        self._update_status()
+
+    def _open_recordings(self):
+        from . import recorder as recording
+        folder = self.board.record_folder or recording.default_folder()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            os.startfile(folder)              # noqa: S606 - a folder we made
+        except Exception as exc:
+            self.announce("Could not open %s. %s" % (folder, exc))
+
+    def _sync_air_taps(self):
+        """Point the mixers at whoever wants the on air mix, or at nobody.
+
+        Streaming and recording both want it and cannot share one bus: reading
+        a bus takes the audio out of it, so two readers on one ring would each
+        get half a show. They get a bus each and the mixers write to both.
+
+        Every start and stop of either goes through here rather than setting
+        the tap itself. Setting it in two places is how the tap got lost on a
+        device change in 3.0, and that was one caller, not two.
+        """
+        buses = [bus for bus in (getattr(self, "air_bus", None),
+                                 getattr(self, "record_bus", None))
+                 if bus is not None]
+        tap = None
+        if len(buses) == 1:
+            tap = buses[0]
+        elif buses:
+            tap = streamout.Taps(*buses)
+        for mixer in self.mixer.mixers:
+            mixer.air_tap = tap
+            mixer.air_source = None
+        mic = getattr(self, "mic", None)
+        if mic is None:
+            return
+        # The microphone goes out whether or not you can hear yourself. They
+        # are different questions and this is the one about the listener. It
+        # is recorded on the same terms.
+        wanted = bool(buses) and bool(self.board.stream_mic)
+        mic.on_air = wanted
+        if wanted:
+            self.mixer.primary.air_source = mic
+
     def stop_stream(self, quiet=False):
         """Come off air and put everything back the way it was."""
         streamer, self.streamer = getattr(self, "streamer", None), None
         if streamer is not None:
             streamer.stop()
-        for mixer in self.mixer.mixers:
-            mixer.air_tap = None
-            mixer.air_source = None
-        mic = getattr(self, "mic", None)
-        if mic is not None:
-            mic.on_air = False
         self.air_bus = None
+        # Recording may still be going, and it wants the same mix. One place
+        # decides who is listening to the mixers, so coming off air cannot
+        # take a recording down with it.
+        self._sync_air_taps()
         item = getattr(self, "stream_item", None)
         if item is not None:
             item.SetItemLabel("&Go live\tCtrl+B")
@@ -3722,6 +3940,11 @@ class DropDeckFrame(wx.Frame):
             self.board.warn_seconds = dialog.warn_seconds
             self.board.cue_sound = dialog.cue_sound_key
             self.board.cue_level_db = dialog.cue_level_db
+            self.board.record_format = dialog.record_format_key
+            self.board.record_bitrate = dialog.record_bitrate_value
+            self.board.record_folder = dialog.record_folder_path
+            self.board.stop_presses = int(dialog.stop_presses.GetValue())
+            self.board.stop_fade = dialog.stop_fade.GetValue()
             self.board.playlist.crossfade = dialog.crossfade
             stream = dialog.stream_settings
             self.board.stream_server = stream["server"]
@@ -3920,6 +4143,14 @@ class DropDeckFrame(wx.Frame):
             timer = getattr(self, name, None)
             if timer is not None:
                 timer.Stop()
+        # The recording is finished first, so the file has its header and
+        # will open. A recording thread left running would also go on reading
+        # a mixer that is being closed.
+        if getattr(self, "recorder", None) is not None:
+            try:
+                self.stop_recording(quiet=True)
+            except Exception:
+                pass
         # Off air before anything else is torn down. A streaming thread left
         # running would go on reading a mixer that is being closed.
         if getattr(self, "streamer", None) is not None:
@@ -3949,6 +4180,10 @@ class DropDeckFrame(wx.Frame):
         # and pass at the end of the shutdown: a full disk, a read only folder
         # or a file Dropbox had locked took the whole evening's work with it
         # and said nothing whatsoever.
+        # Finished FIRST, so the file is closed properly and playable. A
+        # recording is somebody's show and an unfinished one may not open.
+        if self.recording():
+            self.stop_recording(quiet=True)
         try:
             self.board.save()
         except Exception as exc:

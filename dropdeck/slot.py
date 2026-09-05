@@ -74,6 +74,19 @@ class Slot:
     #: the digit map is muscle memory: take slot 5 away and 6 is still on the
     #: 6 key.
     hidden: bool = False
+    #: Pressing this slot's key again stops it, instead of playing a second
+    #: copy on top of the first.
+    #:
+    #: Chris Cooke, 5 September 2026: "I have a rather long sound file that I
+    #: may only wanna play a little bit of, but it takes an extra second or so
+    #: to press the escape key four times to completely stop it."
+    #:
+    #: Off by default, and deliberately. Effects and drops overlapping is the
+    #: thing a soundboard is FOR: a laugh landing on top of a sting is the
+    #: point, and making every key a toggle would take that away from everyone
+    #: to help the one slot that needed it. Beds have always toggled and go on
+    #: doing so whatever this says.
+    toggle_stop: bool = False
     #: How many playable sounds are in this slot's folder, when ``filepath`` is
     #: a folder rather than a file. Saved so the label is right before the first
     #: scan, which then corrects it. ``None`` for an ordinary slot.
@@ -267,6 +280,7 @@ class Slot:
             "trim_db": float(self.trim_db),
             "folder_count": self.folder_count,
             "hidden": bool(self.hidden),
+            "toggle_stop": bool(self.toggle_stop),
         }
 
     @classmethod
@@ -285,6 +299,7 @@ class Slot:
             trim_db=float(data.get("trim_db", 0.0) or 0.0),
             folder_count=_maybe_int(data.get("folder_count")),
             hidden=bool(data.get("hidden", False)),
+            toggle_stop=bool(data.get("toggle_stop", False)),
         )
 
     def clear(self) -> None:

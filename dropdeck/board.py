@@ -201,6 +201,23 @@ class Board:
         #: audience is on the Icecast behind it, so the two are different
         #: addresses. Empty means work it out; see streamstats.candidates.
         self.stream_stats_url = ""
+        #: Recording. Not part of a station, because you record the show
+        #: rather than the server: switching station does not change it.
+        self.record_format = "mp3"
+        self.record_bitrate = 192
+        self.record_folder = ""
+        #: How many presses of Escape stop the show, and whether it fades.
+        #:
+        #: Chris Cooke, 5 September 2026: "I think an abrupt stop is better
+        #: because if someone is running a mixer, they'll either fade it out
+        #: themselves or more likely adjust it in their DAW."
+        #:
+        #: Two rather than three. Three shipped in 3.1 and the first person to
+        #: use it counted four, because the first two presses only ANNOUNCE
+        #: and a press that appears to do nothing reads as a press that did
+        #: not land.
+        self.stop_presses = C.DEFAULT_STOP_PRESSES
+        self.stop_fade = True
         self.stream_public = False
         #: Put the microphone out on the stream. On by default, because a
         #: broadcast with no presenter in it is not what anybody meant, and
@@ -486,6 +503,11 @@ class Board:
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
             "stream_stats_url": self.stream_stats_url,
+            "record_format": self.record_format,
+            "record_bitrate": int(self.record_bitrate),
+            "record_folder": self.record_folder,
+            "stop_presses": int(self.stop_presses),
+            "stop_fade": bool(self.stop_fade),
             "stream_public": bool(self.stream_public),
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
@@ -569,6 +591,18 @@ class Board:
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""
         board.stream_stats_url = data.get("stream_stats_url") or ""
+        fmt = data.get("record_format")
+        board.record_format = fmt if fmt in C.RECORD_FORMAT_KEYS else "mp3"
+        board.record_bitrate = _stream_bitrate(data.get("record_bitrate", 192))
+        board.record_folder = data.get("record_folder") or ""
+        try:
+            board.stop_presses = max(C.MIN_STOP_PRESSES,
+                                     min(C.MAX_STOP_PRESSES,
+                                         int(data.get("stop_presses",
+                                                      C.DEFAULT_STOP_PRESSES))))
+        except (TypeError, ValueError):
+            board.stop_presses = C.DEFAULT_STOP_PRESSES
+        board.stop_fade = bool(data.get("stop_fade", True))
         board.stream_public = bool(data.get("stream_public", False))
         board.stream_mic = bool(data.get("stream_mic", True))
         board.stream_titles = bool(data.get("stream_titles", True))

@@ -132,11 +132,16 @@ check("nonsense in the file falls back rather than breaking the board",
 
 
 print()
-print("Escape, which now takes three")
+print("Escape, which takes more than one")
 
 frame = DropDeckFrame()
 frame.Show()
 app.Yield()
+
+# Three, because that is what this release shipped. It became a setting in
+# 3.2 after the first person to use it counted four, so the count is pinned
+# here rather than assumed; tests/test_stopping.py checks every value of it.
+frame.board.stop_presses = 3
 
 stopped = []
 real_stop = frame.stop_all

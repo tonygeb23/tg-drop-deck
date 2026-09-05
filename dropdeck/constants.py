@@ -214,6 +214,17 @@ CUE_SOUNDS = [
     ("sweep", "Sweep upward"),
 ]
 CUE_SOUND_KEYS = [key for key, _label in CUE_SOUNDS]
+
+#: What a recording can be written as. Listed here rather than in recorder.py
+#: so board.py can check a saved value without importing soundfile.
+RECORD_FORMAT_KEYS = ["wav", "mp3", "aac", "opus"]
+
+#: How many presses of Escape stop everything, and what the range is.
+#: One is allowed: somebody who never presses Escape by accident should not
+#: have to press it twice.
+DEFAULT_STOP_PRESSES = 2
+MIN_STOP_PRESSES = 1
+MAX_STOP_PRESSES = 4
 DEFAULT_CUE_SOUND = "pip"
 
 #: Where the pip plays. Above the eighty pads and above the two playlist

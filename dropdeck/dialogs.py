@@ -503,6 +503,20 @@ class SlotPropertiesDialog(wx.Dialog):
         self.level.SetName("Level in decibels")
         outer.Add(self.level, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
+        # Beds already toggle and always will, so this is offered to
+        # everything else: the long file somebody only plays a bit of.
+        self.toggle_box = None
+        if not slot.is_bed:
+            self.toggle_box = wx.CheckBox(
+                self, label="Pressing its key &again stops it")
+            self.toggle_box.SetValue(bool(slot.toggle_stop))
+            self.toggle_box.SetToolTip(
+                "Off, sounds pile up: press the key twice and you hear it "
+                "twice, which is what a soundboard is for. On, the second "
+                "press stops it, which is what you want for a long file you "
+                "only play a bit of. Music beds always work this way.")
+            outer.Add(self.toggle_box, 0, wx.ALL, 10)
+
         self.loop_box = None
         if slot.is_bed:
             self.loop_box = wx.CheckBox(self, label="Loop this &bed")
@@ -615,6 +629,8 @@ class SlotPropertiesDialog(wx.Dialog):
             "name": self.name_field.GetValue().strip(),
             "trim_db": float(self.level.GetValue()),
             "loop": None if self.loop_box is None else bool(self.loop_box.GetValue()),
+            "toggle_stop": (None if self.toggle_box is None
+                            else bool(self.toggle_box.GetValue())),
             "key_code": self._key_code,
             "modifiers": self._modifiers,
             "custom_hotkey": key_label(self._key_code, self._modifiers) or None,
@@ -641,7 +657,7 @@ class SettingsDialog(wx.Dialog):
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
     (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
-     PAGE_STREAM, PAGE_SPEECH) = range(7)
+     PAGE_STREAM, PAGE_RECORD, PAGE_SPEECH) = range(8)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -660,6 +676,7 @@ class SettingsDialog(wx.Dialog):
         self._build_mic_tab()
         self._build_voice_tab()
         self._build_stream_tab()
+        self._build_record_tab()
         self._build_speech_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -704,6 +721,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_MIC: self.mic_device,
                 self.PAGE_VOICE: self.voice_list,
                 self.PAGE_STREAM: self.stream_server,
+                self.PAGE_RECORD: self.record_format,
                 self.PAGE_SPEECH: self.speech_choice}.get(
                     self.tabs.GetSelection())
 
@@ -763,6 +781,28 @@ class SettingsDialog(wx.Dialog):
             panel, label="&Duck the music beds under sounds and drops")
         self.duck_on.SetValue(bool(self.board.ducking))
         sizer.Add(self.duck_on, 0, wx.ALL, 10)
+
+        self._label(panel, sizer, "&Presses of Escape to stop everything")
+        self.stop_presses = wx.SpinCtrl(
+            panel, min=C.MIN_STOP_PRESSES, max=C.MAX_STOP_PRESSES,
+            initial=int(getattr(self.board, "stop_presses",
+                                C.DEFAULT_STOP_PRESSES)))
+        name_field(self.stop_presses, "Presses of Escape to stop everything")
+        self.stop_presses.SetToolTip(
+            "More than one, because a single key that silences a live show is "
+            "a single key away from silencing it by accident. One is allowed "
+            "if you would rather. Ctrl+Space stops only the last sound, and "
+            "always takes one press.")
+        sizer.Add(self.stop_presses, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.stop_fade = wx.CheckBox(
+            panel, label="Fade out &when stopping, instead of cutting")
+        self.stop_fade.SetValue(bool(getattr(self.board, "stop_fade", True)))
+        self.stop_fade.SetToolTip(
+            "A quarter of a second, so a stop does not click. Turn it off for "
+            "an instant cut, which is what you want if you are riding a mixer "
+            "or a fader in a DAW.")
+        sizer.Add(self.stop_fade, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         self._label(panel, sizer, "Duck depth in de&cibels")
         self.duck_db = wx.Slider(panel, value=int(round(self.board.duck_db)),
@@ -1620,6 +1660,109 @@ class SettingsDialog(wx.Dialog):
             "stats_url": self.stream_stats.GetValue().strip(),
             "public": self.stream_public.GetValue(),
         }
+
+    def _build_record_tab(self):
+        """Where a recording goes and what it is written as.
+
+        Its own tab rather than a corner of Streaming, because recording is
+        not a kind of streaming: you record a show whether or not anybody is
+        listening to it live, and switching station does not change it.
+        """
+        from . import recorder as recording
+
+        panel, sizer = self._page("Recording")
+        self._note(panel, sizer,
+                   "Ctrl+R starts and stops recording. It records the same "
+                   "mix that goes on air, including your microphone if that "
+                   "is set to go out, and it does not need you to be on air. "
+                   "The cue before a track ends and previews are never in it.")
+
+        self._label(panel, sizer, "&Record as")
+        self.record_format = wx.Choice(
+            panel, choices=[label for _key, label in recording.FORMATS])
+        name_field(self.record_format, "Record as")
+        current = getattr(self.board, "record_format", "mp3")
+        self.record_format.SetSelection(
+            recording.FORMAT_KEYS.index(current)
+            if current in recording.FORMAT_KEYS else 0)
+        self.record_format.SetToolTip(
+            "WAV is uncompressed, which is what you want if the recording is "
+            "going into an editor. MP3 plays everywhere and takes about a "
+            "tenth of the space.")
+        self.record_format.Bind(wx.EVT_CHOICE, self._on_record_format)
+        sizer.Add(self.record_format, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self._label(panel, sizer, "&Bitrate")
+        self.record_bitrate = wx.Choice(
+            panel, choices=["%d kbps" % rate for rate in C.STREAM_BITRATES])
+        name_field(self.record_bitrate, "Bitrate")
+        rate = int(getattr(self.board, "record_bitrate", 192))
+        self.record_bitrate.SetSelection(
+            C.STREAM_BITRATES.index(rate) if rate in C.STREAM_BITRATES
+            else len(C.STREAM_BITRATES) // 2)
+        self.record_bitrate.SetToolTip(
+            "How much space a minute takes, and how good it sounds. 192 is "
+            "plenty for a show. WAV ignores this, because it compresses "
+            "nothing.")
+        sizer.Add(self.record_bitrate, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        self.record_bitrate.Enable(current != "wav")
+
+        self._label(panel, sizer, "Save recordings &in")
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.record_folder = wx.TextCtrl(
+            panel, value=(getattr(self.board, "record_folder", "")
+                          or recording.default_folder()))
+        name_field(self.record_folder, "Save recordings in")
+        self.record_folder.SetToolTip(
+            "Files are named Drop Deck Stream 001 and count up, so nothing "
+            "you have already recorded is ever written over.")
+        row.Add(self.record_folder, 1, wx.EXPAND | wx.RIGHT, 8)
+        browse = wx.Button(panel, label="C&hoose...")
+        browse.Bind(wx.EVT_BUTTON, self._on_record_folder)
+        row.Add(browse, 0)
+        sizer.Add(row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.record_next = wx.StaticText(panel, label="")
+        sizer.Add(self.record_next, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        self._show_next_recording()
+
+    def _on_record_format(self, event):
+        self.record_bitrate.Enable(self.record_format_key != "wav")
+        self._show_next_recording()
+        event.Skip()
+
+    def _on_record_folder(self, _event):
+        with wx.DirDialog(self, "Where should recordings go?",
+                          defaultPath=self.record_folder.GetValue(),
+                          style=wx.DD_DEFAULT_STYLE) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                self.record_folder.SetValue(dialog.GetPath())
+                self._show_next_recording()
+
+    def _show_next_recording(self):
+        """Say what the next file will be called, so it is not a surprise."""
+        from . import recorder as recording
+        try:
+            path = recording.next_path(self.record_folder.GetValue().strip()
+                                       or recording.default_folder(),
+                                       self.record_format_key)
+            self.record_next.SetLabel("The next one will be %s"
+                                      % os.path.basename(path))
+        except Exception:
+            self.record_next.SetLabel("")
+
+    @property
+    def record_format_key(self):
+        from . import recorder as recording
+        return recording.FORMAT_KEYS[max(0, self.record_format.GetSelection())]
+
+    @property
+    def record_bitrate_value(self):
+        return C.STREAM_BITRATES[max(0, self.record_bitrate.GetSelection())]
+
+    @property
+    def record_folder_path(self):
+        return self.record_folder.GetValue().strip()
 
     def _build_speech_tab(self):
         panel, sizer = self._page("Speech")

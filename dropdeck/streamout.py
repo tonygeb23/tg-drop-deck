@@ -212,6 +212,36 @@ class AirBus:
         self._rates = {}
 
 
+class Taps:
+    """One tap, several buses.
+
+    A mixer writes the on air mix to exactly one place. Once recording exists
+    there are two places it might go, and they cannot share a bus: reading one
+    takes the audio out of it, so a stream and a recording reading the same
+    ring would each get half a show.
+
+    So each gets a bus of its own and this writes to both. It is deliberately
+    tiny and deliberately silent about failure: it runs inside an audio
+    callback, where an exception silences a sound card.
+    """
+
+    def __init__(self, *buses):
+        self.buses = [bus for bus in buses if bus is not None]
+
+    def __bool__(self):
+        return bool(self.buses)
+
+    def __len__(self):
+        return len(self.buses)
+
+    def write(self, key, block, rate=None):
+        for bus in self.buses:
+            try:
+                bus.write(key, block, rate)
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Turning float blocks into something a listener's player understands
 # ---------------------------------------------------------------------------
