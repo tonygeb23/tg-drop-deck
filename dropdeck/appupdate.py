@@ -124,25 +124,36 @@ def check(current_version=None):
                         % (info.get("version"), current))
 
 
-def download(info, progress=None):
-    """Fetch the installer and check it against the signed hash.
+def download(info, progress=None, portable=False):
+    """Fetch the download and check it against the signed hash.
 
     Returns (path_or_None, message). The file is only left on disk if the hash
     matched, so there is never a half-verified installer sitting in temp for
     somebody to run by hand.
+
+    ``portable`` fetches the zip rather than the installer, and its hash comes
+    from the same signed manifest, so a portable update is verified exactly as
+    strictly as an installed one.
     """
+    which = zip_for(info) if portable else None
+    if portable and which is None:
+        return None, ("This version does not publish a portable download yet. "
+                      "Get the zip from tgstudios.app and unpack it over this "
+                      "folder. Nothing has been changed here.")
+    url = which["url"] if which else info["url"]
+    wanted = (which["sha256"] if which else info.get("sha256", "")) or ""
     try:
-        blob = _fetch(info["url"])
+        blob = _fetch(url)
     except Exception as exc:
         return None, "Download failed. %s" % exc
 
     got = hashlib.sha256(blob).hexdigest()
-    if got.lower() != str(info.get("sha256", "")).lower():
+    if got.lower() != str(wanted).lower():
         return None, ("The download did not match its signed checksum, so it "
                       "was thrown away. Nothing was installed.")
 
-    name = os.path.basename(info["url"]) or "TGDropDeck-Setup.exe"
-    path = os.path.join(tempfile.mkdtemp(prefix="promptvault-update-"), name)
+    name = os.path.basename(url) or "TGDropDeck-Setup.exe"
+    path = os.path.join(tempfile.mkdtemp(prefix="dropdeck-update-"), name)
     with open(path, "wb") as fh:
         fh.write(blob)
     return path, "Downloaded %s." % info.get("version", "the update")
@@ -166,6 +177,40 @@ def run_installer(path):
         return False, "Could not start the installer. %s" % exc
 
 
+def unpack_beside(zip_path, version):
+    """Unpack a portable update next to the copy that is running.
+
+    Deliberately NOT over the top of it. The running executable cannot be
+    replaced while it is running, and a half replaced folder is worse than no
+    update: the app would still start and would be a mixture of two versions.
+    So the new copy goes in its own folder next to this one, and the user is
+    told where. Nothing is deleted, so a bad update is undone by going back to
+    the folder that was already there.
+
+    Returns the folder the new copy is in.
+    """
+    import zipfile
+    here = os.path.dirname(os.path.abspath(sys.executable))
+    parent = os.path.dirname(here)
+    target = os.path.join(parent, "%s %s" % (C.APP_NAME, version))
+    suffix = 2
+    while os.path.exists(target):
+        target = os.path.join(parent, "%s %s (%d)"
+                              % (C.APP_NAME, version, suffix))
+        suffix += 1
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(target)
+    # A zip that holds one top level folder unpacks to target/that/..., which
+    # is one folder deeper than anybody expects. Lift it if so.
+    entries = os.listdir(target)
+    if len(entries) == 1:
+        inner = os.path.join(target, entries[0])
+        if os.path.isdir(inner) and os.path.exists(
+                os.path.join(inner, "%s.exe" % C.APP_NAME)):
+            return inner
+    return target
+
+
 def is_frozen():
     """Only a packaged build can be replaced by an installer.
 
@@ -174,6 +219,50 @@ def is_frozen():
     than the one running.
     """
     return bool(getattr(sys, "frozen", False))
+
+
+def is_portable():
+    """Is this the zip, unpacked wherever somebody put it.
+
+    Both builds are frozen, so is_frozen() cannot tell them apart, and that is
+    the whole bug. HarmonicaPlayer, on Mastodon, 4 September 2026, running the
+    portable copy: "checked for updates, it sounded like it was downloading
+    something but it turns out it gave me the installer version and put a new
+    desktop shortcut that linked to installer instead of updating the portable
+    version". The portable copy passed the frozen check, downloaded the
+    installer and installed a SECOND copy somewhere else, while the one he was
+    running stayed on the old version. Nothing said so.
+
+    Inno Setup leaves its uninstaller beside the program it installed. Nothing
+    puts one in a zip. So: an uninstaller next door means this copy was
+    installed, and no uninstaller means it was unpacked.
+    """
+    if not is_frozen():
+        return False
+    folder = os.path.dirname(os.path.abspath(sys.executable))
+    try:
+        for entry in os.listdir(folder):
+            if entry.lower().startswith("unins") and entry.lower().endswith(".exe"):
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def zip_for(info):
+    """The portable download named in the manifest, or None.
+
+    Manifests published before this existed do not carry one, and a portable
+    copy meeting one of those is told to fetch the zip by hand rather than
+    handed an installer it must not run.
+    """
+    if not info:
+        return None
+    url = info.get("zip_url")
+    if not url:
+        return None
+    return {"url": url, "sha256": info.get("zip_sha256", ""),
+            "size": info.get("zip_size", 0), "version": info.get("version", "")}
 
 
 # --------------------------------------------------------------- throttling

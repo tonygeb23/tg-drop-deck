@@ -1461,6 +1461,10 @@ class DropDeckFrame(wx.Frame):
             self.announce_help("Update skipped. Help, check for updates when you "
                           "are ready.")
             return
+        # A copy running from the zip must never be handed an installer. It
+        # would install a SECOND copy somewhere else and leave this one on the
+        # old version, silently, which is what happened to HarmonicaPlayer.
+        portable = appupdate.is_portable()
         # On a worker thread. This is an HTTPS download of a 40 MB installer;
         # inline it froze the window with only a busy cursor for company.
         import threading
@@ -1469,19 +1473,23 @@ class DropDeckFrame(wx.Frame):
 
         def work():
             try:
-                got = appupdate.download(info)
+                got = appupdate.download(info, portable=portable)
             except Exception as exc:
                 got = (None, "Download failed. %s" % exc)
-            wx.CallAfter(self._download_done, *got)
+            wx.CallAfter(self._download_done, got[0], got[1], info,
+                         portable)
 
         threading.Thread(target=work, daemon=True, name="dropdeck-dl").start()
 
-    def _download_done(self, path, message):
+    def _download_done(self, path, message, info=None, portable=False):
         from . import appupdate
         wx.EndBusyCursor()
         if not path:
             self.announce(message)
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
+            return
+        if portable:
+            self._finish_portable_update(path, info or {})
             return
         # Stop the audio device first. The installer replaces the executable
         # underneath a stream that is still running otherwise.
@@ -1493,6 +1501,40 @@ class DropDeckFrame(wx.Frame):
         self.announce(message)
         if not ok:
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
+
+    def _finish_portable_update(self, path, info):
+        """Unpack a portable update beside this copy and say where it is.
+
+        Not over the top of it: the running executable cannot be replaced
+        while it is running, and a half replaced folder still starts and is a
+        mixture of two versions, which is worse than not updating at all.
+        The old folder is left alone, so going back is just going back.
+        """
+        from . import appupdate
+        version = info.get("version", "")
+        try:
+            folder = appupdate.unpack_beside(path, version)
+        except Exception as exc:
+            message = ("The download was fine but it could not be unpacked. "
+                       "%s" % exc)
+            self.announce(message)
+            wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING,
+                          self)
+            return
+        message = ("Version %s is unpacked and ready, in %s. Close this copy "
+                   "and run TG Drop Deck from that folder. Your board and "
+                   "settings are shared, so everything is where you left it. "
+                   "This folder has not been touched."
+                   % (version or "the new one", folder))
+        self.announce(message)
+        answer = wx.MessageBox(
+            message + "\n\nOpen that folder now?", "Update ready",
+            wx.YES_NO | wx.ICON_INFORMATION, self)
+        if answer == wx.YES:
+            try:
+                os.startfile(folder)          # noqa: S606 - a folder, not input
+            except Exception:
+                pass
 
     # -------------------------------------------------------------- speaking --
     #

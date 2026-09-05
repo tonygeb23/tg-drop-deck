@@ -163,10 +163,33 @@ def installer_path():
     return path
 
 
+def zip_path():
+    """The portable download, which is a different lifecycle from the installer.
+
+    A copy running from the zip has to be offered a zip. Handed an installer,
+    it installs a SECOND copy elsewhere and leaves the running one on the old
+    version, which is exactly what happened to HarmonicaPlayer on 4 September
+    2026 and looked, from where he was sitting, like the update quietly doing
+    nothing.
+    """
+    name = "TG-Drop-Deck-%s-windows.zip" % C.APP_VERSION
+    path = os.path.join(HERE, "dist", name)
+    if not os.path.exists(path):
+        raise SystemExit("No portable zip at %s.\n"
+                         "Run: python tools/build_release.py" % path)
+    return path
+
+
 def stage():
     path = installer_path()
     blob = open(path, "rb").read()
     digest = hashlib.sha256(blob).hexdigest()
+
+    portable = zip_path()
+    zip_blob = open(portable, "rb").read()
+    zip_url = "%s/%s" % (DOWNLOAD_BASE, os.path.basename(portable))
+    zip_hash = hashlib.sha256(zip_blob).hexdigest()
+    zip_size = len(zip_blob)
 
     manifest = {
         "product": C.APP_NAME,
@@ -175,6 +198,13 @@ def stage():
         "sha256": digest,
         "size": len(blob),
         "notes": NOTES.get(C.APP_VERSION, ""),
+        # The portable download, so a copy running from the zip can update
+        # itself with a zip instead of being handed an installer. Without
+        # these a portable copy is told to fetch it by hand, which is still
+        # better than installing a second copy behind the user's back.
+        "zip_url": zip_url,
+        "zip_sha256": zip_hash,
+        "zip_size": zip_size,
     }
     envelope = {"manifest": manifest, "signature": sign(canonical(manifest))}
 
