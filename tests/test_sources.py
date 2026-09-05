@@ -205,6 +205,7 @@ print("In the app")
 frame = DropDeckFrame()
 frame.Show()
 app.Yield()
+RATE = frame.mixer.samplerate
 
 check("the mixer monitors the group, not the microphone alone",
       frame.mixer.monitor_source is frame.source_group)
@@ -232,6 +233,80 @@ check("and the group is still what the mixer reads",
 
 check("there is a limit, so this cannot become a mixing desk",
       MAX_SOURCES >= 4 and MAX_SOURCES <= 16, MAX_SOURCES)
+
+
+print()
+print("The microphone switch is not a switch for everything else")
+
+# Tony, 5 September 2026: "when I press ctrl M to turn my mic off, does this
+# also stop the audio sources I add from going out on stream?"
+#
+# It does not, and it must not: somebody putting a games call or a browser out
+# has not necessarily got their microphone open, and closing the microphone
+# between links should not take the rest of the show off with it.
+from dropdeck import streamout
+
+live = Source(name="A call", device_name="", on_air=True, monitor=False,
+              samplerate=RATE)
+frame.sources = [live]
+frame.source_group.sources = frame.sources
+feed_me = live.input
+feed_me.samplerate = RATE
+feed_me.channels_open = 1
+feed_me.stream = object()
+feed_me.on_air = True
+feed_me._reset_ring()
+
+
+def push(hz=900.0, blocks=40):
+    for i in range(blocks):
+        t = np.arange(i * C.BLOCKSIZE, (i + 1) * C.BLOCKSIZE) / float(RATE)
+        wave = (0.3 * np.sin(2 * np.pi * hz * t)).astype(np.float32)
+        feed_me._callback(wave[:, None], C.BLOCKSIZE, None, None)
+
+
+def reaches_air():
+    """What actually arrives at the on air mix, through the mixer's own path."""
+    push()
+    tap = frame.mixer.primary.air_source
+    if tap is None:
+        return 0.0
+    return float(np.abs(tap.read_air(C.BLOCKSIZE * 8)).max())
+
+
+frame.air_bus = streamout.AirBus(RATE)
+frame._sync_air_taps()
+check("a source goes out with the microphone never opened",
+      reaches_air() > 0.05 and not frame._mic_open())
+
+frame.toggle_mic()
+with_mic = reaches_air()
+frame.toggle_mic()
+without_mic = reaches_air()
+check("Ctrl+M really did close the microphone", not frame._mic_open())
+check("and the source is still on air afterwards", without_mic > 0.05,
+      "%.3f with the mic on, %.3f with it off" % (with_mic, without_mic))
+check("at the same level, so nothing was ducked or halved",
+      abs(with_mic - without_mic) < 0.01)
+
+frame.board.stream_mic = False
+frame._sync_air_taps()
+check("and it goes out even with the microphone set never to",
+      reaches_air() > 0.05)
+frame.board.stream_mic = True
+
+# Taking a source off air is its own switch, which is the only thing that
+# should silence it.
+live.wanted_on_air = False
+live.input.on_air = False
+check("unticking the source is what takes it off air", reaches_air() < 0.001)
+live.wanted_on_air = True
+live.input.on_air = True
+check("and ticking it puts it back", reaches_air() > 0.05)
+
+frame.stop_stream(quiet=True)
+frame.sources = []
+frame.source_group.sources = []
 
 frame.stop_background_work()
 frame.Destroy()
