@@ -17,6 +17,7 @@ from . import audiofile
 from . import constants as C
 from . import feedback
 from . import dsp
+from . import proccapture
 from . import sources
 from . import streamout
 from . import streamstats
@@ -2831,20 +2832,22 @@ class SourcesDialog(wx.Dialog):
 
         outer = wx.BoxSizer(wx.VERTICAL)
         self._say(outer,
-                  "Anything Windows offers as an input can go on the air here: "
-                  "a second microphone, a mixer, or another program through a "
-                  "virtual cable. To put a program on, point it at the cable "
-                  "in its own settings and choose the cable here.")
+                  "Other things to put on the air besides your own voice. A "
+                  "source can be a sound card or a cable, or it can be one "
+                  "program: Windows hands over exactly what that program is "
+                  "playing and nothing else, with no setting up in the "
+                  "program itself.")
 
         outer.Add(wx.StaticText(self, label="&Sources"), 0,
                   wx.LEFT | wx.RIGHT | wx.TOP, 10)
         self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
                                 size=(560, 150))
         self.list.SetName("Sources")
-        self.list.InsertColumn(0, "Name", width=150)
-        self.list.InsertColumn(1, "Device", width=250)
-        self.list.InsertColumn(2, "On air", width=70)
-        self.list.InsertColumn(3, "You hear it", width=90)
+        self.list.InsertColumn(0, "Name", width=140)
+        self.list.InsertColumn(1, "Kind", width=80)
+        self.list.InsertColumn(2, "Taking from", width=210)
+        self.list.InsertColumn(3, "On air", width=70)
+        self.list.InsertColumn(4, "You hear it", width=90)
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_pick)
         outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
 
@@ -2871,12 +2874,27 @@ class SourcesDialog(wx.Dialog):
         self.name = field("Call&ed", lambda: wx.TextCtrl(self), "Called")
         self.name.Bind(wx.EVT_TEXT, self._on_edit)
 
+        self.kind = field(
+            "&Take audio from",
+            lambda: wx.Choice(self, choices=["A sound card or cable",
+                                             "One program"]),
+            "Take audio from")
+        self.kind.Bind(wx.EVT_CHOICE, self._on_kind)
+
         self.device = field(
             "&Device",
             lambda: wx.Choice(self, choices=["Nothing chosen"] + [
                 "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]),
             "Device")
         self.device.Bind(wx.EVT_CHOICE, self._on_edit)
+
+        self.program = field(
+            "&Program",
+            lambda: wx.Choice(self, choices=["Nothing chosen"]),
+            "Program")
+        self.program.Bind(wx.EVT_CHOICE, self._on_edit)
+        self._program_names = [""]
+        self._refresh_programs()
 
         self.channel = field(
             "Which &channel",
@@ -2916,6 +2934,15 @@ class SourcesDialog(wx.Dialog):
         self._refresh(0)
         self.list.SetFocus()
 
+    def _programs(self):
+        """Every program with a window, refreshed when the picker is opened.
+
+        A list of processes is four hundred services; a list of windows is
+        what a person recognises. It is asked for again each time because the
+        whole point is to catch a program that was opened a minute ago.
+        """
+        return proccapture.running_programs()
+
     def _say(self, sizer, text):
         note = wx.StaticText(self, label=text)
         note.Wrap(self.FromDIP(540))
@@ -2934,10 +2961,7 @@ class SourcesDialog(wx.Dialog):
         self.list.DeleteAllItems()
         for row, entry in enumerate(self.entries):
             self.list.InsertItem(row, entry.get("name") or "Source")
-            self.list.SetItem(row, 1, entry.get("device_name")
-                              or "nothing chosen")
-            self.list.SetItem(row, 2, "yes" if entry.get("on_air") else "no")
-            self.list.SetItem(row, 3, "yes" if entry.get("monitor") else "no")
+            self._write_row(row)
         if self.entries:
             keep = max(0, min(keep if keep is not None else 0,
                               len(self.entries) - 1))
@@ -2956,6 +2980,8 @@ class SourcesDialog(wx.Dialog):
         try:
             entry = self.entries[index] if on else {}
             self.name.SetValue(entry.get("name", "") if on else "")
+            self.kind.SetSelection(
+                1 if entry.get("kind") == sources.Source.PROGRAM else 0)
             wanted = entry.get("device_name", "")
             found = 0
             for at, device in enumerate(self.devices):
@@ -2970,12 +2996,49 @@ class SourcesDialog(wx.Dialog):
             self.gain.SetValue(int(round(float(entry.get("gain_db", 0.0) or 0))))
             self.on_air.SetValue(bool(entry.get("on_air", True)))
             self.monitor.SetValue(bool(entry.get("monitor", False)))
+            self._show_for_kind(entry.get("program", "") if on else "")
         finally:
             self._loading = False
 
     def _on_pick(self, event):
         self._load()
         event.Skip()
+
+    def _refresh_programs(self, wanted=""):
+        """Rebuild the program list, keeping whatever was chosen."""
+        found = self._programs()
+        self._program_names = [""] + [entry["name"] for entry in found]
+        labels = ["Nothing chosen"] + [
+            ("%s, %s" % (entry["name"], entry["title"]) if entry["title"]
+             else entry["name"]) for entry in found]
+        # A program that was chosen and has since been closed stays in the
+        # list, or choosing it again would mean starting it first.
+        if wanted and wanted not in self._program_names:
+            self._program_names.append(wanted)
+            labels.append("%s, not running" % wanted)
+        self.program.Set(labels)
+        self.program.SetSelection(self._program_names.index(wanted)
+                                  if wanted in self._program_names else 0)
+
+    def _on_kind(self, event):
+        """A source is either a device or a program, never both."""
+        index = self._selected()
+        if index is not None and not self._loading:
+            entry = self.entries[index]
+            entry["kind"] = (sources.Source.PROGRAM
+                             if self.kind.GetSelection() == 1
+                             else sources.Source.DEVICE)
+            self._load()
+            self._write_row(index)
+        event.Skip()
+
+    def _show_for_kind(self, program):
+        on = self.kind.GetSelection() == 1
+        self.program.Enable(on)
+        self.device.Enable(not on)
+        self.channel.Enable(not on)
+        if on:
+            self._refresh_programs(program)
 
     def _on_edit(self, event):
         """Write the controls back into the row as they are changed."""
@@ -2991,32 +3054,48 @@ class SourcesDialog(wx.Dialog):
                 else:
                     entry["device_name"] = ""
                     entry["device_hostapi"] = ""
+                picked = self.program.GetSelection()
+                entry["program"] = (self._program_names[picked]
+                                    if 0 <= picked < len(self._program_names)
+                                    else "")
                 entry["channel"] = self.CHANNELS[
                     max(0, self.channel.GetSelection())][0]
                 entry["gain_db"] = float(self.gain.GetValue())
                 entry["on_air"] = self.on_air.GetValue()
                 entry["monitor"] = self.monitor.GetValue()
-                # Only the columns, so the cursor does not move under somebody
-                # who is still typing a name.
-                self.list.SetItem(index, 0, entry["name"])
-                self.list.SetItem(index, 1, entry["device_name"]
-                                  or "nothing chosen")
-                self.list.SetItem(index, 2, "yes" if entry["on_air"] else "no")
-                self.list.SetItem(index, 3, "yes" if entry["monitor"] else "no")
+                self._write_row(index)
         event.Skip()
+
+    def _write_row(self, index):
+        """Update the list, and only the columns.
+
+        Rewriting the whole row moves the cursor, and moving the cursor under
+        somebody who is still typing a name is how a list makes a screen
+        reader start the row again mid word.
+        """
+        entry = self.entries[index]
+        program = entry.get("kind") == sources.Source.PROGRAM
+        self.list.SetItem(index, 0, entry.get("name") or "Source")
+        self.list.SetItem(index, 1, "Program" if program else "Device")
+        self.list.SetItem(index, 2,
+                          (entry.get("program") if program
+                           else entry.get("device_name")) or "nothing chosen")
+        self.list.SetItem(index, 3, "yes" if entry.get("on_air") else "no")
+        self.list.SetItem(index, 4, "yes" if entry.get("monitor") else "no")
 
     def _on_add(self, _event):
         if len(self.entries) >= sources.MAX_SOURCES:
             self._speak("That is as many sources as this will take")
             return
         self.entries.append({"name": "Source %d" % (len(self.entries) + 1),
+                             "kind": sources.Source.DEVICE,
                              "device_name": "", "device_hostapi": "",
-                             "gain_db": 0.0, "channel": "mix",
+                             "program": "", "gain_db": 0.0, "channel": "mix",
                              "on_air": True, "monitor": False})
         self._refresh(len(self.entries) - 1)
         self.name.SetFocus()
         self.name.SelectAll()
-        self._speak("Added. Choose a device for it.")
+        self._speak("Added. Choose what it takes audio from.")
 
     def _on_remove(self, _event):
         index = self._selected()

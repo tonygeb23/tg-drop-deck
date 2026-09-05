@@ -31,6 +31,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import constants as C
+from . import proccapture
 from .micinput import (CHANNELS, MicInput, describe_input,
                        input_devices, resolve_input)
 
@@ -43,21 +44,34 @@ MAX_SOURCES = 8
 class Source:
     """One extra input, on its way to the stream or your headphones."""
 
+    #: What this source is listening to. A sound card, or one program.
+    DEVICE = "device"
+    PROGRAM = "program"
+
     def __init__(self, name="", device_name="", device_hostapi="",
                  gain_db=0.0, monitor=False, on_air=True, channel="mix",
-                 samplerate=None):
+                 samplerate=None, kind=DEVICE, program=""):
         self.name = name or "Source"
+        self.kind = kind if kind in (self.DEVICE, self.PROGRAM) else self.DEVICE
         #: Remembered by NAME, like every other device in this app. An index
         #: changes the moment somebody plugs in a headset.
         self.device_name = device_name or ""
         self.device_hostapi = device_hostapi or ""
+        #: The executable, for a program source. Never a process id: that is
+        #: a different number every time the program starts, so a board that
+        #: saved one would capture nothing next week.
+        self.program = program or ""
         self.wanted_monitor = bool(monitor)
         self.wanted_on_air = bool(on_air)
-        self.input = MicInput(duck_bus=None,
-                              samplerate=samplerate or C.DEFAULT_SAMPLERATE,
-                              gain_db=gain_db, monitor=bool(monitor))
-        self.input.channel = channel if channel in ("mix", "left", "right") \
-            else "mix"
+        rate = samplerate or C.DEFAULT_SAMPLERATE
+        if self.kind == self.PROGRAM:
+            self.input = proccapture.ProcessCapture(
+                samplerate=rate, gain_db=gain_db, monitor=bool(monitor))
+        else:
+            self.input = MicInput(duck_bus=None, samplerate=rate,
+                                  gain_db=gain_db, monitor=bool(monitor))
+            self.input.channel = (channel if channel in ("mix", "left", "right")
+                                  else "mix")
         self.last_error = None
 
     # ------------------------------------------------------------ settings --
@@ -71,11 +85,19 @@ class Source:
 
     @property
     def channel(self):
-        return self.input.channel
+        # A program capture arrives stereo as Windows hands it over, so there
+        # is no side to choose.
+        return getattr(self.input, "channel", "mix")
 
     @channel.setter
     def channel(self, value):
-        self.input.channel = value if value in ("mix", "left", "right") else "mix"
+        if hasattr(self.input, "channel"):
+            self.input.channel = (value if value in ("mix", "left", "right")
+                                  else "mix")
+
+    @property
+    def is_program(self):
+        return self.kind == self.PROGRAM
 
     @property
     def is_open(self):
@@ -90,7 +112,10 @@ class Source:
 
     def describe(self):
         """One line, written to be read aloud rather than looked at."""
-        where = self.device_name or "no device chosen"
+        if self.is_program:
+            where = self.program or "no program chosen"
+        else:
+            where = self.device_name or "no device chosen"
         parts = [self.name, where]
         if not self.wanted_on_air and not self.wanted_monitor:
             parts.append("off")
@@ -100,28 +125,55 @@ class Source:
                 parts.append("you hear it")
         if self.gain_db:
             parts.append("%+.0f dB" % self.gain_db)
-        if self.device_name and not self.is_open:
-            parts.append("not open")
+        chosen = self.program if self.is_program else self.device_name
+        if chosen and not self.is_open:
+            parts.append(self.last_error or "not open")
         return ", ".join(parts)
 
     # ------------------------------------------------------------ lifetime --
     def start(self, samplerate=None):
-        """Open the device, if this source is wanted at all. True if it is on."""
+        """Open it, if this source is wanted at all. True if it is running."""
         if samplerate:
             self.input.set_output_rate(samplerate)
         if not (self.wanted_on_air or self.wanted_monitor):
             self.stop()
             return False
+        self.input.monitor = self.wanted_monitor
+        self.input.on_air = self.wanted_on_air
+        if self.is_program:
+            return self._start_program()
         device = resolve_input(self.spec())
         if device is None and self.device_name:
             self.last_error = "%s is not plugged in" % self.device_name
             self.stop()
             return False
-        self.input.monitor = self.wanted_monitor
-        self.input.on_air = self.wanted_on_air
         if self.input.is_open and self.input.device == device:
             return True
         started = self.input.start(device=device)
+        self.last_error = None if started else self.input.last_error
+        return started
+
+    def _start_program(self):
+        """Find the program by name, then capture it.
+
+        By name every time, even when it is already running: a program that
+        was closed and opened again has a different process id, and a capture
+        pointed at the old number would quietly give nothing at all.
+        """
+        if not self.program:
+            self.last_error = "No program chosen"
+            return False
+        pid = proccapture.find_pid(self.program)
+        if pid is None:
+            self.last_error = "%s is not running" % self.program
+            self.stop()
+            return False
+        if self.input.is_open and self.input.pid == pid:
+            return True
+        self.stop()
+        self.input.monitor = self.wanted_monitor
+        self.input.on_air = self.wanted_on_air
+        started = self.input.start(pid=pid)
         self.last_error = None if started else self.input.last_error
         return started
 
@@ -142,8 +194,10 @@ class Source:
 
     # ------------------------------------------------------------- storage --
     def to_dict(self):
-        return {"name": self.name, "device_name": self.device_name,
+        return {"name": self.name, "kind": self.kind,
+                "device_name": self.device_name,
                 "device_hostapi": self.device_hostapi,
+                "program": self.program,
                 "gain_db": float(self.gain_db), "channel": self.channel,
                 "monitor": bool(self.wanted_monitor),
                 "on_air": bool(self.wanted_on_air)}
@@ -156,6 +210,8 @@ class Source:
         except (TypeError, ValueError):
             gain = 0.0
         return cls(name=str(data.get("name") or "Source"),
+                   kind=str(data.get("kind") or cls.DEVICE),
+                   program=str(data.get("program") or ""),
                    device_name=str(data.get("device_name") or ""),
                    device_hostapi=str(data.get("device_hostapi") or ""),
                    gain_db=max(C.MIN_MIC_GAIN_DB,

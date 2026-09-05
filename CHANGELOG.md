@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.2.1, 5 September 2026
+
+**A source can be one program now, with no cable in the middle.** Pick Google
+Chrome, or TeamTalk, or a game, and Windows hands over exactly what that
+program is playing and nothing else. There is nothing to set up in the program
+itself and no driver to install. It is the same thing OBS calls Application
+Audio Capture.
+
+Programs are listed by their window, so you see the names you recognise rather
+than four hundred services, and the list is refreshed every time you open it.
+A source remembers the program by name, never by its process number: that
+number is different every time a program starts, so a board that saved one
+would capture nothing next week.
+
+If the program is not running when Drop Deck opens, the source says so instead
+of sitting there quietly. If you close the program mid show, the capture
+notices within a couple of seconds and tells you, instead of going silent and
+looking fine.
+
+Needs Windows 10 build 20348 or later. On anything older the option is still
+there and says it cannot be done, and the virtual cable route works as before.
+
+**Alt+Shift+S** opens Audio sources, whichever kind you are after: a sound
+card, a cable, or a program.
+
+**Some of the changelog was rewritten.** Not what any release did, only how it
+read: five "rather than" and six "which is" inside three entries is one voice
+with one move, and it showed.
+
+
 ## 3.2.0, 5 September 2026
 
 **Record the show.** `Ctrl+R` starts and stops it. It records the same mix that
@@ -13,11 +43,11 @@ first, so a recording always opens.
 offers as an input can go out with you: a second microphone for a co-host, a
 hardware mixer, or another program entirely.
 
-For another program you need a virtual audio cable, which is a free driver
-that looks like a speaker to one program and a microphone to another. Point
-TeamTalk, Chrome or a game at the cable in its own settings, then choose the
-cable here. That is the whole trick, and it works for anything without Drop
-Deck needing to know what it is.
+For another program you need a virtual audio cable: a free driver that looks
+like a speaker to one program and a microphone to another. Point TeamTalk,
+Chrome or a game at the cable in its own settings, then choose the cable here.
+That is all there is to it, and it works for anything without Drop Deck
+needing to know what the program is.
 
 Each source has a name, a gain, which channel to take, whether it goes on the
 air and whether you hear it yourself. Sources are never ducked and never go
@@ -37,9 +67,9 @@ properties. Off by default, because effects and drops piling up is what a
 soundboard is for and a laugh landing on top of a sting is the point.
 
 **How many presses of Escape is up to you.** One to four, in Preferences,
-Sounds and beds, and it defaults to two now rather than three. You can also
-have it cut instantly instead of fading, which is what you want if you are
-riding a mixer or a fader in a DAW.
+Sounds and beds. It used to be three and now starts at two. You can also have
+it cut instantly instead of fading, which is what a mixer or a DAW fader
+wants.
 
 **Feeding OBS.** Nothing new was needed and the guide now says how: send a
 bank to a virtual cable in Preferences, Output, and add that cable in OBS as
@@ -59,18 +89,19 @@ one to close, replaces the folder it came from, and starts the app again from
 the same path. The folder keeps its name, so every shortcut still works, and
 anything you put in there yourself is left alone.
 
-If the swap cannot finish, the old copy is put straight back rather than left
-half written, and it still starts. On a read only location, where nothing can
-be replaced at all, it unpacks beside as before and says so.
+A swap that cannot finish puts the old copy straight back, so the folder is
+never left half written and the app still starts. On a read only location,
+where nothing can be replaced at all, it unpacks beside as before and says
+so.
 
 **Ctrl+Shift+A opened Preferences.** Two commands had been given the same
 number, so the key reached whichever handler was wired last. Escape had the
 same fault, sharing with Search. Both fixed, and there is now a check that no
 two commands can share a number again.
 
-**Escape now takes three presses.** One key that silences the whole show is
-one key away from silencing it by accident, and Escape is the key everybody
-presses out of habit. It counts, says how many are left, and forgets the count
+**Escape now takes three presses.** A single key that silences a live show is
+a single key away from silencing it by accident, and Escape is the key
+everybody presses out of habit. It counts, says how many are left, and forgets the count
 after a couple of seconds. The Stop everything button still does it in one,
 because pressing a button called Stop everything is not something you do by
 mistake.
@@ -92,24 +123,25 @@ click menu has always had it; now it has a key.
 running order. Plain letters still jump to a track by name.
 
 **Six warning sounds, and a louder one by default.** The beep before a track
-ends was at minus fourteen, which is fine in a quiet room and not what a cue
-is for: it has to be heard over the song it is warning you about. It is at
-minus six now, with a volume of its own, and there are six to choose from:
+ends sat at minus fourteen. That is fine in a quiet room and no use at all
+over the song it is warning you about, so it is at minus six now, with a
+volume of its own, and there are six to choose from:
 a pip, a double pip, a chime, a bell, three ticks and a rising sweep. Each
-plays as you choose it. They are deliberately different shapes rather than
-different notes, because over music a bell and a sweep are told apart at once
-where two tones a third apart are not. All six are matched to the same
-loudness, so changing your mind never changes how loud your warning is.
+plays as you choose it. They are different shapes, not different notes: over
+music a bell and a sweep are told apart at once, where two tones a third apart
+are not. All six sit at the same loudness, so changing your mind never changes
+how loud your warning is.
 
 **Who is listening.** `Ctrl+Shift+A`, or the On air menu. It shows every
 stream on your server, how many people are on each, and what the server thinks
 is playing, and it keeps itself up to date while it is open. It works off air
 too, which matters if your station carries on without you.
 
-It handles the awkward case, which is the common one: if you stream into
-automation, the server you send to is not the server people listen to. Drop
-Deck looks in the usual places and says which one answered. If your listeners
-are somewhere else entirely, there is a box for that on the Streaming tab.
+It handles the awkward case, and the awkward case is the common one: if you
+stream into automation, the server you send to is not the server people listen
+to. Drop Deck looks in the usual places and says which one answered. If your
+listeners are somewhere else entirely, there is a box for that on the
+Streaming tab.
 
 Nothing here needs a password. Icecast and SHOUTcast both publish their own
 listener counts, and that is what this reads.
@@ -123,22 +155,22 @@ order. Every setting is a row in a list: up and down to choose one, left and
 right to change it, and it says the new value as you go. Hold `Shift` for a
 bigger step. Nothing opens a window you cannot read.
 
-The limiter is a real ceiling rather than a loudness maximiser. Set it to
-minus one and nothing leaves at minus nought point nine, which is the promise
-a broadcast limiter has to keep. It adds no delay at all, because a few
-milliseconds between your mouth and your headphones sounds like a barrel.
+The limiter is a real ceiling, not a loudness maximiser. Set it to minus one
+and nothing leaves at minus nought point nine. That is the promise a broadcast
+limiter has to keep, and it costs no delay at all, because a few milliseconds
+between your mouth and your headphones sounds like a barrel.
 
 **VST3 effects, read out loud.** Load a vocal effect and its own knobs appear
 in the same list, in plain words with real units. Presets save and open. The
 plugin's own window is never opened, so a plugin no screen reader can read
-becomes a list any screen reader can. Instruments are refused, because an
-instrument in a voice chain replaces the voice rather than changing it.
+becomes a list any screen reader can. Instruments are refused: an instrument
+in a voice chain would replace your voice instead of changing it.
 
 Your plugin and its settings are remembered with the board.
 
 **Preferences opens on the tab you asked for and Cancel really cancels.**
 Everything on the Voice tab changes the microphone you are listening to while
-you set it, which is the point. Cancel now puts all of it back.
+you set it, and that is deliberate. Cancel now puts all of it back.
 
 **A board brings its microphone with it.** Opening a board applies its gain,
 its channel and its whole voice chain. It used to leave the microphone on the

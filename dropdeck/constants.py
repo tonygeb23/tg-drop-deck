@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -469,12 +469,21 @@ RECORDING THE SHOW
   Closing the app finishes the file first, so a recording always opens.
 
 OTHER THINGS ON THE AIR
-  On air menu, Audio sources. Anything Windows offers as an input can go out
-  with you: a second microphone, a hardware mixer, or another program.
-  For another program you need a virtual audio cable, which is a free driver
+  Alt+Shift+S, or the On air menu, Audio sources. Anything Windows offers as
+  an input can go out with you: a second microphone, a hardware mixer, or one
+  program's audio on its own.
+  A PROGRAM. Take audio from, One program, then pick it from the list. Windows
+  hands over exactly what that program is playing and nothing else, with
+  nothing to set up in the program and no driver to install. The list shows
+  programs with a window and is rebuilt each time you open it. Drop Deck
+  remembers the program by name, so it finds it again next week.
+  If it is not running when Drop Deck opens, the source says so. If you close
+  it mid show, the capture notices in a couple of seconds and tells you.
+  Needs Windows 10 build 20348 or later. Older Windows says it cannot, and
+  the cable below still works.
+  A CABLE, which works on any Windows. A virtual audio cable is a free driver
   that looks like a speaker to one program and a microphone to another. Point
-  TeamTalk, Chrome or a game at the cable in ITS OWN settings, then choose the
-  cable here. That is the whole trick, and it works for anything.
+  a program at the cable in ITS OWN settings, then choose the cable here.
   Each source has a name, a gain, which channel to take, whether it goes on
   the air, and whether you hear it yourself. Leave "hear it" off when the
   sound already comes out of your speakers from the program itself, or you
@@ -566,8 +575,8 @@ PUTTING THE SHOW ON THE INTERNET
   Ctrl+Shift+B              What the stream is doing right now
   Ctrl+Shift+A              Who is listening, and what the server says is
                             playing. Works off air too
-  On air, Audio sources     Other inputs to put on the air besides your
-                            microphone
+  Alt+Shift+S               Other inputs to put on the air besides your
+                            microphone: a card, a cable, or one program
 
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come

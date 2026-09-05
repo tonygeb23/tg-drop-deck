@@ -1090,9 +1090,9 @@ class DropDeckFrame(wx.Frame):
         self.record_item = air.Append(
             ID_RECORD, "Start &recording\tCtrl+R",
             "Record the show to a file. It does not need you to be on air")
-        air.Append(ID_SOURCES, "&Audio sources...",
+        air.Append(ID_SOURCES, "&Audio sources..." + chr(9) + "Alt+Shift+S",
                    "Other inputs to put on the air: a second microphone, a "
-                   "mixer, or another program through a virtual cable")
+                   "mixer, or one program's audio"),
         air.Append(ID_RECORD_FOLDER, "Open the recordings &folder",
                    "Where your recordings are saved")
         air.AppendSeparator()
@@ -1291,6 +1291,10 @@ class DropDeckFrame(wx.Frame):
                                 ID_STREAM_STATS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("R"), ID_RECORD),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_SPACE, ID_STOP_LATEST),
+            # Alt+Shift+S manages sources, whatever kind they are: a sound
+            # card, a cable, or a program.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("S"),
+                                ID_SOURCES),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
