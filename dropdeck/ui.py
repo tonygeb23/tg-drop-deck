@@ -1065,8 +1065,8 @@ class DropDeckFrame(wx.Frame):
 
         help_menu = wx.Menu()
         help_menu.Append(ID_SHORTCUTS, "&Keyboard shortcuts\tF1")
-        help_menu.Append(ID_USER_GUIDE, "User &guide on the web...",
-                         "Opens the full guide at tgstudios.app in your "
+        help_menu.Append(ID_USER_GUIDE, "User &manual...",
+                         "Opens the full manual at tgstudios.app in your "
                          "browser")
         help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
         help_menu.AppendSeparator()
@@ -3014,16 +3014,16 @@ class DropDeckFrame(wx.Frame):
     # ====================================================================
 
     def _on_user_guide(self, _event=None):
-        """The full guide, on the site. F1 is the keys; this is the why.
+        """The full manual, on the site. F1 is the keys; this is everything.
 
         On the web rather than in the app on purpose: it can be corrected the
         day somebody finds it confusing, without waiting for a release, and it
         is one page a screen reader can search.
         """
         if webbrowser.open(C.USER_GUIDE_URL):
-            self.announce("Opening the user guide in your browser")
+            self.announce("Opening the user manual in your browser")
         else:
-            self.announce("Could not open a browser. The guide is at %s"
+            self.announce("Could not open a browser. The manual is at %s"
                           % C.USER_GUIDE_URL)
 
     def _on_feedback(self, _event=None):

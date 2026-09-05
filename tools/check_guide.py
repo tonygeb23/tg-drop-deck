@@ -234,10 +234,13 @@ def main():
         bad("the demo pack is where the guide assumes", "not found")
 
     check("twenty slots a bank", C.SLOTS_PER_BANK == 20 and "Twenty slots" in guide)
-    check("eighty in total", C.TOTAL_SLOTS == 80 and "eighty in total" in guide)
+    check("eighty in total", C.TOTAL_SLOTS == 80 and "eighty in all" in guide)
     check("four banks", C.BANK_COUNT == 4 and "four banks" in guide.lower())
+    # Asked without regard to case: whether the sentence happens to start with
+    # the phrase is not what this is checking.
     check("bank three is the looping bank",
-          C.LOOPING_BANK == 3 and "bank three is still the looping bank" in guide)
+          C.LOOPING_BANK == 3
+          and "bank three is still the looping bank" in guide.lower())
     check("bank four takes the custom hotkeys", C.BANK_MISC == 4)
 
     check("ducking is about nine decibels",
@@ -269,19 +272,20 @@ def main():
     check("the app really does refuse a bare key",
           "the app refuses it" in guide)
     check("the microphone really does duck by being open",
-          "because the microphone is *open*" in guide)
+          "the microphone being OPEN, not you talking" in guide)
     check("monitoring really does start off",
           "off until you turn it on" in guide)
     check("nothing really does open the mic but the key",
           "except you pressing `Ctrl+M`" in guide)
     check("a folder slot really does avoid repeating itself",
-          "never the same one twice running" in guide)
+          "without repeating itself until it has been through them" in guide)
     check("Alt+D really does too",
-          guide.count("never the same one twice running") >= 2)
+          guide.count("without repeating itself until it has been through them")
+          >= 2)
     check("unticking really does keep a track in the list",
           "stays in the list and keeps its place" in guide)
     check("relink really does repair the playlist and library too",
-          "playlist and your drops library out of the same search" in guide)
+          "the running order and your drops library at the same time" in guide)
     check("feedback really does withhold names and paths",
           "Never a file name, a sound name, a bank name" in guide)
     check("the board really does save itself",

@@ -12,9 +12,13 @@ APP_VERSION = "3.2.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
-#: The full guide. On the web rather than in the app so it can be put
-#: right the day somebody finds it confusing, rather than at the next
-#: release. F1 is the keys; this is the why.
+#: The full manual: every feature, every setting and every key, in chapters
+#: with a contents and an FAQ. On the web rather than in the app so it can be
+#: put right the day somebody finds it confusing, rather than at the next
+#: release. F1 is the key list; this is everything.
+#:
+#: It is rewritten with every build. A manual that is one release behind is
+#: worse than no manual, because somebody trusts it.
 USER_GUIDE_URL = "https://tgstudios.app/drop-deck-guide/"
 
 # ----------------------------------------------------------------- banks ---
@@ -647,7 +651,8 @@ GLOBAL
                             it in one press
   Ctrl+R                    Start and stop recording
   F1                        This help
-  Help, User guide          The full guide on the web, in plain English
+  Help, User manual         The full manual on the web: every feature,
+                            every setting, a contents and an FAQ
   Ctrl+Tab                  Next bank
 
 HOW MUCH THE APP SAYS
