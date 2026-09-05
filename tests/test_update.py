@@ -156,5 +156,119 @@ finally:
 check("unpacking the same version twice does not overwrite the first",
       again != landed and os.path.isdir(again), os.path.basename(again))
 
+print()
+print("Replacing the copy in place, which is what portable means")
+
+# Tony, 5 September 2026: "portable comes with the intended purpose of
+# replacing with the new executable that's downloaded."
+#
+# Windows will not let a running executable be overwritten, so the NEW copy
+# does the writing: it waits for the old process to end, replaces the folder
+# it came from and starts the app again from the same path. What follows is
+# that swap, run the way the new copy runs it.
+import shutil
+
+root = tempfile.mkdtemp()
+live = os.path.join(root, "TG Drop Deck")
+os.makedirs(os.path.join(live, "_internal"))
+open(os.path.join(live, "%s.exe" % C.APP_NAME), "w").write("OLD EXE")
+open(os.path.join(live, "_internal", "payload.dat"), "w").write("old payload")
+open(os.path.join(live, "_internal", "dropped.dat"), "w").write("stale")
+open(os.path.join(live, "my-notes.txt"), "w").write("mine")
+os.makedirs(os.path.join(live, "my sounds"))
+open(os.path.join(live, "my sounds", "sting.wav"), "w").write("audio")
+
+new_zip = os.path.join(root, "new.zip")
+with zipfile.ZipFile(new_zip, "w") as archive:
+    archive.writestr("%s.exe" % C.APP_NAME, "NEW EXE")
+    archive.writestr("_internal/payload.dat", "new payload")
+    archive.writestr("_internal/added.dat", "brand new")
+
+real_exe = sys.executable
+sys.executable = os.path.join(live, "%s.exe" % C.APP_NAME)
+sys.frozen = True
+try:
+    check("a folder we can write to can be replaced where it stands",
+          appupdate.can_replace() is True)
+    staging = appupdate.unpack_staging(new_zip, "9.9.9")
+    check("the download waits in a folder of its own",
+          os.path.isdir(staging) and appupdate.STAGING_PREFIX in staging,
+          os.path.basename(staging))
+    ok, message = appupdate.finish_update(live, pid=0, source=staging)
+    check("the swap says it worked", ok, message)
+finally:
+    sys.executable = real_exe
+    del sys.frozen
+
+check("the folder keeps its name, so every shortcut still works",
+      os.path.basename(live) == "TG Drop Deck")
+check("the executable is the new one",
+      open(os.path.join(live, "%s.exe" % C.APP_NAME)).read() == "NEW EXE")
+check("and so is what it runs on",
+      open(os.path.join(live, "_internal", "payload.dat")).read()
+      == "new payload")
+check("a file the new build no longer ships is gone",
+      not os.path.exists(os.path.join(live, "_internal", "dropped.dat")))
+check("a file it added is there",
+      os.path.exists(os.path.join(live, "_internal", "added.dat")))
+check("anything the user put in the folder is untouched",
+      open(os.path.join(live, "my-notes.txt")).read() == "mine"
+      and os.path.exists(os.path.join(live, "my sounds", "sting.wav")))
+check("and nothing half done is left behind",
+      not os.path.exists(os.path.join(live, "_internal.replaced")))
+
+# The staging folder cannot delete itself: the copy doing the work is running
+# from inside it. The next start clears it.
+check("the staging folder is still there afterwards", os.path.isdir(staging))
+sys.executable = os.path.join(live, "%s.exe" % C.APP_NAME)
+try:
+    gone = appupdate.clean_staging()
+finally:
+    sys.executable = real_exe
+check("and the next start clears it", not os.path.isdir(staging), gone)
+
+print()
+print("When it cannot be done, nothing is broken")
+
+# A swap that fails halfway has to leave a working copy behind, so the old
+# payload is renamed rather than deleted, and put back if anything raises.
+broken = os.path.join(tempfile.mkdtemp(), "TG Drop Deck")
+os.makedirs(os.path.join(broken, "_internal"))
+open(os.path.join(broken, "%s.exe" % C.APP_NAME), "w").write("OLD EXE")
+open(os.path.join(broken, "_internal", "payload.dat"), "w").write("old payload")
+
+half = tempfile.mkdtemp()
+open(os.path.join(half, "%s.exe" % C.APP_NAME), "w").write("NEW EXE")
+os.makedirs(os.path.join(half, "_internal"))
+open(os.path.join(half, "_internal", "payload.dat"), "w").write("new payload")
+
+# The payload folder is what fails: it is the big copy and the one a full
+# disk would stop in the middle of. copytree binds copy2 at definition time,
+# so patching that would not have been felt here at all.
+real_tree = shutil.copytree
+
+
+def fails_partway(*args, **kw):
+    raise OSError("the disk filled up")
+
+
+shutil.copytree = fails_partway
+try:
+    ok, message = appupdate.finish_update(broken, pid=0, source=half)
+finally:
+    shutil.copytree = real_tree
+check("a swap that fails says so", not ok, message)
+check("and says the old copy was put back", "put back" in message, message)
+check("the old payload really is back",
+      open(os.path.join(broken, "_internal", "payload.dat")).read()
+      == "old payload")
+check("with nothing left renamed aside",
+      not os.path.exists(os.path.join(broken, "_internal.replaced")))
+
+# And a copy that is still running is never replaced underneath itself.
+ok, message = appupdate.finish_update(broken, pid=os.getpid())
+check("a copy that is still running is left alone", not ok)
+check("and told why", "still running" in message, message)
+
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)

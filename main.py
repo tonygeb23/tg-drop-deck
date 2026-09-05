@@ -220,7 +220,42 @@ class DropDeckApp(wx.App):
         return True
 
 
+def finish_update():
+    """Replace the copy that asked us to, then start it and get out of the way.
+
+    This runs in the NEWLY unpacked copy, started by the old one with
+    --finish-update, and it is the only way a portable copy can replace
+    itself: Windows will not let a running executable be overwritten, so the
+    new one does the writing while the old one is closing.
+
+    No window, no wx, and no single instance mutex: the app that starts
+    afterwards needs both of those and this must not be holding either.
+    """
+    import os
+    from dropdeck import appupdate
+
+    at = sys.argv.index(appupdate.FINISH_FLAG)
+    target, pid = sys.argv[at + 1], sys.argv[at + 2]
+    ok, message = appupdate.finish_update(target, pid)
+    if not ok:
+        # It failed and put things back, so the copy in that folder still
+        # works. The reason is written where somebody will find it, because
+        # there is no window here to say it in.
+        try:
+            note = os.path.join(target, "update-did-not-finish.txt")
+            with open(note, "w", encoding="utf-8") as handle:
+                handle.write(message + "\n")
+        except OSError:
+            pass
+    appupdate.relaunch(target)
+    return 0 if ok else 1
+
+
 def main():
+    from dropdeck import appupdate
+    if appupdate.FINISH_FLAG in sys.argv:
+        import os
+        os._exit(finish_update())
     if "--selftest" in sys.argv:
         import os
         try:

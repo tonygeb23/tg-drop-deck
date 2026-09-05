@@ -28,10 +28,12 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 from . import constants as C
@@ -318,3 +320,224 @@ def auto_check(config_dir, force=False, interval_hours=DEFAULT_INTERVAL_HOURS):
     if not available:
         return False, info, (message if force else None)
     return True, info, message
+
+
+# ---------------------------------------------------------------------------
+# Replacing a portable copy with itself
+#
+# Tony, 5 September 2026: "portable comes with the intended purpose of
+# replacing with the new executable that's downloaded."
+#
+# Quite so, and Windows will not let a running executable be overwritten. The
+# way round it is the new copy doing the work: this one unpacks the download
+# beside itself, starts the NEW executable with --finish-update, and quits.
+# The new one waits for this process to disappear, replaces the folder it came
+# from, starts the app again from the original path and exits. From the
+# outside it is one restart.
+#
+# The swap is written so that a failure halfway is recoverable: the old
+# payload is RENAMED rather than deleted, and put back if anything goes wrong.
+# ---------------------------------------------------------------------------
+
+#: Where a download is unpacked while it waits to replace the running copy.
+#: A dot, so it sorts out of the way, and the version, so two attempts cannot
+#: collide.
+STAGING_PREFIX = ".dropdeck-update-"
+
+#: The flag the new copy is started with. Not a secret, just a word nobody
+#: would type by accident.
+FINISH_FLAG = "--finish-update"
+
+
+def app_folder():
+    """The folder this copy runs from."""
+    return os.path.dirname(os.path.abspath(sys.executable))
+
+
+def staging_for(version, parent=None):
+    return os.path.join(parent or os.path.dirname(app_folder()),
+                        "%s%s" % (STAGING_PREFIX, version or "new"))
+
+
+def can_replace(folder=None):
+    """Whether this copy could be replaced where it stands.
+
+    A zip unpacked to a read only share, or to Program Files without rights,
+    cannot be. Asked by writing a file rather than by reading permissions,
+    because permissions on Windows are a poor guide to what will happen.
+    """
+    folder = folder or app_folder()
+    probe = os.path.join(folder, ".dropdeck-write-test")
+    try:
+        with open(probe, "w") as handle:
+            handle.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def unpack_staging(zip_path, version, parent=None):
+    """Unpack a download into its staging folder. Returns where the exe is."""
+    import zipfile
+    target = staging_for(version, parent)
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(target)
+    entries = os.listdir(target)
+    if len(entries) == 1:
+        inner = os.path.join(target, entries[0])
+        if os.path.isdir(inner) and os.path.exists(
+                os.path.join(inner, "%s.exe" % C.APP_NAME)):
+            return inner
+    return target
+
+
+def clean_staging(parent=None):
+    """Remove any staging folder left behind. Called at startup.
+
+    A swap that worked leaves its own folder there, because the copy doing the
+    work was running from inside it and could not delete the ground it stood
+    on. The copy that starts afterwards can.
+    """
+    parent = parent or os.path.dirname(app_folder())
+    removed = []
+    try:
+        entries = os.listdir(parent)
+    except OSError:
+        return removed
+    for entry in entries:
+        if entry.startswith(STAGING_PREFIX):
+            path = os.path.join(parent, entry)
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+                if not os.path.exists(path):
+                    removed.append(path)
+    return removed
+
+
+def _still_running(pid):
+    """Whether that process is still there. Windows only, and best effort."""
+    if not pid:
+        return False
+    try:
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False,
+                                                    int(pid))
+        if not handle:
+            return False
+        # 0 means it is already signalled, which for a process means exited.
+        signalled = ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == 0
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return not signalled
+    except Exception:
+        return False
+
+
+def _wait_for_exit(pid, seconds=90.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not _still_running(pid):
+            # A moment more. The process is gone but Windows can hold the
+            # file locks for an instant after, and antivirus for longer.
+            time.sleep(0.4)
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _retry(action, attempts=25, wait=0.4):
+    """Do something that a lock might refuse, for a while, then give up."""
+    last = None
+    for _ in range(attempts):
+        try:
+            action()
+            return None
+        except OSError as exc:
+            last = exc
+            time.sleep(wait)
+    return last
+
+
+def finish_update(target, pid, source=None):
+    """Replace ``target`` with the copy this is running from. The new copy runs
+    this, never the old one.
+
+    Returns (ok, message). Nothing here may raise: it is the last thing
+    standing between somebody and a broken folder.
+    """
+    source = source or app_folder()
+    target = os.path.abspath(target)
+    if os.path.abspath(source) == target:
+        return False, "The new copy and the old one are the same folder."
+    if not _wait_for_exit(pid):
+        return False, ("The copy being replaced is still running, so nothing "
+                       "was changed.")
+
+    payload = os.path.join(target, "_internal")
+    kept = payload + ".replaced"
+    if os.path.isdir(kept):
+        shutil.rmtree(kept, ignore_errors=True)
+
+    # RENAMED, not removed. If the copy below fails there is still a working
+    # app in that folder and this puts it back.
+    moved = False
+    if os.path.isdir(payload):
+        failed = _retry(lambda: os.rename(payload, kept))
+        if failed is not None:
+            return False, ("Could not move the old files aside: %s" % failed)
+        moved = True
+
+    try:
+        for entry in os.listdir(source):
+            src = os.path.join(source, entry)
+            dst = os.path.join(target, entry)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                failed = _retry(lambda s=src, d=dst: shutil.copy2(s, d))
+                if failed is not None:
+                    raise failed
+    except Exception as exc:
+        if moved:
+            shutil.rmtree(payload, ignore_errors=True)
+            try:
+                os.rename(kept, payload)
+            except OSError:
+                pass
+        return False, ("The update could not be written, so the copy you had "
+                       "has been put back. %s" % exc)
+
+    shutil.rmtree(kept, ignore_errors=True)
+    return True, "Updated in place."
+
+
+def relaunch(target):
+    """Start the app again from where it was, and let this copy end."""
+    exe = os.path.join(target, "%s.exe" % C.APP_NAME)
+    if not os.path.exists(exe):
+        return False
+    try:
+        subprocess.Popen([exe], cwd=target, close_fds=True)
+        return True
+    except OSError:
+        return False
+
+
+def start_swap(staging_exe_folder, target, pid):
+    """Ask the newly unpacked copy to replace this one. Called by the OLD copy.
+
+    Returns True if the new copy was started. Whoever calls this then has to
+    close, promptly: the new one is waiting for exactly that.
+    """
+    exe = os.path.join(staging_exe_folder, "%s.exe" % C.APP_NAME)
+    if not os.path.exists(exe):
+        return False
+    try:
+        subprocess.Popen([exe, FINISH_FLAG, target, str(pid)],
+                         cwd=staging_exe_folder, close_fds=True)
+        return True
+    except OSError:
+        return False

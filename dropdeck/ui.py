@@ -50,7 +50,7 @@ from .speech import Speaker, percent
 ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
 #: Who is listening. Ctrl+Shift+A for audience, next to the pair above.
-ID_STREAM_STATS = wx.ID_HIGHEST + 403
+ID_STREAM_STATS = wx.ID_HIGHEST + 404
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
 #: anyone has, and a fixed block keeps them clear of every other id.
@@ -68,7 +68,7 @@ ID_CLEAR_FOCUSED = wx.ID_HIGHEST + 6
 ID_STOP_ALL = wx.ID_HIGHEST + 7
 #: Escape, which needs three presses. Its own id so that the menu item and
 #: the button, which are deliberate on their own, still stop immediately.
-ID_STOP_ALL_KEY = wx.ID_HIGHEST + 8
+ID_STOP_ALL_KEY = wx.ID_HIGHEST + 58
 ID_SEARCH = wx.ID_HIGHEST + 8
 ID_DUCK = wx.ID_HIGHEST + 9
 ID_WHATS_PLAYING = wx.ID_HIGHEST + 10
@@ -613,6 +613,10 @@ class DropDeckFrame(wx.Frame):
         # important lines - files missing, audio did not start - were the ones
         # that got cut.
         wx.CallLater(500, self._announce_startup)
+        # The folder the last update was unpacked into. The copy that did the
+        # replacing was running from inside it and could not delete the ground
+        # it was standing on; this one can.
+        wx.CallLater(3000, self._clean_update_staging)
         # Anything queued from last time goes out on its own, and the word
         # about donating comes well after the app has said hello - the first
         # thing it says to somebody is about their board, never about money.
@@ -1539,15 +1543,25 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
 
     def _finish_portable_update(self, path, info):
-        """Unpack a portable update beside this copy and say where it is.
+        """Replace this portable copy with the one just downloaded.
 
-        Not over the top of it: the running executable cannot be replaced
-        while it is running, and a half replaced folder still starts and is a
-        mixture of two versions, which is worse than not updating at all.
-        The old folder is left alone, so going back is just going back.
+        Tony, 5 September 2026: "portable comes with the intended purpose of
+        replacing with the new executable that's downloaded."
+
+        Windows will not let a running executable be overwritten, so the new
+        copy does the writing: it is unpacked beside this one, started with
+        --finish-update, and it waits for this process to disappear before
+        replacing the folder and starting the app again from the same path.
+        From the outside it is one restart, and the folder keeps its name.
+
+        A copy on a read only share cannot be replaced at all, and there the
+        old behaviour is the right one: unpack beside, and say where.
         """
         from . import appupdate
         version = info.get("version", "")
+        if appupdate.can_replace():
+            self._replace_this_copy(path, version)
+            return
         try:
             folder = appupdate.unpack_beside(path, version)
         except Exception as exc:
@@ -1557,10 +1571,10 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING,
                           self)
             return
-        message = ("Version %s is unpacked and ready, in %s. Close this copy "
-                   "and run TG Drop Deck from that folder. Your board and "
-                   "settings are shared, so everything is where you left it. "
-                   "This folder has not been touched."
+        message = ("This folder cannot be written to, so version %s has been "
+                   "unpacked next to it instead, in %s. Close this copy and "
+                   "run TG Drop Deck from that folder. Your board and "
+                   "settings are shared, so everything is where you left it."
                    % (version or "the new one", folder))
         self.announce(message)
         answer = wx.MessageBox(
@@ -1571,6 +1585,38 @@ class DropDeckFrame(wx.Frame):
                 os.startfile(folder)          # noqa: S606 - a folder, not input
             except Exception:
                 pass
+
+    def _replace_this_copy(self, path, version):
+        """Unpack beside, hand over to the new copy, and close."""
+        from . import appupdate
+        try:
+            staging = appupdate.unpack_staging(path, version)
+        except Exception as exc:
+            message = ("The download was fine but it could not be unpacked. "
+                       "%s" % exc)
+            self.announce(message)
+            wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING,
+                          self)
+            return
+        here = appupdate.app_folder()
+        message = ("Version %s is ready. Drop Deck will close and open again "
+                   "on the new version, in the same folder. Your board and "
+                   "settings are untouched." % (version or "the new one"))
+        if wx.MessageBox(message + "\n\nUpdate now?", "Update ready",
+                         wx.YES_NO | wx.ICON_INFORMATION, self) != wx.YES:
+            self.announce("Update left for later. The download is kept.")
+            return
+        if not appupdate.start_swap(staging, here, os.getpid()):
+            failed = ("The new copy would not start, so nothing has been "
+                      "changed. It is unpacked in %s." % staging)
+            self.announce(failed)
+            wx.MessageBox(failed, "Update failed", wx.OK | wx.ICON_WARNING,
+                          self)
+            return
+        # It is waiting for this process to end, so end it. The board is
+        # saved on the way out by the ordinary close path.
+        self.announce("Updating. Drop Deck will open again in a moment.")
+        self.Close()
 
     # -------------------------------------------------------------- speaking --
     #
@@ -3278,6 +3324,13 @@ class DropDeckFrame(wx.Frame):
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
         self._update_status()
+
+    def _clean_update_staging(self):
+        from . import appupdate
+        try:
+            appupdate.clean_staging()
+        except Exception:
+            pass
 
     def _apply_board_voice(self, board):
         """Move a newly opened board's microphone settings onto the live one.

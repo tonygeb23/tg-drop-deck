@@ -2,6 +2,23 @@
 
 ## 3.1.0, 5 September 2026
 
+**Portable copies replace themselves now.** A portable copy is meant to be
+the new executable, not a second folder next to the old one, so that is what
+it does: it downloads the zip, and because Windows will not let a running
+program overwrite itself, the new copy does the writing. It waits for the old
+one to close, replaces the folder it came from, and starts the app again from
+the same path. The folder keeps its name, so every shortcut still works, and
+anything you put in there yourself is left alone.
+
+If the swap cannot finish, the old copy is put straight back rather than left
+half written, and it still starts. On a read only location, where nothing can
+be replaced at all, it unpacks beside as before and says so.
+
+**Ctrl+Shift+A opened Preferences.** Two commands had been given the same
+number, so the key reached whichever handler was wired last. Escape had the
+same fault, sharing with Search. Both fixed, and there is now a check that no
+two commands can share a number again.
+
 **Escape now takes three presses.** One key that silences the whole show is
 one key away from silencing it by accident, and Escape is the key everybody
 presses out of habit. It counts, says how many are left, and forgets the count

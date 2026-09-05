@@ -245,6 +245,57 @@ for shortcut in ("Ctrl+M", "Ctrl+Shift+M", "Ctrl+Shift+P", "Ctrl+Shift+S",
     check("F1 help documents %s" % shortcut, shortcut in C.KEYBOARD_HELP)
 
 # ---------------------------------------------------------------------------
+print("No two commands share an id")
+
+# Tony, 5 September 2026: "ctrl shift A brings up preferences when I want to
+# check listeners etc."
+#
+# Every menu item, button and accelerator is addressed by a number, and two
+# names for the same number is two commands wired to one wire: whichever
+# handler was bound last answers for both. It is invisible in the source,
+# because the two definitions are hundreds of lines apart and each looks
+# perfectly reasonable, and it is invisible in a test that calls the handler
+# rather than pressing the key. Ctrl+Shift+A opened Preferences because the
+# new id landed on Set up streaming, and Escape landed on Search.
+import ast as _ast
+import pathlib as _pathlib
+
+from dropdeck import plids as _plids
+from dropdeck import ui as _ui
+
+_numbers = {}
+for _module, _path in ((_ui, "dropdeck/ui.py"), (_plids, "dropdeck/plids.py")):
+    _tree = _ast.parse(_pathlib.Path(_path).read_text(encoding="utf-8"))
+    for _node in _tree.body:
+        if isinstance(_node, _ast.Assign) and len(_node.targets) == 1:
+            _target = _node.targets[0]
+            if isinstance(_target, _ast.Name) and _target.id.startswith("ID_"):
+                _numbers.setdefault(getattr(_module, _target.id),
+                                    set()).add(_target.id)
+_clashes = {n: sorted(names) for n, names in _numbers.items() if len(names) > 1}
+check("every command id is its own number", not _clashes,
+      "; ".join("%d is both %s" % (n, " and ".join(names))
+                for n, names in sorted(_clashes.items())))
+check("and there are plenty of them to check", len(_numbers) > 50,
+      len(_numbers))
+
+# The two that were wrong, by name, so a future renumbering cannot quietly
+# put either back.
+check("Ctrl+Shift+A is not Set up streaming",
+      _ui.ID_STREAM_STATS != _ui.ID_STREAM_SETUP)
+check("and Escape is not Search", _ui.ID_STOP_ALL_KEY != _ui.ID_SEARCH)
+
+# Each accelerator has to reach a command that something actually handles.
+_entries = frame._build_accelerators()
+_known = set(_numbers)
+_orphans = [e.ToString() for e in _entries
+            if e.GetCommand() not in _known
+            and not (_ui.ID_SLOT_BASE <= e.GetCommand()
+                     <= _ui.ID_SLOT_BASE + C.TOTAL_SLOTS)]
+check("every key in the map points at a command that exists", not _orphans,
+      _orphans)
+
+# ---------------------------------------------------------------------------
 try:
     frame.stop_background_work()
 except Exception:
