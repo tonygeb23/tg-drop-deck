@@ -25,6 +25,20 @@ there and says it cannot be done, and the virtual cable route works as before.
 **Alt+Shift+S** opens Audio sources, whichever kind you are after: a sound
 card, a cable, or a program.
 
+**Source control, for while you are on air.** `Alt+Ctrl+Shift+S`. A list you
+work without leaving the keyboard: up and down choose a source, left and right
+choose what to do to it, and `Space` does it. Mute, solo, rename or remove.
+
+Your microphone is in that list too, because soloing a games call has to take
+your voice down with everything else or it is not a solo. It can be muted from
+there, and not renamed or removed.
+
+Every source keeps a number, and the number is its position rather than
+anything to do with its name, so renaming one does not renumber it. Pressing a
+digit jumps straight to that source. A mute is never saved with the board:
+coming back tomorrow to a source that is quiet for reasons you cannot remember
+is worse than having to press it again.
+
 **Some of the changelog was rewritten.** Not what any release did, only how it
 read: five "rather than" and six "which is" inside three entries is one voice
 with one move, and it showed.

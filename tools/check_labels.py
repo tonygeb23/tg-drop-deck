@@ -254,7 +254,8 @@ def main():
                                   DropsLibraryDialog, FeedbackDialog,
                                   SearchDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
-                                  SourcesDialog, StreamStatsDialog,
+                                  SourceControlDialog, SourcesDialog,
+                                  StreamStatsDialog,
                                   TrackCrossfadeDialog, TrimDialog)
     from dropdeck.playlist import Track
     from dropdeck.ui import DropDeckFrame
@@ -305,6 +306,7 @@ def main():
         ("Audio sources",
          lambda: SourcesDialog(frame, [{"name": "A source",
                                         "device_name": "", "on_air": True}])),
+        ("Source control", lambda: SourceControlDialog(frame)),
     ]:
         try:
             dialog = build()

@@ -74,6 +74,35 @@ class Source:
                                   else "mix")
         self.last_error = None
 
+    #: Silenced by hand, from the source control list. Never saved: a mute
+    #: is something you do during a show, and coming back tomorrow to a
+    #: source that is quiet for reasons you cannot remember is worse than
+    #: having to press it again.
+    muted = False
+    #: Soloed. While anything at all is soloed, everything that is not is
+    #: silent. Also never saved.
+    soloed = False
+
+    def wants_air(self, anything_soloed=False):
+        """Whether this should be on the air right now.
+
+        Three things decide it: what the source is set to, whether it has
+        been muted, and whether something somewhere is soloed. Kept in one
+        place so the microphone and the sources answer it the same way.
+        """
+        if self.muted:
+            return False
+        if anything_soloed and not self.soloed:
+            return False
+        return bool(self.wanted_on_air)
+
+    def wants_monitor(self, anything_soloed=False):
+        if self.muted:
+            return False
+        if anything_soloed and not self.soloed:
+            return False
+        return bool(self.wanted_monitor)
+
     # ------------------------------------------------------------ settings --
     @property
     def gain_db(self):

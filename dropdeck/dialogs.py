@@ -2807,6 +2807,229 @@ class FeedbackDialog(wx.Dialog):
             self.submit.Enable(bool(self.text))
 
 
+class SourceControlDialog(wx.Dialog):
+    """Mute, solo, rename or remove a source, while the show is going out.
+
+    Tony, 5 September 2026: "a running source list that has a mute or solo
+    option next to each one... arrow up and down to read the individual
+    sources that are enabled and left and right arrow to cycle between mute,
+    solo, rename, or delete."
+
+    So it is two axes. Up and down choose a source; left and right choose what
+    you are about to do to it; Space or Enter does it. Nothing on this window
+    needs Tab, and nothing needs a mouse, which is the point: this is the one
+    that gets used mid link with somebody talking.
+
+    Every source keeps a number, and it is the position in the list rather
+    than anything to do with the name. Renaming one does not renumber it, and
+    the number is what you say out loud when you are telling somebody which
+    fader you mean.
+    """
+
+    #: What left and right cycle between, in that order.
+    ACTIONS = [
+        ("mute", "Mute"),
+        ("solo", "Solo"),
+        ("rename", "Rename"),
+        ("delete", "Remove"),
+    ]
+
+    def __init__(self, parent):
+        super().__init__(parent, title="Source control",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = parent
+        self.action = 0
+        self.changed = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label="Up and down choose a source. Left and right choose "
+                        "what to do to it. Space does it.")
+        note.Wrap(self.FromDIP(520))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Sources"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(540, 190))
+        self.list.SetName("Sources")
+        self.list.InsertColumn(0, "Number", width=70)
+        self.list.InsertColumn(1, "Source", width=210)
+        self.list.InsertColumn(2, "Muted", width=70)
+        self.list.InsertColumn(3, "Solo", width=60)
+        self.list.InsertColumn(4, "On air", width=70)
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_row)
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        outer.Add(self.doing, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.StdDialogButtonSizer()
+        close = wx.Button(self, wx.ID_CANCEL, "&Close")
+        row.AddButton(close)
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.refresh(0)
+        self.list.SetFocus()
+
+    # --------------------------------------------------------------- rows --
+    def rows(self):
+        return self.frame.source_rows()
+
+    def refresh(self, keep=None):
+        if keep is None:
+            keep = max(0, self.list.GetFirstSelected())
+        self.list.DeleteAllItems()
+        soloed = self.frame.anything_soloed()
+        for at, (kind, label, holder) in enumerate(self.rows()):
+            number = "Mic" if kind == "mic" else str(at)
+            self.list.InsertItem(at, number)
+            self.list.SetItem(at, 1, label)
+            self.list.SetItem(at, 2, "yes" if holder.muted else "no")
+            self.list.SetItem(at, 3, "yes" if holder.soloed else "no")
+            if kind == "mic":
+                live = bool(getattr(holder, "on_air", False))
+            else:
+                live = holder.wants_air(soloed)
+            self.list.SetItem(at, 4, "yes" if live else "no")
+        if self.list.GetItemCount():
+            keep = max(0, min(keep, self.list.GetItemCount() - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+        self._show_action()
+
+    def _selected(self):
+        at = self.list.GetFirstSelected()
+        rows = self.rows()
+        return rows[at] if 0 <= at < len(rows) else None
+
+    def _show_action(self, speak=False):
+        """Say what Space would do to the source the cursor is on."""
+        chosen = self._selected()
+        name = self.ACTIONS[self.action][1]
+        if chosen is None:
+            self.doing.SetLabel("")
+            return
+        kind, label, holder = chosen
+        state = ""
+        if self.ACTIONS[self.action][0] == "mute":
+            state = ", muted" if holder.muted else ", not muted"
+        elif self.ACTIONS[self.action][0] == "solo":
+            state = ", soloed" if holder.soloed else ", not soloed"
+        self.doing.SetLabel("Space will %s %s%s" % (name.lower(), label, state))
+        if speak:
+            self._speak("%s%s" % (name, state))
+
+    # --------------------------------------------------------------- keys --
+    def _on_row(self, event):
+        self._show_action()
+        event.Skip()
+
+    def _on_key(self, event):
+        code = event.GetKeyCode()
+        if code in (wx.WXK_LEFT, wx.WXK_RIGHT):
+            step = -1 if code == wx.WXK_LEFT else 1
+            self.action = (self.action + step) % len(self.ACTIONS)
+            self._show_action(speak=True)
+            return
+        if code in (wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._do()
+            return
+        # A digit jumps to that source, which is what the numbers are for.
+        if ord("1") <= code <= ord("8"):
+            at = code - ord("1") + 1
+            if at < self.list.GetItemCount():
+                self.list.Select(at)
+                self.list.Focus(at)
+            return
+        if code == ord("0") and self.list.GetItemCount():
+            self.list.Select(0)
+            self.list.Focus(0)
+            return
+        event.Skip()
+
+    def _do(self):
+        chosen = self._selected()
+        if chosen is None:
+            return
+        kind, label, holder = chosen
+        what = self.ACTIONS[self.action][0]
+        at = self.list.GetFirstSelected()
+        if what == "mute":
+            holder.muted = not holder.muted
+            self.frame.apply_source_mixing()
+            self.changed = True
+            self._speak("%s %s" % (label, "muted" if holder.muted else "unmuted"))
+        elif what == "solo":
+            holder.soloed = not holder.soloed
+            self.frame.apply_source_mixing()
+            self.changed = True
+            if holder.soloed:
+                self._speak("%s soloed. Everything else is silent." % label)
+            else:
+                self._speak("%s no longer soloed%s"
+                            % (label, "" if self.frame.anything_soloed()
+                               else ". Everything is back"))
+        elif what == "rename":
+            if kind == "mic":
+                self._speak("The microphone is always called the microphone")
+                return
+            self._rename(holder)
+        elif what == "delete":
+            if kind == "mic":
+                self._speak("The microphone cannot be removed. "
+                            "Ctrl+M turns it off.")
+                return
+            self._remove(holder, label)
+            at = min(at, max(0, self.list.GetItemCount() - 2))
+        self.refresh(at)
+
+    def _rename(self, source):
+        name = ask_text(self, "What should this source be called?",
+                        "Rename a source", source.name)
+        if name is None:
+            self._speak("Left as %s" % source.name)
+            return
+        name = name.strip()
+        if not name or name == source.name:
+            return
+        source.name = name
+        self._save()
+        self.changed = True
+        self._speak("Renamed to %s" % name)
+
+    def _remove(self, source, label):
+        if wx.MessageBox("Remove %s?\n\nIt stops going out and its settings "
+                         "are forgotten." % label, "Remove a source",
+                         wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+                         self) != wx.YES:
+            self._speak("Kept")
+            return
+        try:
+            source.close()
+        except Exception:
+            pass
+        self.frame.sources = [s for s in self.frame.sources if s is not source]
+        self.frame.source_group.sources = self.frame.sources
+        self._save()
+        self.frame.apply_source_mixing()
+        self.changed = True
+        self._speak("Removed %s" % label)
+
+    def _save(self):
+        self.frame.board.sources = [s.to_dict() for s in self.frame.sources]
+        self.frame._touch()
+
+    def _speak(self, text):
+        speaker = getattr(self.frame, "announce_answer", None)
+        if speaker is not None:
+            speaker(text)
+
+
 class SourcesDialog(wx.Dialog):
     """Other things to put on the air besides your own voice.
 

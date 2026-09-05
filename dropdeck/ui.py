@@ -31,7 +31,7 @@ from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
-                      SourcesDialog, StreamStatsDialog,
+                      SourceControlDialog, SourcesDialog, StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
 from .engine import probe
@@ -60,6 +60,8 @@ ID_RECORD_FOLDER = wx.ID_HIGHEST + 406
 ID_STOP_LATEST = wx.ID_HIGHEST + 407
 #: Other inputs besides the microphone.
 ID_SOURCES = wx.ID_HIGHEST + 408
+#: The live one: mute, solo, rename, remove, while the show is going out.
+ID_SOURCE_CONTROL = wx.ID_HIGHEST + 409
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
 #: anyone has, and a fixed block keeps them clear of every other id.
@@ -1090,6 +1092,10 @@ class DropDeckFrame(wx.Frame):
         self.record_item = air.Append(
             ID_RECORD, "Start &recording\tCtrl+R",
             "Record the show to a file. It does not need you to be on air")
+        air.Append(ID_SOURCE_CONTROL,
+                   "Source &control..." + chr(9) + "Alt+Ctrl+Shift+S",
+                   "Mute, solo, rename or remove a source while you are on "
+                   "air")
         air.Append(ID_SOURCES, "&Audio sources..." + chr(9) + "Alt+Shift+S",
                    "Other inputs to put on the air: a second microphone, a "
                    "mixer, or one program's audio"),
@@ -1195,6 +1201,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
+        self.Bind(wx.EVT_MENU, self._on_source_control, id=ID_SOURCE_CONTROL)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
                   id=ID_STREAM_SETUP)
@@ -1295,6 +1302,8 @@ class DropDeckFrame(wx.Frame):
             # card, a cable, or a program.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("S"),
                                 ID_SOURCES),
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_CTRL | wx.ACCEL_SHIFT,
+                                ord("S"), ID_SOURCE_CONTROL),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
                                 ID_MIC_SETTINGS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"),
@@ -3456,6 +3465,47 @@ class DropDeckFrame(wx.Frame):
         self._update_status()
 
     # ------------------------------------------------------------- sources --
+    def source_rows(self):
+        """Everything the source control list shows, microphone first.
+
+        The microphone is in it because solo has to mean something: soloing a
+        games call has to take your voice down too, or it is not a solo.
+        """
+        rows = [("mic", "Microphone", self.mic)]
+        for at, source in enumerate(getattr(self, "sources", []), start=1):
+            rows.append(("source", "Source %d, %s" % (at, source.name), source))
+        return rows
+
+    def anything_soloed(self):
+        return any(holder.soloed for _kind, _label, holder in self.source_rows()
+                   if holder is not None)
+
+    def apply_source_mixing(self):
+        """Push mute and solo onto the inputs. Called after either changes.
+
+        Nothing here touches what a source is SET to, only what it is doing
+        at this moment, so unmuting puts back exactly what was there before.
+        """
+        soloed = self.anything_soloed()
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            wants = bool(self.board.stream_mic) and self.streaming_or_recording()
+            if mic.muted or (soloed and not mic.soloed):
+                mic.on_air = False
+            else:
+                mic.on_air = wants
+            mic.monitor = (bool(self.board.mic_monitor)
+                           and not mic.muted
+                           and (mic.soloed or not soloed))
+        for source in getattr(self, "sources", []):
+            source.input.on_air = source.wants_air(soloed)
+            source.input.monitor = source.wants_monitor(soloed)
+        self._update_status()
+
+    def streaming_or_recording(self):
+        return bool(getattr(self, "air_bus", None)
+                    or getattr(self, "record_bus", None))
+
     def start_sources(self):
         """Open every source that is wanted, and say what would not open.
 
@@ -3497,6 +3547,13 @@ class DropDeckFrame(wx.Frame):
         self.mixer.monitor_source = group
         self.start_sources()
         self._touch()
+
+    def _on_source_control(self, _event=None):
+        """The live one. Opens whether or not anything is set up, because
+        the microphone is always in it."""
+        with SourceControlDialog(self) as dialog:
+            dialog.ShowModal()
+        self._update_status()
 
     def _on_sources(self, _event=None):
         entries = [source.to_dict() for source in getattr(self, "sources", [])]
@@ -3819,12 +3876,17 @@ class DropDeckFrame(wx.Frame):
         # The microphone goes out whether or not you can hear yourself. They
         # are different questions and this is the one about the listener. It
         # is recorded on the same terms.
-        mic.on_air = bool(buses) and bool(self.board.stream_mic)
+        soloed = self.anything_soloed()
+        mic.on_air = (bool(buses) and bool(self.board.stream_mic)
+                      and not mic.muted and (mic.soloed or not soloed))
         # The group goes on air whenever anything in it is wanted there. A
         # source is on air on its own terms: somebody putting a games call out
         # has not necessarily got their microphone open.
         extras = getattr(self, "sources", [])
-        if buses and (mic.on_air or any(s.wanted_on_air for s in extras)):
+        for source in extras:
+            source.input.on_air = source.wants_air(soloed)
+            source.input.monitor = source.wants_monitor(soloed)
+        if buses and (mic.on_air or any(s.wants_air(soloed) for s in extras)):
             self.mixer.primary.air_source = getattr(self, "source_group", mic)
 
     def stop_stream(self, quiet=False):

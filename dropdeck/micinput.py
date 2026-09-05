@@ -175,6 +175,11 @@ class MicInput:
     which is the common case, nothing is resampled at all.
     """
 
+    #: Silenced by hand from the source control list, and soloed there.
+    #: Neither is saved: both are things you do during a show.
+    muted = False
+    soloed = False
+
     def __init__(self, duck_bus=None, samplerate=None, device=None,
                  gain_db=0.0, monitor=False):
         self.duck_bus = duck_bus

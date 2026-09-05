@@ -485,7 +485,17 @@ OTHER THINGS ON THE AIR
   that looks like a speaker to one program and a microphone to another. Point
   a program at the cable in ITS OWN settings, then choose the cable here.
   Each source has a name, a gain, which channel to take, whether it goes on
-  the air, and whether you hear it yourself. Leave "hear it" off when the
+  the air, and whether you hear it yourself.
+  SOURCE CONTROL, on Alt+Ctrl+Shift+S, is the one for during a show. Up and
+  down choose a source, left and right choose what to do to it, and Space
+  does it: mute, solo, rename or remove. The microphone is in the list too,
+  because soloing a call has to take your voice down or it is not a solo.
+  Every source keeps a number, and it is its position rather than anything to
+  do with its name: renaming one does not renumber it. Pressing a digit in
+  that list jumps to that source.
+  A mute is never saved. It is something you do during a show, and coming
+  back tomorrow to a source that is quiet for reasons you cannot remember is
+  worse than pressing it again. Leave "hear it" off when the
   sound already comes out of your speakers from the program itself, or you
   will hear it twice.
   Sources are never ducked and never go through the voice processing. Both of
@@ -575,8 +585,11 @@ PUTTING THE SHOW ON THE INTERNET
   Ctrl+Shift+B              What the stream is doing right now
   Ctrl+Shift+A              Who is listening, and what the server says is
                             playing. Works off air too
-  Alt+Shift+S               Other inputs to put on the air besides your
-                            microphone: a card, a cable, or one program
+  Alt+Shift+S               Set up other inputs besides your microphone: a
+                            card, a cable, or one program
+  Alt+Ctrl+Shift+S          Source control, for while you are on air: mute,
+                            solo, rename or remove, without leaving the
+                            keyboard
 
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come
