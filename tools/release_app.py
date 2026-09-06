@@ -43,6 +43,13 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.2.2": ("Your screen reader can go on the air. NVDA, JAWS, Narrator and "
+              "the rest are in Audio sources now, so a demonstration or a "
+              "tutorial goes out the way any other program does. They were "
+              "missing because the list only showed programs with a window, "
+              "and a screen reader has none. The same change lists anything "
+              "else that has audio open, so a game, a tray player or a "
+              "browser can go out without a virtual cable."),
     "2.1.0": ("Global hotkeys: assign a key that fires a sound while another "
               "program has focus, and Ctrl+G arms or disarms the lot. This "
               "version can also update itself, so you will not have to come "
@@ -180,7 +187,38 @@ def zip_path():
     return path
 
 
+def require_notes():
+    """Refuse to publish a version with nothing to say about it.
+
+    Tony, 6 September 2026: "For every update now, that update available box
+    should show editions or fixes, etc."
+
+    NOTES defaults to an empty string when a version is missing from it, and
+    an empty string is a perfectly valid manifest, so nothing anywhere failed:
+    3.0.0, 3.1.0, 3.2.0 and 3.2.1 all shipped with a blank release notes box
+    and the only way to find out was to install one and look.
+
+    A rule that has to be remembered every release is a rule that gets missed
+    every few releases, so it is checked here instead. The floor is deliberate
+    rather than arbitrary: forty characters is about a sentence, and a
+    one-word note is the same silence in a different shape.
+    """
+    note = (NOTES.get(C.APP_VERSION) or "").strip()
+    if len(note) < 40:
+        raise SystemExit(
+            "\nNothing to tell people about %s.\n\n"
+            "Add a line to NOTES in tools/release_app.py saying what was\n"
+            "added or fixed. It is read aloud in the update dialog, so a\n"
+            "couple of plain sentences, no markdown.\n\n"
+            "%s"
+            % (C.APP_VERSION,
+               "It is empty." if not note
+               else "It is only %d characters: %r" % (len(note), note)))
+    return note
+
+
 def stage():
+    require_notes()
     path = installer_path()
     blob = open(path, "rb").read()
     digest = hashlib.sha256(blob).hexdigest()

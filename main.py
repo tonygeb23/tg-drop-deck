@@ -173,7 +173,34 @@ def selftest():  # noqa: C901
         if not devices:
             problems.append("no audio output device was found")
     except Exception as exc:
+        devices = []
         notes.append("audio devices: could not enumerate (%r)" % exc)
+
+    # The sources list reaches past visible windows by enumerating WASAPI
+    # audio sessions through COM. If that stopped working in a frozen build
+    # nothing would raise: the list would quietly fall back to windows alone,
+    # and every screen reader would disappear from it again. Which is how it
+    # was before 3.2.2, and it looked completely normal.
+    try:
+        from dropdeck import proccapture
+        if not proccapture.supported():
+            notes.append("program capture: not available on this Windows")
+        else:
+            sessions = proccapture.audio_sessions()
+            entries = proccapture.running_programs()
+            kinds = sorted({e["kind"] for e in entries})
+            notes.append("audio sources: %d programs, kinds %s, %d sessions"
+                         % (len(entries), ",".join(kinds), len(sessions)))
+            if devices and not sessions:
+                problems.append(
+                    "no audio sessions were found, so the sources list has "
+                    "fallen back to visible windows and no screen reader "
+                    "will appear in it")
+            readers = [e["name"] for e in entries if e["kind"] == "reader"]
+            notes.append("screen readers found: %s"
+                         % (", ".join(readers) if readers else "none running"))
+    except Exception as exc:
+        problems.append("the sources list raised: %r" % exc)
 
     try:
         frame.mixer.close()
