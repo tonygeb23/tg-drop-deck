@@ -1,20 +1,25 @@
 # TG Drop Deck
 
-An accessible soundboard for podcasts, radio and live shows. Eighty sounds a
-keypress away, built keyboard-first for screen reader users.
+An accessible soundboard and playout desk for podcasts, radio and live shows.
+Eighty sounds a keypress away, a playlist that crossfades, a processed
+microphone, and a stream to your own station. Keyboard first, screen reader
+first.
 
-Free, MIT licensed, and it ships with forty sounds so it makes a noise the
-moment you open it.
+Free, MIT licensed, Windows.
+
+- **Download:** [tgstudios.app/drop-deck](https://tgstudios.app/drop-deck/)
+- **The manual:** [tgstudios.app/drop-deck-guide](https://tgstudios.app/drop-deck-guide/)
+  covers every feature and every key. This page is the short version.
 
 ## Why
 
-Every soundboard assumes you can see a grid and hit it with a mouse. This one
-assumes you cannot, and it turns out that makes it faster for everybody: your
-hand never leaves the number row.
+Every other soundboard assumes you can see a grid and hit it with a mouse.
+This one assumes you cannot, and that turns out to be faster for everybody:
+your hand never leaves the number row.
 
 ## The keyboard
 
-The whole app is the number row and four modifiers.
+Four banks of twenty, all on the number row.
 
 | Keys | What fires |
 |---|---|
@@ -24,182 +29,97 @@ The whole app is the number row and four modifiers.
 | `Ctrl+Shift+1`-`0` | Dialog drops 11 to 20 |
 | `Alt+Ctrl+1`-`0` | Music beds 1 to 10, press again to stop |
 | `Alt+Ctrl+Shift+1`-`0` | Music beds 11 to 20 |
-| `Ctrl+Tab` | Next bank |
 
-Two volumes, because a bed and a drop should never fight over one fader.
+Bank 4 takes hotkeys of your own instead of fixed keys. `Ctrl+Tab` moves
+between banks.
 
-| Keys | What moves |
+Three faders, because a bed, a drop and a song should never fight over one:
+`F3`/`F4` for sounds, `F5`/`F6` for beds, `F7`/`F8` for the playlist.
+
+| | |
 |---|---|
-| `F3` / `F4` | Sound volume, banks 1, 2 and 4 |
-| `F5` / `F6` | Bed volume, bank 3 |
-
-And the rest:
-
-| Keys | |
-|---|---|
-| `Escape` | Stop everything, with a short fade |
-| `Ctrl+F` | Search every bank by name, `Ctrl+E` still works |
+| `Escape` | Stop everything. Two presses by default, one to four in Preferences |
+| `Ctrl+Space` | Stop only the sound you started last, and again for the one before |
+| `Ctrl+F` | Search every bank by name |
 | `Ctrl+L` | What is playing right now |
+| `Ctrl+B` | Go live, and come off air |
+| `Ctrl+R` | Start and stop recording |
+| `Ctrl+M` | Microphone on and off |
 | `Ctrl+D` | Ducking on or off |
-| `F2` | Rename the sound you are on |
-| `Alt+Enter` | Properties: name, level and both hotkeys, in one place |
-| `Del` | Clear the slot you are on |
-| `Shift+Del` | Take the slot off the board altogether |
+| `Alt+Enter` | Properties: name, level and both hotkeys in one place |
 | `F1` | Every shortcut, in a window you can read |
-| `Ctrl+B` | Go live to your streaming server, and come off air |
-| `Ctrl+Shift+B` | What the stream is doing |
-| `Ctrl+N` `Ctrl+O` `Ctrl+S` | New, open, save a board |
-| `Ctrl+P` | Preferences: output, sounds, playlist, microphone, streaming, speech |
 
-## The four banks
+## What it does
 
-Twenty slots each, and you can rename any of them, `Ctrl+F2`, or the Banks
-menu. The name saves with the board. Renaming changes the name and nothing
-else: bank 3 is still the looping bank and bank 4 still takes your own hotkeys.
+**Eighty slots, four banks.** Effects and drops overlap freely and never cut
+each other off. Beds loop, toggle on the same key, and only one plays at a
+time. Land on any slot and press `Space`: empty opens a file browser, full
+plays it. Point a slot at a folder instead of a file and every press plays a
+different sound from it, never the same one twice running, which is the six
+jingles that all mean "down the chart" on one key. Files are referenced where
+they sit and never copied, so **Relink missing sounds** repoints a whole board
+when your library moves.
 
-1. **Sound effects**, stings, hits, transitions. Fire and forget.
-2. **Dialog drops**, your own clips. Catchphrases, station IDs, callers.
-3. **Music beds**, loop by default. A bed starts exactly where the file does,
-   so one cued on its first beat gives you that beat, and fades out when you
-   stop it rather than cutting dead. Both fades are set in `Ctrl+P`.
-4. **Miscellaneous**, no fixed keys. Right-click a button to give it a hotkey
-   of your own.
+**A playlist beside the soundboard.** `Ctrl+Shift+P` to it, `Ctrl+Shift+S`
+back. Paste in a whole album, and each track hands over to the next before it
+ends. That overlap is the crossfade, and it is a box under the running order
+rather than a setting to go hunting for. Artist and title come from each
+file's own tags, in columns a screen reader reads one at a time, and every
+track has a tick. A beep before a track ends is the countdown clock a sighted
+presenter watches; it plays where you hear yourself, so it stays out of the
+show. Save a running order as M3U and open it anywhere.
 
-Sounds in banks 1, 2 and 4 overlap freely and never cut each other off. A bed
-toggles: the same key starts it and stops it, and only one bed plays at a
-time, so starting another takes the one before it down.
-
-## A playlist, next to the soundboard
-
-`Ctrl+Shift+P` goes to it and `Ctrl+Shift+S` comes back. Paste songs in with
-`Ctrl+V`, a whole album at once if you like, and each one hands over to the
-next before it ends. That overlap is the crossfade, and it is a box under the
-running order rather than a setting you have to go looking for.
-
-The running order shows the artist and the title out of each file's own tags,
-in columns a screen reader reads one at a time, and every track has a tick your
-screen reader announces. Unticked stays in the list and is skipped. Drops go
-between songs, one at a time or after every so many, and a **drops library** on
-`Alt+D` puts one in at random.
-
-`Ctrl+L` says what is on air and how much of it is left, and `Ctrl+Shift+L`
-takes you to it. The playlist has its own fader on `F7` and `F8`.
-
-Save a show as an M3U from the Playlist menu and open it again later, or in
-any other player.
-
-**A beep before a track ends**, on in Preferences, at however many seconds
-you like. The countdown clock a sighted presenter watches. It plays where you
-hear yourself, so it stays out of the show.
-
-It plays `wav`, `mp3`, `m4a`, `flac`, `ogg`, `wma`, `aac`, `opus` and more, so
-an iTunes or Apple Music library goes straight in.
-
-## Streaming to your own station
-
-`Ctrl+B` sends everything you can hear to an Icecast server, a Liquidsoap
-harbor or SHOUTcast, in MP3 or Ogg Opus. Set it up under **On air, Set up
-streaming**; **Test the connection** proves it works before the show rather
-than during it.
-
-It sends the program: sounds, beds, the playlist and the microphone. Not a
-preview and not the end of track beep, because those are yours.
-
-The microphone goes out whenever it is open, whether or not you are hearing
-yourself. Those are different questions, and a presenter on speakers monitors
-nothing and is still on air.
-
-`F7` and `F8` become a monitor fader while you are on air: turn the playlist
-down to hear your screen reader and your listeners still get it at full level.
-The other faders change both, because a drop fired at half level was meant to
-be at half level.
-
-Encoding and the network run on their own thread, so a bad connection costs
-the stream and never your own audio. It reconnects by itself, `Ctrl+Shift+B`
-says what it is doing, and listeners see the artist and title from your
-playlist.
+**Streaming to your own station.** `Ctrl+B` sends the programme to Icecast, a
+Liquidsoap harbor or SHOUTcast, in MP3 or Ogg Opus. Sounds, beds, playlist and
+microphone go out; your preview and your end of track beep do not, because
+those are yours. Encoding and the network run on their own thread, so a bad
+connection costs the stream and never your own audio, and it reconnects by
+itself. `F7` and `F8` become a monitor fader on air, so you can turn the music
+down to hear your screen reader while listeners still get it at full level.
+`Ctrl+Shift+A` says who is listening, and handles the awkward case that is
+really the common one: when the server you send to is not the server people
+listen on.
 
 Nothing goes out until you press `Ctrl+B`.
 
-## A microphone
-
-`Ctrl+M` opens and closes it; `Ctrl+Shift+M` sets it up. While it is open the
-beds and the playlist duck out of the way, and they come back when you close
-it. You can hear yourself through an output of its own, so monitoring sits in
-your headphones and the show does not.
+**A microphone with a real chain.** A gate, a high pass filter, a three band
+equaliser, a compressor and a true peak limiter, in that order, plus VST3
+effects. Every parameter is a row in a list, in plain words with real units,
+read out as you change it, so a plugin whose own window no screen reader can
+read becomes a list any screen reader can. Beds and the playlist duck while
+the microphone is open and come back when you close it, and you can hear
+yourself through an output of its own.
 
 Nothing opens your microphone but you pressing `Ctrl+M`.
 
-## Finding a sound by ear
+**Recording.** `Ctrl+R`. The same mix that goes on air, to Documents, in WAV,
+MP3, AAC or Ogg Opus. It does not need you to be on air, it does not fight
+with the stream, and closing the app finishes the file first so a recording
+always opens.
 
-The window that opens when you assign a sound has a **Play each sound as I
-reach it** box on it, `Alt+P`. Every sound plays once as you arrow onto it and
-stops when you move on, so you can find the right one by listening instead of
-by reading forty file names.
+**Other audio on the air with you.** `Alt+Shift+S`. Anything Windows offers as
+an input: a co-host's microphone, a hardware mixer. Or one single program,
+captured straight from it with no cable in the middle and nothing to install,
+the same thing OBS calls Application Audio Capture (Windows 10 build 20348 or
+later). `Alt+Ctrl+Shift+S` mutes, solos, renames or removes any of them mid
+show, from a list you drive with the arrow keys.
 
-**Browse with Windows** opens the ordinary Windows file window, and `Alt+P`
-previews in there too, while Drop Deck is the program in front.
-
-## Twenty slots, or fewer
-
-A bank ships with twenty. **`Shift+Delete`** takes the one you are on off, and
-removing one never moves the others: take slot 5 away and 6 is still on the 6
-key. Nothing is lost, and Put a removed slot back brings it again. `Delete`
-still just clears the sound.
-
-## A folder on one key
-
-**Sounds → Assign a folder** points a slot at a whole folder instead of one
-file. Every press plays a different sound from it, never the same one twice
-running, and the app says which one it picked.
-
-That is for the six jingles that all mean "down the chart", one key, and you
-do not care which of them goes out. Drop another file into the folder and it
-joins in.
-
-## Ducking
-
-When you fire a sound effect or a drop, the music beds drop about nine decibels
+**Ducking.** Fire an effect or a drop and the beds drop about nine decibels
 and slide back up when it finishes. That is the thing radio does that makes a
 show sound produced rather than assembled.
 
-`Ctrl+D` turns it off. `Ctrl+P` sets how far it ducks.
-
-## Output device
-
-`Ctrl+P` picks where the sound goes, including a virtual cable, so you can
-feed a stream or a recorder while you keep listening on your own speakers. The
-device is remembered by name rather than by number, so unplugging something
-else does not silently move your audio somewhere unexpected.
-
 ## The demo pack
 
-Forty pieces of audio ship with the app: twenty sound effects in bank 1 and
-twenty looping music beds in bank 3. They load automatically the first time you
-run it.
-
-**Everything in the demo pack was generated with AI**, ElevenLabs, via
-`tools/make_demo_pack.py`. Nothing is recorded, sampled, or taken from a
-commercial sound library, which is what makes it safe to give away with a free
-app. The beds are trimmed to an exact loop and crossfaded so they run forever
+Forty pieces of audio load the first time you run it: twenty sound effects in
+bank 1 and twenty looping beds in bank 3, so the app makes a noise the moment
+you open it. They are generated by ElevenLabs through
+`tools/make_demo_pack.py`, not recorded and not taken from a commercial sound
+library. The beds are trimmed to an exact loop and crossfaded so they run
 without a click, and every effect is normalised so nothing clips when two fire
 at once.
 
-**File → New board** empties all eighty slots when you want to start from
-scratch. **File → Load the demo pack** brings it back.
-
-## Your own sounds
-
-Land on any button and press `Space`. An empty slot opens a file browser; a
-full one plays. Right-click, or press the Applications key, for rename, level,
-looping, hotkey and clear.
-
-WAV, MP3, M4A, FLAC, OGG, WMA and more all work. Files are referenced where
-they sit, nothing is copied, so if you later move your sound library, **File → Relink
-missing sounds** points a whole board at the new folder in one go.
-
-Coming from The Tony Gebhard Show Soundboard? **File → Import an old soundboard
-bank** reads those `.json` banks as they are.
+**File → New board** empties all eighty slots. **File → Load the demo pack**
+brings it back.
 
 ## Running it
 
@@ -208,26 +128,24 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Python 3.11 or newer. `accessible_output2` is optional but worth having on
-Windows, it adds speech and braille for the things a screen reader cannot know
-on its own, like a bed starting or the volume moving.
-
-## Where things are saved
+Python 3.11 or newer. `accessible_output2` is optional and worth having: it
+adds speech and braille for the things a screen reader cannot know on its own,
+like a bed starting or a fader moving.
 
 Your board lives in `%APPDATA%\TG Studios\TG Drop Deck\board.json` and saves
-itself when you change something and when you quit.
+itself as you change it and when you quit.
 
 ## Tests
 
+Each file is a script, so run them individually or all at once:
+
 ```bash
-python tests/test_engine.py
-python tests/test_board.py
-python tests/test_audiopost.py
-python tests/test_ui.py
+for f in tests/test_*.py; do python "$f" || echo "FAILED $f"; done
 ```
 
-The engine tests run with no sound card, they render the mixer by hand and
-check the samples, including that ducking actually ducks by the amount it says.
+Twenty seven files, and they run with no sound card: the engine tests render
+the mixer by hand and check the samples, including that ducking really ducks
+by the amount it claims.
 
 ## Licence
 
