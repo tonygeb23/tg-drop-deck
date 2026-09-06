@@ -101,7 +101,9 @@ always opens.
 an input: a co-host's microphone, a hardware mixer. Or one single program,
 captured straight from it with no cable in the middle and nothing to install,
 the same thing OBS calls Application Audio Capture (Windows 10 build 20348 or
-later). `Alt+Ctrl+Shift+S` mutes, solos, renames or removes any of them mid
+later). **Your screen reader is in that list**, NVDA, JAWS, Narrator and the
+rest, so a demonstration or a tutorial goes out the way any other program
+does. `Alt+Ctrl+Shift+S` mutes, solos, renames or removes any of them mid
 show, from a list you drive with the arrow keys.
 
 **Ducking.** Fire an effect or a drop and the beds drop about nine decibels
@@ -143,7 +145,7 @@ Each file is a script, so run them individually or all at once:
 for f in tests/test_*.py; do python "$f" || echo "FAILED $f"; done
 ```
 
-Twenty seven files, and they run with no sound card: the engine tests render
+Twenty eight files, and they run with no sound card: the engine tests render
 the mixer by hand and check the samples, including that ducking really ducks
 by the amount it claims.
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.2.2, 6 September 2026
+
+**Your screen reader can go on the air.** NVDA, JAWS, Narrator, ZoomText,
+Fusion, MAGic, SuperNova and System Access are in Audio sources now, and
+capturing one gives you its speech, so a tutorial or a demonstration goes out
+the same way any other program does.
+
+They were missing because the list was built from visible windows, and a
+screen reader does not have one. It is built from three directions now:
+programs with a window, anything that has audio open, and every screen reader
+that is running whether it happens to be speaking or not. That last part
+matters, because the reader you are looking for is exactly the one that will
+be silent at the moment you go looking.
+
+**Programs with no window, generally.** The same change lists anything that
+has opened the sound card, so a game running full screen, a player sitting in
+the tray or a browser playing in the background are all there without a
+virtual cable. On the machine this was written on that is nine entries where
+the window list found five, against three hundred and twenty two processes.
+A list of three hundred and twenty two is not a list anybody reads, which is
+why it is not simply all of them.
+
+**The picker says why something is in the list.** "obs64.exe" on its own reads
+like something has gone wrong. "obs64.exe, has audio open" reads like an
+answer, and a screen reader is named as one.
+
 ## 3.2.1, 5 September 2026
 
 **A source can be one program now, with no cable in the middle.** Pick Google

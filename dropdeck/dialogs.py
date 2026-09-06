@@ -3059,7 +3059,8 @@ class SourcesDialog(wx.Dialog):
                   "source can be a sound card or a cable, or it can be one "
                   "program: Windows hands over exactly what that program is "
                   "playing and nothing else, with no setting up in the "
-                  "program itself.")
+                  "program itself. Your screen reader is in the list too, so "
+                  "you can put it on air.")
 
         outer.Add(wx.StaticText(self, label="&Sources"), 0,
                   wx.LEFT | wx.RIGHT | wx.TOP, 10)
@@ -3158,11 +3159,12 @@ class SourcesDialog(wx.Dialog):
         self.list.SetFocus()
 
     def _programs(self):
-        """Every program with a window, refreshed when the picker is opened.
+        """What can be captured, refreshed every time the picker is opened.
 
-        A list of processes is four hundred services; a list of windows is
-        what a person recognises. It is asked for again each time because the
-        whole point is to catch a program that was opened a minute ago.
+        Programs with a window, anything that has audio open, and every screen
+        reader that is running whether it is speaking or not. Asked for again
+        each time, because the whole point is to catch a program that was
+        opened a minute ago.
         """
         return proccapture.running_programs()
 
@@ -3231,9 +3233,8 @@ class SourcesDialog(wx.Dialog):
         """Rebuild the program list, keeping whatever was chosen."""
         found = self._programs()
         self._program_names = [""] + [entry["name"] for entry in found]
-        labels = ["Nothing chosen"] + [
-            ("%s, %s" % (entry["name"], entry["title"]) if entry["title"]
-             else entry["name"]) for entry in found]
+        labels = ["Nothing chosen"] + [self._program_label(entry)
+                                       for entry in found]
         # A program that was chosen and has since been closed stays in the
         # list, or choosing it again would mean starting it first.
         if wanted and wanted not in self._program_names:
@@ -3242,6 +3243,25 @@ class SourcesDialog(wx.Dialog):
         self.program.Set(labels)
         self.program.SetSelection(self._program_names.index(wanted)
                                   if wanted in self._program_names else 0)
+
+    @staticmethod
+    def _program_label(entry):
+        """One line in the picker, saying what it is and why it is there.
+
+        A program with no window needs the second half of that. "obs64.exe"
+        on its own reads like something has gone wrong; "obs64.exe, has audio
+        open" reads like an answer.
+        """
+        name = entry.get("name") or ""
+        title = entry.get("title") or ""
+        kind = entry.get("kind") or "window"
+        if kind == "reader":
+            return "%s, %s screen reader" % (name, title or name)
+        if title:
+            return "%s, %s" % (name, title)
+        if kind == "audio":
+            return "%s, has audio open" % name
+        return name
 
     def _on_kind(self, event):
         """A source is either a device or a program, never both."""

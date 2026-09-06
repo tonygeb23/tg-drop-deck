@@ -317,6 +317,33 @@ def main():
         if instrument:
             check("an instrument really is refused", True, instrument)
 
+    # The guide says a screen reader is in the sources list even when it is
+    # silent, and that a program with no window can be there at all. Both are
+    # promises about a list somebody will go looking in, so both get checked
+    # against the list the app actually builds.
+    from dropdeck import dialogs, proccapture
+    entries = proccapture.running_programs()
+    kinds = {e["kind"] for e in entries}
+    check("the sources list really does reach past visible windows",
+          kinds - {"window"} != set() or not proccapture.supported(),
+          sorted(kinds))
+    check("every screen reader the guide names really is in the table",
+          all(exe in proccapture.SCREEN_READERS for exe in
+              ("nvda.exe", "jfw.exe", "narrator.exe", "zoomtext.exe",
+               "fusion.exe", "magic.exe", "snova.exe", "satogo.exe")),
+          sorted(proccapture.SCREEN_READERS))
+    readers = [e for e in entries if e["kind"] == "reader"]
+    if readers:
+        check("a running screen reader really is listed as one",
+              readers[0]["title"] and "exe" not in readers[0]["title"].lower(),
+              "%s as %s" % (readers[0]["name"], readers[0]["title"]))
+    windowless = [e for e in entries if e["kind"] == "audio"]
+    if windowless:
+        check("a program with no window really does say why it is listed",
+              "has audio open" in dialogs.SourcesDialog._program_label(
+                  windowless[0]),
+              dialogs.SourcesDialog._program_label(windowless[0]))
+
     try:
         frame.stop_background_work()
         frame.mixer.close()

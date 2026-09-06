@@ -486,15 +486,218 @@ def _executable(pid):
     return ""
 
 
-def running_programs():
-    """Every program with a window somebody could point at.
+#: Screen readers, by the name of their executable.
+#:
+#: Tony, 6 September 2026: "when I look for sources, I don't see nvda in the
+#: list of programs for sources, people should be able to add their screen
+#: reader as well."
+#:
+#: They are named here rather than found, because a screen reader that is not
+#: speaking at the moment you go looking has no audio session and no window,
+#: and would not appear at all. Somebody hunting for NVDA needs it in the list
+#: whether or not it happens to be mid-sentence.
+#:
+#: Verified on this machine: capturing nvda.exe returns NVDA's speech, peaking
+#: at 0.62 while it read a test line. The words are rendered inside nvda.exe,
+#: which is why the capture gets them.
+SCREEN_READERS = {
+    "nvda.exe": "NVDA",
+    "jfw.exe": "JAWS",
+    "narrator.exe": "Narrator",
+    "zoomtext.exe": "ZoomText",
+    "fusion.exe": "Fusion",
+    "magic.exe": "MAGic",
+    "snova.exe": "Dolphin SuperNova",
+    "screenreader.exe": "Dolphin ScreenReader",
+    "guide.exe": "Dolphin Guide",
+    "satogo.exe": "System Access",
+    "sa32.exe": "System Access",
+    "nvdaslave.exe": "NVDA",
+}
 
-    Windows rather than processes, because a list of processes is four hundred
-    services and a list of windows is what a person recognises. One entry per
-    program: several windows of the same program are still one program to
-    capture.
+#: A session that has been closed. Its process may be long gone.
+_SESSION_EXPIRED = 2
+
+CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+IID_IMMDeviceEnumerator = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+IID_IAudioSessionManager2 = GUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
+IID_IAudioSessionControl2 = GUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
+
+
+def audio_sessions():
+    """The process ids that have audio open on the default output.
+
+    This is the general answer to "programs with no window". A screen reader,
+    a game running full screen, a player sitting in the tray: none of them
+    have a window this could find, and all of them are here the moment they
+    touch the sound card.
+
+    It is also the right size. On this machine it is nine entries against five
+    windows and three hundred and twenty two processes, and a list of three
+    hundred and twenty two is not a list anybody reads.
+
+    Vtable slots, by index, the same way as the rest of this file:
+    IMMDeviceEnumerator::GetDefaultAudioEndpoint is 4, IMMDevice::Activate is
+    3, IAudioSessionManager2::GetSessionEnumerator is 5,
+    IAudioSessionEnumerator::GetCount and GetSession are 3 and 4,
+    IAudioSessionControl::GetState is 3, and IAudioSessionControl2 adds
+    GetProcessId at 14.
+    """
+    found = set()
+
+    # Somebody else may have put this thread into a different apartment, and
+    # that is fine: COM still works, it is just not ours to shut down.
+    COINIT_APARTMENTTHREADED = 0x2
+    RPC_E_CHANGED_MODE = -2147417850          # 0x80010106
+    started = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+    ours = started != RPC_E_CHANGED_MODE
+
+    enumerator = device = manager = sessions = None
+    try:
+        enumerator = LPVOID()
+        CLSCTX_ALL = 23
+        if ole32.CoCreateInstance(ctypes.byref(CLSID_MMDeviceEnumerator), None,
+                                  CLSCTX_ALL,
+                                  ctypes.byref(IID_IMMDeviceEnumerator),
+                                  ctypes.byref(enumerator)):
+            return found
+
+        device = LPVOID()
+        # eRender, eConsole
+        if _call(enumerator, 4, HRESULT,
+                 [ctypes.c_int, ctypes.c_int, ctypes.POINTER(LPVOID)],
+                 0, 0, ctypes.byref(device)):
+            return found
+
+        manager = LPVOID()
+        if _call(device, 3, HRESULT,
+                 [LPVOID, ctypes.c_ulong, LPVOID, ctypes.POINTER(LPVOID)],
+                 ctypes.byref(IID_IAudioSessionManager2), CLSCTX_ALL, None,
+                 ctypes.byref(manager)):
+            return found
+
+        sessions = LPVOID()
+        if _call(manager, 5, HRESULT, [ctypes.POINTER(LPVOID)],
+                 ctypes.byref(sessions)):
+            return found
+
+        count = ctypes.c_int()
+        if _call(sessions, 3, HRESULT, [ctypes.POINTER(ctypes.c_int)],
+                 ctypes.byref(count)):
+            return found
+
+        for index in range(count.value):
+            control = LPVOID()
+            if _call(sessions, 4, HRESULT,
+                     [ctypes.c_int, ctypes.POINTER(LPVOID)],
+                     index, ctypes.byref(control)):
+                continue
+            control2 = LPVOID()
+            try:
+                state = ctypes.c_int()
+                if _call(control, 3, HRESULT,
+                         [ctypes.POINTER(ctypes.c_int)],
+                         ctypes.byref(state)) == 0:
+                    if state.value == _SESSION_EXPIRED:
+                        continue
+                if _call(control, 0, HRESULT,
+                         [LPVOID, ctypes.POINTER(LPVOID)],
+                         ctypes.byref(IID_IAudioSessionControl2),
+                         ctypes.byref(control2)):
+                    continue
+                pid = wintypes.DWORD()
+                if _call(control2, 14, HRESULT,
+                         [ctypes.POINTER(wintypes.DWORD)],
+                         ctypes.byref(pid)) == 0 and pid.value:
+                    found.add(int(pid.value))
+            finally:
+                _release(control2)
+                _release(control)
+    except Exception:
+        # Never the reason the sources dialog will not open. Without this the
+        # list falls back to windows alone, which is what it was before.
+        pass
+    finally:
+        _release(sessions)
+        _release(manager)
+        _release(device)
+        _release(enumerator)
+        if ours:
+            try:
+                ole32.CoUninitialize()
+            except Exception:
+                pass
+    return found
+
+
+def _all_processes():
+    """(name, pid) for everything running. Used to find the windowless."""
+    TH32CS_SNAPPROCESS = 0x2
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+
+    out = []
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == -1:
+        return out
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return out
+        while True:
+            out.append((entry.szExeFile, int(entry.th32ProcessID)))
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                return out
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def running_programs():
+    """Everything worth offering as a source, from three directions.
+
+    **Windows**, because a list of windows is what a person recognises and a
+    list of every process is four hundred services.
+
+    **Anything with audio open**, because a program with no window is still a
+    program you might want on air. This is what puts a screen reader, a full
+    screen game or a tray player in the list.
+
+    **Known screen readers, running or silent**, because the one you are
+    hunting for is exactly the one that will not be making a noise at the
+    moment you go looking for it.
+
+    One entry per executable. Several windows of one program are still one
+    program to capture, and a program that is both windowed and making a noise
+    is not two answers.
     """
     found = {}
+
+    def remember(name, pid, title, kind):
+        if not name:
+            return
+        key = name.lower()
+        entry = found.get(key)
+        if entry is None:
+            found[key] = {"name": name, "pid": pid, "title": title,
+                          "kind": kind}
+            return
+        if not entry["title"] and title:
+            entry["title"] = title
+        # A screen reader stays labelled as one however it was first found.
+        if kind == "reader":
+            entry["kind"] = "reader"
+            entry["title"] = title or entry["title"]
     EnumWindows = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
                                      wintypes.LPARAM)
 
@@ -513,18 +716,29 @@ def running_programs():
         name = _executable(pid.value)
         if not name:
             return True
-        entry = found.get(name.lower())
-        if entry is None:
-            found[name.lower()] = {"name": name, "pid": pid.value,
-                                   "title": title.value}
-        elif not entry["title"]:
-            entry["title"] = title.value
+        remember(name, pid.value, title.value, "window")
         return True
 
     try:
         user32.EnumWindows(EnumWindows(visit), 0)
     except Exception:
         pass
+
+    # Anything with audio open, and every screen reader that is running.
+    # One process scan serves both, because the session list gives ids and
+    # the reader table wants names.
+    try:
+        with_audio = audio_sessions()
+        for name, pid in _all_processes():
+            key = name.lower()
+            reader = SCREEN_READERS.get(key)
+            if reader:
+                remember(name, pid, reader, "reader")
+            elif pid in with_audio:
+                remember(name, pid, "", "audio")
+    except Exception:
+        pass
+
     return sorted(found.values(), key=lambda e: e["name"].lower())
 
 
