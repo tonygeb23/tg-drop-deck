@@ -900,7 +900,11 @@ class RtmpDestination(Destination):
         self.settings = dict(settings)
         self.bus_samplerate = int(bus_samplerate)
         self.video_source = video_source
-        self.samplerate = int(settings.get("samplerate") or 44100)
+        # The rate the bus is really at. It used to be hard wired to 44100,
+        # which quietly resampled every block of a 48k show for no reason, on
+        # the thread that is also carrying the audio.
+        self.samplerate = int(settings.get("samplerate")
+                              or bus_samplerate or 44100)
         self.bitrate = int(self.settings.get("bitrate", 128))
         self.video_bitrate = int(self.settings.get("video_bitrate",
                                                    C.RTMP_VIDEO_BITRATE))
@@ -976,13 +980,15 @@ class RtmpDestination(Destination):
         # handshake happen, so the failure lands here where the retry loop
         # expects it and the state is honest.
         try:
-            container.start_encoding()
+            with _ffmpeg_log() as log:
+                container.start_encoding()
         except Exception as exc:
             try:
                 container.close()
             except Exception:
                 pass
-            raise SinkError(_explain_rtmp(exc, self.settings)) from exc
+            raise SinkError(_explain_rtmp(exc, self.settings,
+                                          _server_error(log))) from exc
 
         self._container = container
         self._audio = audio
@@ -1060,8 +1066,13 @@ class RtmpDestination(Destination):
         try:
             self._container.mux(packet)
         except Exception as exc:
-            raise SinkError("the connection to the server dropped: %s"
-                            % exc) from exc
+            # Through the sanitiser like every other RTMP failure. PyAV's
+            # exception text can carry the URL it was opened with, and that
+            # URL has the stream key on the end of it. This is the only path
+            # that used to interpolate it raw into a line the screen reader
+            # then reads out.
+            raise SinkError("the connection dropped. %s"
+                            % _explain_rtmp(exc, self.settings)) from exc
 
     # ------------------------------------------------------------- the rest --
     def send_metadata(self, title):
@@ -1134,11 +1145,72 @@ def _resolve(host, port):
             "could not find %s. Check the server address" % host) from None
 
 
-def _explain_rtmp(exc, settings):
+class _ffmpeg_log:
+    """Collect FFmpeg's own log for the length of one call.
+
+    FFmpeg knows exactly why a publish was refused and throws the answer away
+    on the way out. `rtmpproto.c` logs `Server error: <description>` with the
+    server's own AMF message, and then returns AVERROR_UNKNOWN, which is what
+    surfaces as a meaningless "I/O error". So the log is the only place the
+    real reason exists, and this is what reads it.
+    """
+
+    def __init__(self):
+        self.records = []
+        self._capture = None
+
+    def __enter__(self):
+        try:
+            av.logging.set_level(av.logging.INFO)
+            self._capture = av.logging.Capture(local=False)
+            self.records = self._capture.__enter__()
+        except Exception:
+            self._capture = None
+            self.records = []
+        return self
+
+    def __exit__(self, *exc):
+        if self._capture is not None:
+            try:
+                self._capture.__exit__(*exc)
+            except Exception:
+                pass
+        return False
+
+    def text(self):
+        try:
+            # Joined THEN split: FFmpeg emits partial lines as separate
+            # records, so anything parsed per record matches nothing.
+            return "".join(message for _l, _n, message in self.records)
+        except Exception:
+            return ""
+
+
+def _server_error(log):
+    """What the far end actually said, if it said anything."""
+    if log is None:
+        return ""
+    for line in log.text().splitlines():
+        line = line.strip()
+        marker = "Server error:"
+        if marker in line:
+            return line.split(marker, 1)[1].strip()
+    return ""
+
+
+def _explain_rtmp(exc, settings, server_said=""):
     """Turn FFmpeg's RTMP errors into something worth hearing."""
     text = str(exc)
     host = _host_of(settings.get("host", ""))
     lowered = text.lower()
+
+    # The platform's own words beat any guess of ours, when there are any.
+    if server_said:
+        said = server_said.strip().rstrip(".")
+        if "publish" in said.lower() and "bad" in said.lower():
+            return ("%s would not take the stream key. Check it has been "
+                    "copied in full and has not expired" % host)
+        return "%s said: %s" % (host, said)
     if "timed out" in lowered or "timeout" in lowered:
         return "%s did not answer" % host
     if "-138" in text or "Errno 138" in text or "refused" in lowered:
@@ -1442,9 +1514,23 @@ class Streamer:
 
         Retrying a bad password forever would sit there looking like it might
         still work, which is worse than being told once that it will not.
+
+        **The RTMP wordings have to be in here too**, and leaving them out was
+        a real fault: every message `_explain_rtmp` produces is RTMP worded and
+        matched none of the Icecast ones, so a wrong or expired YouTube key
+        retried for ever. The state never reached FAILED, so the app never came
+        off air, the menu still said "Come off air", and because `_set_state`
+        drops a repeat of the same state and detail the presenter heard the
+        reason exactly ONCE and then nothing at all, all night.
         """
-        bad = ("password", "no mount point by that name")
-        return not any(word in self.error for word in bad)
+        bad = ("password",
+               "no mount point by that name",
+               # RTMP: the far end said no, and saying it again will not help.
+               "stream key",
+               "could not find",
+               "there is no stream key",
+               "there is no server address")
+        return not any(word in self.error.lower() for word in bad)
 
     def _describe(self):
         if self._destination is not None:

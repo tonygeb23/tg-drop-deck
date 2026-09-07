@@ -874,8 +874,8 @@ check("and says so when asked", "Off air" in frame.stream_status(),
 
 prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
                        page=SettingsDialog.PAGE_STREAM)
-check("Preferences opens on Streaming when asked for it",
-      prefs.tabs.GetPageText(prefs.tabs.GetSelection()) == "Streaming",
+check("Preferences opens on Audio streaming when asked for it",
+      prefs.tabs.GetPageText(prefs.tabs.GetSelection()) == "Audio streaming",
       prefs.tabs.GetPageText(prefs.tabs.GetSelection()))
 named = [prefs.stream_host.GetName(), prefs.stream_port.GetName(),
          prefs.stream_mount.GetName(), prefs.stream_password.GetName()]

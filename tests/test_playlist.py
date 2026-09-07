@@ -1291,7 +1291,7 @@ check("Preferences has nine tabs", prefs.tabs.GetPageCount() == 9,
 check("named for what is on them",
       [prefs.tabs.GetPageText(i) for i in range(9)]
       == ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
-          "Streaming", "Picture", "Recording", "Speech"],
+          "Audio streaming", "Video streaming", "Recording", "Speech"],
       [prefs.tabs.GetPageText(i) for i in range(9)])
 check("Ctrl+Shift+M opens it on the microphone tab",
       prefs.tabs.GetSelection() == SettingsDialog.PAGE_MIC,

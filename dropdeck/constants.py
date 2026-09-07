@@ -755,8 +755,25 @@ STREAM_BITRATES = (64, 96, 128, 160, 192, 256, 320)
 
 #: The order the Streaming tab offers them in. Kept here rather than taken
 #: from a dict so the list on screen cannot quietly reorder itself.
-STREAM_SERVER_ORDER = ("icecast", "shoutcast", "youtube", "facebook", "rtmp")
+#: THE AUDIO SIDE ONLY. Icecast and SHOUTcast, which is what a radio station
+#: runs. The video platforms are a separate list on a separate page, because
+#: they are a separate job with none of the same settings: no mount point, no
+#: port, no format, and a stream key rather than a password.
+STREAM_SERVER_ORDER = ("icecast", "shoutcast")
 STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")
+
+#: The video side. Same shape, different page.
+VIDEO_SERVER_ORDER = ("youtube", "facebook", "rtmp")
+
+#: Which of the two Ctrl+B sends the show to. One at a time: sending to both
+#: means two encoders and twice the upload, and it is not built yet.
+LIVE_TO_AUDIO = "audio"
+LIVE_TO_VIDEO = "video"
+LIVE_TO = (LIVE_TO_AUDIO, LIVE_TO_VIDEO)
+LIVE_TO_LABELS = {
+    LIVE_TO_AUDIO: "my radio station",
+    LIVE_TO_VIDEO: "my video platform",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -778,9 +795,36 @@ RTMP_INGEST = {
 #: it in a video web app is the worst part of setting this up with a screen
 #: reader, and it is the ONE part the app can make easy.
 RTMP_KEY_PAGE = {
-    "youtube": "https://studio.youtube.com/channel/UC/livestreaming",
-    "facebook": "https://www.facebook.com/live/producer",
+    # youtube.com/live_dashboard rather than a studio.youtube.com URL: it is a
+    # 301 that YouTube maintains, it resolves to whichever channel is signed
+    # in, and it survives Studio moving its own pages around. It is also what
+    # OBS ships.
+    "youtube": "https://www.youtube.com/live_dashboard",
+    # The URL Facebook's own help page names, rather than the producer one.
+    "facebook": "https://www.facebook.com/live/create",
 }
+
+#: The backup ingest each platform publishes, for when the primary is refusing
+#: connections. Not used automatically: switching hosts mid show is its own
+#: decision and this is here so the address is not guessed later.
+RTMP_INGEST_BACKUP = {
+    "youtube": "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
+}
+
+#: WHAT HAPPENS WHEN YOU CONNECT, which is not the same on the two platforms
+#: and is the most important thing about this feature.
+#:
+#: YouTube: pushing to the Stream tab key STARTS A PUBLIC BROADCAST. Its own
+#: words: a watch page is created, "you're now live on YouTube", notifications
+#: are sent to subscribers, and the stream is archived when you stop. There is
+#: no preview and nothing to confirm.
+#:
+#: Facebook: nothing is posted. Streaming software gets a preview in Live
+#: Producer and the broadcast starts only when somebody clicks Go Live Now.
+#:
+#: This is why the connection check never completes an RTMP handshake, and why
+#: going live says out loud what is about to happen.
+RTMP_GOES_LIVE_AT_ONCE = {"youtube": True, "facebook": False, "rtmp": False}
 
 #: What the picture is, when there is no camera. YouTube refuses an audio only
 #: ingest, so a radio show still has to send something, and a still card costs

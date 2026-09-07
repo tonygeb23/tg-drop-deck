@@ -25,8 +25,9 @@ STATION_FIELDS = (
     "stream_mount", "stream_user", "stream_password", "stream_format",
     "stream_bitrate", "stream_description", "stream_genre", "stream_url",
     "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
-    # The picture belongs to the station, not to the app: a YouTube station
-    # needs one and the Icecast station on the same board does not.
+    # The video side and the picture belong to the station too: a YouTube
+    # station needs them and the Icecast station on the same board does not.
+    "video_server", "video_host", "video_key", "live_to",
     "picture", "picture_file", "picture_clock", "camera",
     "video_width", "video_height", "video_fps", "video_bitrate",
 )
@@ -254,6 +255,24 @@ class Board:
         #: send SOMETHING, and a card is what that something is by default.
         #: A camera is offered and is not the default: most people using this
         #: are running a radio show and have no reason to be on camera.
+        #: The video side, kept apart from the audio side above rather than
+        #: sharing its fields. They looked shareable and are not: an Icecast
+        #: address is a host name and an RTMP one is a whole URL with a
+        #: scheme, so one board cannot hold a radio station AND a YouTube
+        #: channel if they share stream_host. Setting up one would silently
+        #: destroy the other.
+        self.video_server = "youtube"
+        self.video_host = C.RTMP_INGEST["youtube"]
+        #: A stream key ONLY when Windows Credential Manager refused to keep
+        #: it, which is rare and is said out loud when it happens. It has a
+        #: field of its own rather than borrowing stream_password: that is the
+        #: Icecast source password, and putting a YouTube key in it wiped a
+        #: user's radio station password every time they looked at the video
+        #: page. Two different secrets, two different places.
+        self.video_key = ""
+        #: Which of the two Ctrl+B goes to. One at a time for now.
+        self.live_to = C.LIVE_TO_AUDIO
+
         self.picture = C.PICTURE_CARD
         self.picture_file = ""
         self.picture_clock = False
@@ -543,6 +562,10 @@ class Board:
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
             "stream_stats_url": self.stream_stats_url,
+            "video_server": self.video_server,
+            "video_host": self.video_host,
+            "video_key": self.video_key,
+            "live_to": self.live_to,
             "picture": self.picture,
             "picture_file": self.picture_file,
             "picture_clock": bool(self.picture_clock),
@@ -628,13 +651,17 @@ class Board:
                                               C.DEFAULT_WARN_BEFORE_END))
         board.warn_seconds = _warn_seconds(data.get("warn_seconds"))
         board.preview_sounds = bool(data.get("preview_sounds", False))
-        board.stream_server = (data.get("stream_server") or "icecast")
+        server = data.get("stream_server")
+        board.stream_server = (server if server in C.STREAM_SERVER_ORDER
+                               else "icecast")
         board.stream_host = data.get("stream_host") or ""
         board.stream_port = _stream_port(data.get("stream_port"))
         board.stream_mount = data.get("stream_mount") or C.DEFAULT_STREAM_MOUNT
         board.stream_user = data.get("stream_user") or C.DEFAULT_STREAM_USER
         board.stream_password = data.get("stream_password") or ""
-        board.stream_format = (data.get("stream_format") or "mp3")
+        fmt_in = data.get("stream_format")
+        board.stream_format = (fmt_in if fmt_in in C.STREAM_FORMAT_ORDER
+                               else "mp3")
         board.stream_bitrate = _stream_bitrate(data.get("stream_bitrate"))
         board.stream_name = data.get("stream_name") or ""
         board.stream_description = data.get("stream_description") or ""
@@ -643,6 +670,25 @@ class Board:
         board.stream_stats_url = data.get("stream_stats_url") or ""
         # A board file is not a trusted document, so every one of these falls
         # back rather than becoming a setting that explodes at air time.
+        board.video_server = (data.get("video_server")
+                              if data.get("video_server") in C.VIDEO_SERVER_ORDER
+                              else "youtube")
+        board.video_host = data.get("video_host") or ""
+        board.video_key = data.get("video_key") or ""
+        board.live_to = (data.get("live_to")
+                         if data.get("live_to") in C.LIVE_TO else C.LIVE_TO_AUDIO)
+        # A board written by the first build of this feature put the platform
+        # in stream_server, where the audio settings live. Move it, rather
+        # than leaving a board that says its radio station is "youtube" and
+        # then tries to open a mount point on it.
+        if data.get("stream_server") in C.VIDEO_SERVER_ORDER:
+            board.video_server = data["stream_server"]
+            board.video_host = data.get("stream_host") or ""
+            board.live_to = C.LIVE_TO_VIDEO
+            board.stream_server = "icecast"
+            board.stream_host = ""
+        if not board.video_host:
+            board.video_host = C.RTMP_INGEST.get(board.video_server, "")
         picture = data.get("picture")
         board.picture = picture if picture in C.PICTURE_SOURCES else C.PICTURE_CARD
         board.picture_file = data.get("picture_file") or ""

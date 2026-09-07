@@ -3762,10 +3762,13 @@ class DropDeckFrame(wx.Frame):
         """
         if self.streaming():
             return True
-        if not self.board.stream_host:
-            self.announce("There is no server set up yet. Set up streaming is "
-                          "on the On air menu")
-            self._on_settings(page=SettingsDialog.PAGE_STREAM)
+        video = self.board.live_to == C.LIVE_TO_VIDEO
+        page = SettingsDialog.PAGE_VIDEO if video else SettingsDialog.PAGE_STREAM
+        if not (self.board.video_host if video else self.board.stream_host):
+            self.announce("There is no %s set up yet. Set up streaming is on "
+                          "the On air menu"
+                          % ("video platform" if video else "server"))
+            self._on_settings(page=page)
             return False
 
         settings = self._stream_settings()
@@ -3774,8 +3777,8 @@ class DropDeckFrame(wx.Frame):
         # which is the worst moment and the least useful message.
         if streamout.is_rtmp(settings["server"]) and not settings["password"]:
             self.announce("There is no stream key for this station. Put one "
-                          "in on the Streaming page")
-            self._on_settings(page=SettingsDialog.PAGE_STREAM)
+                          "in on the Video streaming page")
+            self._on_settings(page=page)
             return False
 
         self.air_bus = streamout.AirBus(self.mixer.samplerate)
@@ -4124,6 +4127,18 @@ class DropDeckFrame(wx.Frame):
         automation is playing to an audience all day and Drop Deck is only
         one of the things that feeds it.
         """
+        # A video platform does not publish listener numbers anywhere this can
+        # read. Asked anyway, it used to build a URL out of an RTMP address
+        # ("http://rtmps://a.rtmps.youtube.com/live2:8003/status-json.xsl"),
+        # fail three DNS lookups, and then read that gibberish out and tell
+        # the user to fix a box that is not even on the video page. Saying
+        # there is no answer is the honest reply.
+        if self.board.live_to == C.LIVE_TO_VIDEO:
+            self.announce(
+                "%s does not publish a viewer count that Drop Deck can read. "
+                "It is on the platform's own page"
+                % streamout.server_label(self.board.video_server))
+            return
         if not self.board.stream_host:
             self.announce("No streaming server is set up yet")
             self._on_settings(page=SettingsDialog.PAGE_STREAM)
@@ -4135,6 +4150,13 @@ class DropDeckFrame(wx.Frame):
     def _stream_settings(self):
         """What the board holds, in the shape the streamer wants.
 
+        Audio and video are two separate sets of settings on two separate
+        pages, and `board.live_to` says which one Ctrl+B uses. They are kept
+        apart rather than shared because they looked shareable and are not: an
+        Icecast address is a host name and an RTMP one is a whole URL, so one
+        board could not hold a radio station AND a YouTube channel while they
+        shared `stream_host`. Setting up one silently destroyed the other.
+
         The stream key is the one thing NOT read from the board. It lives in
         Windows Credential Manager under the station's name, and it is fetched
         here so nothing else in the app has to know that. A board saved before
@@ -4142,26 +4164,32 @@ class DropDeckFrame(wx.Frame):
         the credential store has nothing.
         """
         board = self.board
-        password = board.stream_password
-        if streamout.is_rtmp(board.stream_server):
-            password = secrets.fetch(board.stream_name or "") or password
+        if board.live_to == C.LIVE_TO_VIDEO:
+            key = secrets.fetch(board.stream_name or "") or board.video_key
+            return {"server": board.video_server, "host": board.video_host,
+                    "port": 0, "mount": "", "user": "", "password": key,
+                    "format": "aac", "bitrate": board.stream_bitrate,
+                    "name": board.stream_name,
+                    "description": board.stream_description,
+                    "genre": board.stream_genre, "url": board.stream_url,
+                    "stats_url": "", "public": False,
+                    "picture": board.picture,
+                    "picture_file": board.picture_file,
+                    "picture_clock": board.picture_clock,
+                    "camera": board.camera,
+                    "video_width": board.video_width,
+                    "video_height": board.video_height,
+                    "video_fps": board.video_fps,
+                    "video_bitrate": board.video_bitrate}
         return {"server": board.stream_server, "host": board.stream_host,
                 "port": board.stream_port, "mount": board.stream_mount,
-                "user": board.stream_user, "password": password,
+                "user": board.stream_user, "password": board.stream_password,
                 "format": board.stream_format, "bitrate": board.stream_bitrate,
                 "name": board.stream_name,
                 "description": board.stream_description,
                 "genre": board.stream_genre, "url": board.stream_url,
                 "stats_url": board.stream_stats_url,
-                "public": board.stream_public,
-                "picture": board.picture,
-                "picture_file": board.picture_file,
-                "picture_clock": board.picture_clock,
-                "camera": board.camera,
-                "video_width": board.video_width,
-                "video_height": board.video_height,
-                "video_fps": board.video_fps,
-                "video_bitrate": board.video_bitrate}
+                "public": board.stream_public}
 
     def _on_stream_trouble(self, message):
         """The connection is not keeping up. Said, not written.
@@ -4180,11 +4208,36 @@ class DropDeckFrame(wx.Frame):
         """
         wx.CallAfter(self._say_stream_state, state, detail)
 
+    def _going_live_warning(self):
+        """What pressing Ctrl+B is about to do, when that is not obvious.
+
+        YouTube and Facebook behave OPPOSITELY and a presenter has to know
+        which they are on. Pushing to a YouTube stream key creates the watch
+        page, puts you live publicly and notifies your subscribers, with no
+        preview and nothing to confirm. Facebook shows a preview in Live
+        Producer and posts nothing until somebody clicks Go Live Now.
+
+        Somebody who cannot see either page has no other way to find this out,
+        and finding it out afterwards is finding it out too late.
+        """
+        if self.board.live_to != C.LIVE_TO_VIDEO:
+            return ""
+        if C.RTMP_GOES_LIVE_AT_ONCE.get(self.board.video_server):
+            return ("You are live on YouTube now. Your subscribers have been "
+                    "notified and the stream will be saved to your channel")
+        if self.board.video_server == "facebook":
+            return ("Facebook has the stream. Nothing is posted until you "
+                    "press Go Live Now in Live Producer")
+        return ""
+
     def _say_stream_state(self, state, detail):
         if not self:
             return
         if state == streamout.ON_AIR:
             self.announce("On air, %s" % detail if detail else "On air")
+            warning = self._going_live_warning()
+            if warning:
+                self.announce(warning)
         elif state == streamout.CONNECTING:
             self.announce_help("Connecting to the server")
         elif state == streamout.RECONNECTING:
@@ -4211,12 +4264,25 @@ class DropDeckFrame(wx.Frame):
         if streamer.state != streamout.ON_AIR:
             return "%s. %s" % (streamer.state.capitalize(),
                                streamer.detail or streamer.error or "")
-        parts = ["On air for %s" % format_duration(streamer.on_air_for),
-                 "%d kbps %s" % (self.board.stream_bitrate,
-                                 streamout.FORMATS.get(
-                                     self.board.stream_format,
-                                     streamout.FORMATS["mp3"])["label"]),
-                 "to %s" % self.board.stream_host]
+        # Asked of the DESTINATION, not assembled from the board. A YouTube
+        # stream is AAC and H.264 whatever the audio format box says, and the
+        # board's answer was "128 kbps MP3" while the app sent neither.
+        described = ""
+        destination = getattr(streamer, "_destination", None)
+        if destination is not None:
+            try:
+                described = destination.describe()
+            except Exception:
+                described = ""
+        parts = ["On air for %s" % format_duration(streamer.on_air_for)]
+        if described:
+            parts.append(described)
+        else:
+            parts.append("%d kbps %s" % (
+                self.board.stream_bitrate,
+                streamout.FORMATS.get(self.board.stream_format,
+                                      streamout.FORMATS["mp3"])["label"]))
+            parts.append("to %s" % self.board.stream_host)
         dropped = self.air_bus.dropped if self.air_bus is not None else 0
         if dropped:
             parts.append("%d blocks lost, so listeners have heard gaps"
@@ -4291,15 +4357,26 @@ class DropDeckFrame(wx.Frame):
             self.board.stream_bitrate = stream["bitrate"]
             self.board.stream_name = stream["name"]
             self.board.stream_public = stream["public"]
+            video = dialog.video_settings
+            self.board.video_server = video["server"]
+            self.board.video_host = video["host"]
+            self.board.live_to = (C.LIVE_TO_VIDEO if video["live"]
+                                  else C.LIVE_TO_AUDIO)
             # The stream key goes to the credential store, never to the board.
             # Only when it CANNOT be stored does it fall back to the board
             # file, and the dialog has already said so out loud by then.
-            key = stream.get("key", "")
-            if streamout.is_rtmp(stream["server"]):
-                if key and secrets.store(stream["name"] or "", key):
-                    self.board.stream_password = ""
-                else:
-                    self.board.stream_password = key
+            # The key goes to the credential store, and NEVER into
+            # stream_password. That is the Icecast source password, and
+            # borrowing it meant that merely looking at the video page and
+            # pressing OK wiped a user's radio station password.
+            key = video.get("key", "")
+            if not key:
+                self.board.video_key = ""
+                secrets.forget(stream["name"] or "")
+            elif secrets.store(stream["name"] or "", key):
+                self.board.video_key = ""
+            else:
+                self.board.video_key = key
             picture_settings = dialog.picture_settings
             self.board.picture = picture_settings["picture"]
             self.board.picture_file = picture_settings["picture_file"]

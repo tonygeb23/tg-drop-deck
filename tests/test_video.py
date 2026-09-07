@@ -269,7 +269,7 @@ print("\nThe ingest addresses")
 # ---------------------------------------------------------------------------
 
 check("YouTube and Facebook are both offered",
-      "youtube" in C.STREAM_SERVER_ORDER and "facebook" in C.STREAM_SERVER_ORDER)
+      "youtube" in C.VIDEO_SERVER_ORDER and "facebook" in C.VIDEO_SERVER_ORDER)
 check("both go out encrypted, which Facebook insists on",
       all(url.startswith("rtmps://") for url in C.RTMP_INGEST.values()),
       C.RTMP_INGEST)
@@ -278,8 +278,9 @@ check("Facebook is on port 443, to get through firewalls",
 check("every RTMP server has a name for the Preferences box",
       all(streamout.server_label(k) and streamout.server_label(k) != k
           for k in ("youtube", "facebook", "rtmp")))
-check("and every server in the list has one, which is how this broke before",
-      all(streamout.server_label(k) for k in C.STREAM_SERVER_ORDER))
+check("and every server in either list has one, which is how this broke before",
+      all(streamout.server_label(k)
+          for k in C.STREAM_SERVER_ORDER + C.VIDEO_SERVER_ORDER))
 check("Icecast is still not an RTMP destination",
       not streamout.is_rtmp("icecast") and streamout.is_rtmp("youtube"))
 
@@ -603,16 +604,40 @@ _app = wx.App()
 _frame = wx.Frame(None)
 _board = Board()
 _dialog = SettingsDialog(_frame, _board, Mixer(open_stream=False),
-                         page=SettingsDialog.PAGE_PICTURE)
+                         page=SettingsDialog.PAGE_VIDEO)
 
 
-def pick_server(kind):
-    _dialog.stream_server.SetSelection(C.STREAM_SERVER_ORDER.index(kind))
-    _dialog._apply_server_kind()
+def pick_platform(kind):
+    _dialog.video_server.SetSelection(C.VIDEO_SERVER_ORDER.index(kind))
+    _dialog._apply_platform()
 
 
 try:
-    check("there is a Picture page", hasattr(_dialog, "picture_kind"))
+    tabs = [_dialog.tabs.GetPageText(i)
+            for i in range(_dialog.tabs.GetPageCount())]
+    check("audio and video streaming are separate pages",
+          "Audio streaming" in tabs and "Video streaming" in tabs, tabs)
+    check("and the old single Streaming page is gone",
+          "Streaming" not in tabs, tabs)
+
+    # The whole reason for the split. On one page, everything RTMP was
+    # disabled while the server said Icecast, and Windows leaves disabled
+    # controls OUT of the tab order, so the stream key could not be tabbed to
+    # at all. Tony hit exactly that and could not find the setting.
+    check("the stream key can be reached without changing anything first",
+          _dialog.video_key.IsEnabled())
+    check("the audio page offers only audio servers",
+          _dialog.stream_server.GetStrings()
+          == ["Icecast, or Liquidsoap harbor", "SHOUTcast"],
+          _dialog.stream_server.GetStrings())
+    check("and the video page only video platforms",
+          len(_dialog.video_server.GetStrings()) == 3,
+          _dialog.video_server.GetStrings())
+    check("no server appears on both",
+          not set(C.STREAM_SERVER_ORDER) & set(C.VIDEO_SERVER_ORDER))
+
+    check("the picture settings are on the video page",
+          hasattr(_dialog, "picture_kind"))
     check("it offers a card, a picture and a camera",
           len(_dialog.picture_kind.GetStrings()) == 3,
           _dialog.picture_kind.GetStrings())
@@ -621,8 +646,6 @@ try:
     check("the boxes a card does not need are disabled, not hidden",
           not _dialog.picture_file.IsEnabled()
           and not _dialog.camera_choice.IsEnabled())
-    check("and a clock is offered, because a card can have one",
-          _dialog.picture_clock.IsEnabled())
 
     _dialog.picture_kind.SetSelection(
         _dialog._picture_kinds.index(C.PICTURE_CAMERA))
@@ -636,57 +659,89 @@ try:
     check("and problems only is the default",
           _dialog.picture_settings["framing_level"] == "problems")
 
-    check("every server in the list has a label, none raising",
-          len(_dialog.stream_server.GetStrings()) == len(C.STREAM_SERVER_ORDER),
-          _dialog.stream_server.GetStrings())
-
-    pick_server("icecast")
-    check("Icecast wants a password and not a stream key",
-          _dialog.stream_password.IsEnabled() and not _dialog.stream_key.IsEnabled())
-    check("and its mount point and port are usable",
-          _dialog.stream_mount.IsEnabled() and _dialog.stream_port.IsEnabled())
-
-    pick_server("youtube")
-    check("YouTube wants a stream key and not a password",
-          _dialog.stream_key.IsEnabled() and not _dialog.stream_password.IsEnabled())
-    check("its mount point and port are put out of the way",
-          not _dialog.stream_mount.IsEnabled() and not _dialog.stream_port.IsEnabled())
-    check("the address is filled in, because there is only one",
-          _dialog.stream_host.GetValue() == C.RTMP_INGEST["youtube"],
-          _dialog.stream_host.GetValue())
+    pick_platform("youtube")
+    check("YouTube fills its own address in",
+          _dialog.video_host.GetValue() == C.RTMP_INGEST["youtube"],
+          _dialog.video_host.GetValue())
     check("and it cannot be edited into something wrong",
-          not _dialog.stream_host.IsEnabled())
+          not _dialog.video_host.IsEnabled())
     check("there is a button to go and fetch the key",
-          _dialog.stream_key_page.IsEnabled())
+          _dialog.video_key_page.IsEnabled())
 
-    pick_server("facebook")
+    pick_platform("facebook")
     check("Facebook gets its own address",
-          _dialog.stream_host.GetValue() == C.RTMP_INGEST["facebook"],
-          _dialog.stream_host.GetValue())
+          _dialog.video_host.GetValue() == C.RTMP_INGEST["facebook"],
+          _dialog.video_host.GetValue())
 
-    _dialog.stream_host.SetValue("rtmp://my.own.server/live")
-    pick_server("youtube")
+    _dialog.video_host.SetValue("rtmp://my.own.server/live")
+    pick_platform("youtube")
     check("switching to YouTube REPLACES an address it cannot use",
-          _dialog.stream_host.GetValue() == C.RTMP_INGEST["youtube"],
-          _dialog.stream_host.GetValue())
+          _dialog.video_host.GetValue() == C.RTMP_INGEST["youtube"],
+          _dialog.video_host.GetValue())
 
-    pick_server("rtmp")
+    pick_platform("rtmp")
     check("and a custom server does not inherit a platform's address",
-          _dialog.stream_host.GetValue() == "", _dialog.stream_host.GetValue())
+          _dialog.video_host.GetValue() == "", _dialog.video_host.GetValue())
     check("a custom server has no key page to open",
-          not _dialog.stream_key_page.IsEnabled())
+          not _dialog.video_key_page.IsEnabled())
     check("but its address is the user's to type",
-          _dialog.stream_host.IsEnabled())
+          _dialog.video_host.IsEnabled())
 
-    _dialog.stream_key.SetValue("secret-key-value")
+    _dialog.video_key.SetValue("secret-key-value")
     check("the key is a password box, so it is not on screen in full",
-          _dialog.stream_key.GetWindowStyle() & wx.TE_PASSWORD)
-    check("and it comes back through stream_settings",
-          _dialog.stream_settings["key"] == "secret-key-value")
+          _dialog.video_key.GetWindowStyle() & wx.TE_PASSWORD)
+    check("and it comes back through video_settings",
+          _dialog.video_settings["key"] == "secret-key-value")
+
+    check("Ctrl+B goes to the radio station until told otherwise",
+          not _dialog.video_settings["live"])
+    _dialog.live_to_video.SetValue(True)
+    check("and there is one switch that sends it here instead",
+          _dialog.video_settings["live"])
+
+    print("\nTesting a video connection, which must NEVER go live")
+
+    # The bug Tony hit: the Test button used the ICECAST path for a YouTube
+    # station, so it opened a raw socket to the URL "rtmps://a.rtmps..." on
+    # the leftover Icecast port and said "getaddrinfo failed".
+    pick_platform("youtube")
+    _dialog.video_key.SetValue("")
+    _dialog._on_test_video(None)
+    said = _dialog.picture_result.GetValue()
+    check("with no key it says so rather than dialling anything",
+          "no stream key" in said.lower(), said)
+    check("and never mentions a port, which RTMP does not use here",
+          "8000" not in said and "8003" not in said, said)
+
+    _dialog.video_key.SetValue("abcd-efgh-ijkl-mnop")
+    _dialog._on_test_video(None)
+    said = _dialog.picture_result.GetValue()
+    check("with a key it reaches YouTube for real",
+          "reachable" in said.lower(), said)
+    # A test that completes an RTMP publish is what STARTS a broadcast, and a
+    # presenter who cannot see their channel would never notice. So this is
+    # deliberately reachability only, and it must not overclaim.
+    check("it says plainly that nothing was broadcast",
+          "nothing was broadcast" in said.lower(), said)
+    check("and admits it cannot prove the key is right",
+          "cannot" in said.lower(), said)
+    check("the key is never quoted back in full",
+          "abcd-efgh-ijkl-mnop" not in said, said)
+
+    pick_platform("rtmp")
+    _dialog.video_host.SetValue("rtmp://no-such-host-xyz123.invalid/live")
+    _dialog.video_key.SetValue("k")
+    _dialog._on_test_video(None)
+    said = _dialog.picture_result.GetValue()
+    check("a bad address is reported as a bad address",
+          "could not find" in said.lower(), said)
+    check("and never as an errno", "Errno" not in said, said)
 finally:
     _dialog.Destroy()
     _frame.Destroy()
 
+
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 print("\nThe app itself, built for real")
@@ -770,6 +825,115 @@ try:
 except streamout.SinkError as exc:
     check("and a real one is not", False, exc)
 
+
+
+# ---------------------------------------------------------------------------
+print("\nWhat the audit found, so none of it comes back")
+# ---------------------------------------------------------------------------
+
+# A refused stream key used to retry for ever: every RTMP wording matched none
+# of the Icecast ones in _retryable, so the state never reached FAILED, the app
+# never came off air, and the reason was spoken exactly once and then never
+# again all night.
+for message in ("a.rtmps.youtube.com would not take the stream key. Check it "
+                "has been copied in full and has not expired",
+                "could not find no-such.invalid. Check the server address",
+                "there is no stream key for this station",
+                "there is no server address for this station"):
+    quitter = Streamer(AirBus(RATE), {"server": "rtmp"})
+    quitter.error = message
+    check("a refused key stops rather than retrying for ever",
+          not quitter._retryable(), message[:44])
+
+for message in ("could not reach a.rtmps.youtube.com. Check the address",
+                "a.rtmps.youtube.com did not answer"):
+    keeper = Streamer(AirBus(RATE), {"server": "rtmp"})
+    keeper.error = message
+    check("but a server that is merely down is retried", keeper._retryable(),
+          message[:44])
+
+# The video key must never be written into the Icecast source password. It was,
+# and merely opening the video page and pressing OK wiped a radio station's
+# password.
+_probe = Board()
+check("the board keeps a stream key apart from the Icecast password",
+      hasattr(_probe, "video_key") and _probe.video_key == "")
+check("and they are two different fields",
+      "video_key" in _probe.to_dict() and "stream_password" in _probe.to_dict())
+
+# The audio and video sides must not share an address.
+_probe.stream_host = "myradio.example.com"
+_probe.video_host = C.RTMP_INGEST["youtube"]
+check("a board can hold a radio station AND a video platform at once",
+      _probe.stream_host != _probe.video_host)
+
+# A board file is not a trusted document, and these were the two stream
+# settings that were not whitelisted on the way in.
+_junk_path = os.path.join(art_dir, "junk-board.json")
+with open(_junk_path, "w", encoding="utf-8") as handle:
+    import json as _json
+    _json.dump({"stream_server": "twitch", "stream_format": "flac",
+                "live_to": "everywhere", "video_server": "myspace"}, handle)
+_junk = Board.load(_junk_path)
+check("a server nobody has heard of falls back to Icecast",
+      _junk.stream_server == "icecast", _junk.stream_server)
+check("and a format nobody has heard of falls back to MP3",
+      _junk.stream_format == "mp3", _junk.stream_format)
+check("and a live_to nobody has heard of goes to the radio station",
+      _junk.live_to == C.LIVE_TO_AUDIO, _junk.live_to)
+check("and an unknown platform falls back to YouTube",
+      _junk.video_server == "youtube", _junk.video_server)
+
+# The stream description must come from the destination, not the board: RTMP
+# is always AAC and H.264 whatever the audio format box happens to say.
+_dest = RtmpDestination({"server": "youtube",
+                         "host": C.RTMP_INGEST["youtube"],
+                         "password": "k", "bitrate": 128}, RATE)
+said = _dest.describe()
+check("an RTMP destination describes itself as video and audio",
+      "video" in said and "audio" in said, said)
+check("and never as MP3, which it never sends", "MP3" not in said, said)
+
+# The bus rate is used rather than a hard wired 44100.
+_at48 = RtmpDestination({"server": "rtmp", "host": "rtmp://x", "password": "k"},
+                        48000)
+check("an RTMP destination runs at the rate the bus really is",
+      _at48.samplerate == 48000, _at48.samplerate)
+
+# FFmpeg throws away the only useful thing it knows. Check we read it back.
+class _FakeLog:
+    def __init__(self, text):
+        self._text = text
+
+    def text(self):
+        return self._text
+
+
+check("the server's own words are preferred to a guess",
+      "not authorised" in streamout._explain_rtmp(
+          OSError("[Errno 5] I/O error"), {"host": "rtmps://x/y"},
+          streamout._server_error(_FakeLog(
+              "[rtmp @ 0] Server error: not authorised\n"))).lower(),
+      streamout._explain_rtmp(OSError("x"), {"host": "rtmps://x/y"},
+                              "not authorised"))
+check("a bad publish name is explained as a stream key",
+      "stream key" in streamout._explain_rtmp(
+          OSError("x"), {"host": "rtmps://x/y"},
+          "NetStream.Publish.BadName").lower())
+check("and with no server message it still falls back sensibly",
+      "could not connect" in streamout._explain_rtmp(
+          OSError("something new"), {"host": "rtmps://x/y"}).lower())
+
+# The two platforms behave OPPOSITELY on connect and a presenter has to know.
+check("YouTube is recorded as going live the moment you connect",
+      C.RTMP_GOES_LIVE_AT_ONCE["youtube"] is True)
+check("and Facebook as not", C.RTMP_GOES_LIVE_AT_ONCE["facebook"] is False)
+check("the YouTube key page is the redirect that always works",
+      "live_dashboard" in C.RTMP_KEY_PAGE["youtube"],
+      C.RTMP_KEY_PAGE["youtube"])
+check("and there is a backup ingest recorded for YouTube",
+      C.RTMP_INGEST_BACKUP["youtube"].startswith("rtmps://b."),
+      C.RTMP_INGEST_BACKUP["youtube"])
 
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)
