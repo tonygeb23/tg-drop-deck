@@ -34,7 +34,8 @@ from . import updatedialog
 from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
-                      SourceControlDialog, SourcesDialog, StreamStatsDialog,
+                      SourceControlDialog, SourcesDialog, StreamHelpDialog,
+                      StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
                       audio_file_dialog, key_label)
 from .engine import probe
@@ -58,6 +59,9 @@ ID_STREAM_STATS = wx.ID_HIGHEST + 404
 #: What the camera can see. Ctrl+Shift+F, next to the pair above, and a NEW
 #: key: nothing on the frozen digit map moved for it.
 ID_SHOT = wx.ID_HIGHEST + 411
+#: Setting streaming up, in the app. No accelerator: it is a thing you read
+#: once while setting up, not a thing you reach for mid show.
+ID_STREAM_HELP = wx.ID_HIGHEST + 412
 #: Recording, which is its own thing and not a kind of streaming: you record
 #: a show whether or not anybody is listening to it live.
 ID_RECORD = wx.ID_HIGHEST + 405
@@ -1074,6 +1078,12 @@ class DropDeckFrame(wx.Frame):
         help_menu.Append(ID_USER_GUIDE, "User &manual...",
                          "Opens the full manual at tgstudios.app in your "
                          "browser")
+        # In the app rather than only on the web, because setting streaming up
+        # is done with the app open, one field at a time, and sending somebody
+        # to a browser mid task loses them their place.
+        help_menu.Append(ID_STREAM_HELP, "Se&tting up streaming...",
+                         "Step by step for YouTube, Facebook, Restream and "
+                         "your own server, without leaving the app")
         help_menu.Append(ID_CHECK_UPDATES, "Check for &updates")
         help_menu.AppendSeparator()
         help_menu.Append(ID_FEEDBACK, "&Submit feedback...",
@@ -1210,6 +1220,7 @@ class DropDeckFrame(wx.Frame):
                   id=ID_STREAM_STATUS)
         self.Bind(wx.EVT_MENU, self._on_stream_stats, id=ID_STREAM_STATS)
         self.Bind(wx.EVT_MENU, self.describe_shot, id=ID_SHOT)
+        self.Bind(wx.EVT_MENU, self._on_stream_help, id=ID_STREAM_HELP)
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_recording(), id=ID_RECORD)
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
@@ -4079,6 +4090,11 @@ class DropDeckFrame(wx.Frame):
                     source.close()
                 except Exception:
                     pass
+
+    def _on_stream_help(self, _event=None, platform=None):
+        """How to set up a platform, without leaving the app."""
+        with StreamHelpDialog(self, platform or self.board.video_server) as box:
+            box.ShowModal()
 
     def _rebuild_station_menu(self):
         """The saved stations, with a dot beside the one that is loaded."""

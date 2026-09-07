@@ -234,10 +234,20 @@ class Framer:
     def measure(self, rgb):
         """One reading, with no speech and no state. Safe to call anywhere."""
         self._ensure()
-        if rgb is None:
+        # A DEGENERATE FRAME SEGFAULTS OPENCV, so it is refused here rather
+        # than passed on. cv2.resize on a zero sized array takes the whole
+        # interpreter down: no exception, no traceback, the process simply
+        # dies, which on air would look like the app vanishing mid show. A
+        # camera can hand back something odd when a device is failing, and
+        # "never raises" has to mean "never crashes" as well.
+        if rgb is None or getattr(rgb, "size", 0) == 0:
+            return Reading()
+        if getattr(rgb, "ndim", 0) != 3 or rgb.shape[0] < 2 or rgb.shape[1] < 2:
             return Reading()
         try:
             luminance = float(rgb[::8, ::8].mean())
+            if luminance != luminance:            # NaN from an empty slice
+                luminance = 0.0
         except Exception:
             luminance = 0.0
         light = "dark" if luminance < C.FACE_DARK_BELOW else "well lit"

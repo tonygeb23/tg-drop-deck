@@ -26,6 +26,7 @@ from . import framing
 from . import proccapture
 from . import secrets
 from . import sources
+from . import streamhelp
 from . import streamout
 from . import streamstats
 from . import vst
@@ -1641,6 +1642,10 @@ class SettingsDialog(wx.Dialog):
         advice.Wrap(560)
         advice.GetParent().Layout()
 
+    def _on_how_to(self, _event):
+        with StreamHelpDialog(self, self._current_platform()) as box:
+            box.ShowModal()
+
     def _on_open_key_page(self, _event):
         kind = self._current_platform()
         url = C.RTMP_KEY_PAGE.get(kind)
@@ -2101,6 +2106,13 @@ class SettingsDialog(wx.Dialog):
         # for it, which is the worst part of setting this up with a screen
         # reader and the one part the app can make easy. It is also the ONLY
         # part: everything else is one paste and then never again.
+        howto = wx.Button(panel, label="&How do I set this up?")
+        howto.SetToolTip(
+            "Step by step for whichever platform is picked above, without "
+            "leaving the app.")
+        howto.Bind(wx.EVT_BUTTON, self._on_how_to)
+        row.Add(howto, 0, wx.RIGHT, 8)
+
         self.video_key_page = wx.Button(panel, label="Get my stream ke&y")
         self.video_key_page.SetToolTip(
             "Opens the page on YouTube or Facebook where your stream key is, "
@@ -4179,3 +4191,79 @@ class DonateDialog(wx.Dialog):
     @property
     def never_again(self):
         return bool(self.never.GetValue())
+
+
+class StreamHelpDialog(wx.Dialog):
+    """How to set up each platform, in the app rather than only on the web.
+
+    The manual is on the website so a confusing sentence can be fixed the same
+    day. That is right for the manual and wrong for this: setting up streaming
+    is the one job somebody does with the app open, one field at a time, and
+    telling them to go and find a web page mid task is telling them to lose
+    their place.
+
+    So the steps live here too, and both come from `streamhelp.py` so they
+    cannot drift apart.
+
+    **A read only multiline box, not a web view and not a list.** A screen
+    reader user can arrow through it line by line, read a word at a time, and
+    copy a piece out, which is exactly what somebody following instructions
+    needs. It also means the text can be as long as it needs to be.
+    """
+
+    def __init__(self, parent, platform=None):
+        super().__init__(parent, title="Setting up streaming",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._platforms = list(streamhelp.ORDER)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # The label is built before the control, the same rule as everywhere
+        # else: MSAA hands a screen reader the static text that PRECEDES a
+        # control in creation order.
+        outer.Add(wx.StaticText(self, label="&Which platform"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.picker = wx.Choice(self, choices=[
+            streamout.server_label(key) for key in self._platforms]
+            + ["All of them, and what to do when it goes wrong"])
+        name_field(self.picker, "Which platform")
+        self.picker.Bind(wx.EVT_CHOICE, self._on_pick)
+        outer.Add(self.picker, 0, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Instructions"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.text = wx.TextCtrl(
+            self, style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_RICH2,
+            size=(640, 420))
+        name_field(self.text, "Instructions")
+        outer.Add(self.text, 1, wx.EXPAND | wx.ALL, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        guide = wx.Button(self, label="Open the full &manual")
+        guide.SetToolTip("Opens the whole manual on the website, which covers "
+                         "everything else the app does.")
+        guide.Bind(wx.EVT_BUTTON,
+                   lambda _e: webbrowser.open(C.USER_GUIDE_URL))
+        row.Add(guide, 0, wx.RIGHT, 8)
+        row.Add(wx.Button(self, wx.ID_CLOSE, "&Close"), 0)
+        outer.Add(row, 0, wx.ALL, 10)
+        self.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE),
+                  id=wx.ID_CLOSE)
+        self.SetEscapeId(wx.ID_CLOSE)
+
+        self.SetSizerAndFit(outer)
+        wanted = platform if platform in self._platforms else self._platforms[0]
+        self.picker.SetSelection(self._platforms.index(wanted))
+        self._on_pick(None)
+        # Focus lands on the instructions rather than the picker, because
+        # reading them is what this window is for.
+        self.text.SetFocus()
+
+    def _on_pick(self, event):
+        if event is not None:
+            event.Skip()
+        index = max(0, self.picker.GetSelection())
+        if index >= len(self._platforms):
+            self.text.SetValue(streamhelp.everything())
+        else:
+            self.text.SetValue(streamhelp.as_text(self._platforms[index]))
+        self.text.SetInsertionPoint(0)

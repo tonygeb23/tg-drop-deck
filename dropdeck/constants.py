@@ -964,6 +964,13 @@ CAMERA_STOP_TIMEOUT = 3.0
 #: anything that reports on the shot should say it does not know.
 CAMERA_STALE_SECONDS = 2.0
 
+#: How long FFmpeg waits for a frame before giving up on the camera. This is
+#: what lets a stalled reader thread END, so the device is released and
+#: close() never has to reach in and shut a container another thread is
+#: reading. PyAV installs FFmpeg's interrupt callback on INPUT containers,
+#: which is why this works here and not on the streaming side.
+CAMERA_READ_TIMEOUT = 4.0
+
 #: FFmpeg's own capture buffer. A camera that delivers faster than it is
 #: drained fills this and then logs about dropping frames.
 CAMERA_BUFFER = "64M"

@@ -203,13 +203,14 @@ class CameraSource(PictureSource):
         }
         try:
             return av.open("video=%s" % self.device, format="dshow",
-                           options=options)
+                           options=options, timeout=C.CAMERA_READ_TIMEOUT)
         except Exception:
             # A camera that will not take the size asked for is still a camera.
             # Better a working picture at a size nobody chose than no picture.
             try:
                 return av.open("video=%s" % self.device, format="dshow",
-                               options={"rtbufsize": C.CAMERA_BUFFER})
+                               options={"rtbufsize": C.CAMERA_BUFFER},
+                               timeout=C.CAMERA_READ_TIMEOUT)
             except Exception as exc:
                 raise CameraError(explain(exc, self.device)) from exc
 
@@ -320,16 +321,21 @@ class CameraSource(PictureSource):
         was this one.
         """
         self._stop.set()
-        container, self._container = self._container, None
-        if container is not None:
-            try:
-                container.close()
-            except Exception:
-                pass          # closing under a blocked read is allowed to fail
         thread = self._thread
         self._thread = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=C.CAMERA_STOP_TIMEOUT)
+            # If it is STILL alive the read is stuck, and the timeout above on
+            # the container is what will free it: FFmpeg aborts the read and
+            # the thread runs its own cleanup, which closes the container from
+            # the thread that owns it.
+            #
+            # It is emphatically NOT closed from here. A first attempt at
+            # this did, to release the device faster, and closing an FFmpeg
+            # container while another thread is inside decode() is a use
+            # after free: it SEGFAULTED the interpreter at teardown, with no
+            # exception and no traceback, which on air would look like the
+            # app simply vanishing.
         with self._lock:
             self._latest = None
             self._scaled = None
