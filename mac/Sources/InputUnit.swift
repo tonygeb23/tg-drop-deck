@@ -197,13 +197,24 @@ func foldToStereo(_ raw: UnsafePointer<Float>, frames: Int, channels: UInt32,
                   into out: UnsafeMutablePointer<Float>) -> Float {
     var loudest: Float = 0
     if channels >= 2 {
+        // Stereo is kept, not folded. Everything else lands in both ears,
+        // because that is what a mono voice needs.
+        if channel == .stereo {
+            for i in 0..<frames {
+                let l = raw[i * 2] * gain, r = raw[i * 2 + 1] * gain
+                loudest = max(loudest, max(abs(l), abs(r)))
+                out[i * 2] = l
+                out[i * 2 + 1] = r
+            }
+            return loudest
+        }
         for i in 0..<frames {
             let l = raw[i * 2], r = raw[i * 2 + 1]
             let v: Float
             switch channel {
             case .left: v = l
             case .right: v = r
-            case .mix: v = (l + r) * 0.5
+            default: v = (l + r) * 0.5
             }
             let scaled = v * gain
             loudest = max(loudest, abs(scaled))

@@ -337,6 +337,7 @@ enum KeyboardHelp {
         THE PLAYLIST
           Command Shift P               Go to the running order
           Option Command Shift S        Go back to the soundboard
+                                        (Command Shift S is Save board as)
           Command V                     Paste songs from the clipboard
           Return                        Play from the track you are on
           Shift Return                  Segue into it from what is on air
@@ -388,7 +389,15 @@ enum KeyboardHelp {
 
         OTHER AUDIO ON THE AIR WITH YOU
           Option Shift S                Audio sources
-          Option Command Shift S        Mute, solo, rename or remove one
+          Option Command C              Source control: mute, solo, rename or
+                                        remove one, mid show
+          Option Command M              Mute every source, and unmute them
+          Option Command S              Solo the microphone, and drop the solo
+
+          Solo and mute are on the sources only, so the music and the running
+          order carry on: Option Command S is "just me on the air", not "stop
+          the show". Both say what they did at every speech level, and the
+          status line carries SOLO and SOURCES MUTED while they are on.
 
           A co-host's microphone, a hardware mixer, or one single program
           captured straight from it with nothing to install. YOUR SCREEN READER

@@ -194,13 +194,19 @@ final class DeviceSource: BaseSource {
 
 // ---------------------------------------------------------- one program ---
 
-/// One running program with audio, as Core Audio sees it.
+/// One program that could be put on the air.
+///
+/// `isPlaying` means it is making a noise this second. `isKnownToCoreAudio`
+/// means Core Audio has an object for it, which on macOS 25 and earlier is what
+/// a tap needs; from macOS 26 a tap is described by bundle id and a program that
+/// has not made a sound yet can still be chosen.
 struct AudioProcessInfo {
     let objectID: AudioObjectID
     let pid: pid_t
     let bundleID: String
     let name: String
     let isPlaying: Bool
+    var isKnownToCoreAudio: Bool = true
 }
 
 enum AudioProcesses {
@@ -229,11 +235,32 @@ enum AudioProcesses {
                                         name: friendlyName(bundle: bundle, pid: pid_t(pid)),
                                         isPlaying: playing))
         }
+        // AND EVERY OTHER PROGRAM THAT IS RUNNING.
+        //
+        // Core Audio's process list only holds programs that have already
+        // opened audio. Spotify sitting there paused, or just launched, is not
+        // in it, and the first report of this was exactly that: "when adding a
+        // source to a broadcast Spotify does not show up in the list". From
+        // macOS 26 the tap is described by bundle id, so a program can be
+        // chosen before it has made a sound and the tap picks it up when it
+        // does. Anything already found above wins, because that entry carries
+        // the object id an older macOS needs.
+        let known = Set(out.map(\.bundleID))
+        for app in NSRunningApplicationShim.running() where !known.contains(app.bundleID) {
+            out.append(AudioProcessInfo(objectID: 0, pid: app.pid,
+                                        bundleID: app.bundleID, name: app.name,
+                                        isPlaying: false, isKnownToCoreAudio: false))
+        }
+
         // A program that is making a noise right now is the one somebody is
-        // looking for, so those come first.
+        // looking for, so those come first, then everything Core Audio already
+        // knows, then the rest of what is running, each set by name.
+        func rank(_ p: AudioProcessInfo) -> Int {
+            p.isPlaying ? 0 : (p.isKnownToCoreAudio ? 1 : 2)
+        }
         return out.sorted {
-            $0.isPlaying != $1.isPlaying ? $0.isPlaying
-                                         : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            rank($0) != rank($1) ? rank($0) < rank($1)
+                : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }
 
@@ -279,6 +306,13 @@ enum AudioProcesses {
 enum NSRunningApplicationShim {
     static var lookup: ((pid_t) -> String?)?
     static func name(forPID pid: pid_t) -> String? { lookup?(pid) }
+
+    /// Every program running right now that could plausibly make a noise.
+    /// Set by the window; empty until it is, which is what the self test sees.
+    static var runningApps: (() -> [(pid: pid_t, bundleID: String, name: String)])?
+    static func running() -> [(pid: pid_t, bundleID: String, name: String)] {
+        runningApps?() ?? []
+    }
 }
 
 /// One program's audio, captured with a Core Audio process tap.

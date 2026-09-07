@@ -83,13 +83,33 @@ final class AudioRing {
     }
 }
 
+/// What is taken off an input with more than one channel.
+///
+/// The first four fold to mono and put the same signal in both ears, which is
+/// what a microphone wants: a mono voice panned anywhere but the middle is a
+/// voice half the audience hears quietly. `stereo` is the one that does not,
+/// and it exists because a microphone input is not always a microphone. A
+/// loopback device carrying a whole programme, a desk feed or a mixer's main
+/// out is stereo, and folding it was throwing the image away: "if I use a
+/// loopback device as my microphone input and have it set to capture both
+/// channels the audio comes out in mono".
 enum MicChannel: String, CaseIterable {
-    case mix, left, right
+    case mix, left, right, stereo
     var label: String {
         switch self {
-        case .mix: return "Both, mixed together"
+        case .mix: return "Both, mixed together (a microphone)"
         case .left: return "Left only"
         case .right: return "Right only"
+        case .stereo: return "Keep it in stereo (a loopback, desk or mixer feed)"
+        }
+    }
+    /// Said out loud when it changes, where the full label is too long.
+    var spoken: String {
+        switch self {
+        case .mix: return "both channels mixed to mono"
+        case .left: return "the left channel only"
+        case .right: return "the right channel only"
+        case .stereo: return "left and right kept apart, in stereo"
         }
     }
 }

@@ -357,13 +357,13 @@ final class Board {
         b.stream.mount = dict["stream_mount"] as? String ?? "/live"
         b.stream.user = dict["stream_user"] as? String ?? "source"
         b.stream.password = dict["stream_password"] as? String ?? ""
-        // A board written on Windows names MP3 or Ogg here, and this build can
-        // send neither. It is quietly moved to the one format that works
-        // rather than refused, because the alternative is a station that
-        // cannot go on air at all on a Mac.
+        // A board written on Windows may name MP3, which no Mac can encode.
+        // It is moved to the nearest thing this build really sends rather than
+        // refused, because the alternative is a station that cannot go on air
+        // at all on a Mac. An Ogg station now lands on Opus, which is an Ogg
+        // stream, rather than on AAC.
         let savedFormat = dict["stream_format"] as? String ?? C.defaultStreamFormat
-        b.stream.format = C.streamFormatKeys.contains(savedFormat)
-            ? savedFormat : C.defaultStreamFormat
+        b.stream.format = C.streamFormatFor(savedFormat)
         b.stream.bitrate = dict["stream_bitrate"] as? Int ?? C.defaultStreamBitrate
         b.stream.name = dict["stream_name"] as? String ?? ""
         b.stream.description = dict["stream_description"] as? String ?? ""
@@ -468,10 +468,10 @@ final class Board {
         if let v = station["stream_mount"] as? String { stream.mount = v }
         if let v = station["stream_user"] as? String { stream.user = v }
         if let v = station["stream_password"] as? String { stream.password = v }
-        // A station saved on Windows may name MP3 or Ogg. Moved to the one
-        // format this build sends, for the same reason the board loader does.
+        // A station saved on Windows may name MP3. Moved to the nearest format
+        // this build sends, for the same reason the board loader does.
         if let v = station["stream_format"] as? String {
-            stream.format = C.streamFormatKeys.contains(v) ? v : C.defaultStreamFormat
+            stream.format = C.streamFormatFor(v)
         }
         if let v = station["stream_bitrate"] as? Int {
             stream.bitrate = C.streamBitrates.contains(v) ? v : C.defaultStreamBitrate

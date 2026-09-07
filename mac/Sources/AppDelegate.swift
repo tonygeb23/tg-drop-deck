@@ -26,6 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordItem: NSMenuItem!
     private var globalHotkeyItem: NSMenuItem!
     private var loopItem: NSMenuItem!
+    private var muteSourcesItem: NSMenuItem!
+    private var soloItem: NSMenuItem!
+    /// What each command's menu item does, filled in as the menus are built.
+    /// The alias keys are sent here rather than to a second switch that would
+    /// drift away from the menu within a release.
+    private var actions: [Command: Selector] = [:]
     private var soundsMenu: NSMenu!
     /// The saved stations, rebuilt every time the menu opens.
     private var stationMenu: NSMenu!
@@ -46,6 +52,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             existing.activate(options: [.activateAllWindows])
             NSApp.terminate(nil)
             return
+        }
+
+        // Sources.swift deliberately does not import AppKit, so the two things
+        // it needs from NSWorkspace are handed to it here. Without the first,
+        // every captured program was named by the last word of its bundle id;
+        // without the second, only programs that had already made a sound could
+        // be put on the air, which is why Spotify sitting paused was not in the
+        // list.
+        NSRunningApplicationShim.lookup = { pid in
+            NSRunningApplication(processIdentifier: pid)?.localizedName
+        }
+        NSRunningApplicationShim.runningApps = {
+            NSWorkspace.shared.runningApplications.compactMap { app in
+                guard let bundle = app.bundleIdentifier, !bundle.isEmpty,
+                      bundle != Bundle.main.bundleIdentifier,
+                      app.activationPolicy != .prohibited,
+                      let name = app.localizedName, !name.isEmpty
+                else { return nil }
+                return (app.processIdentifier, bundle, name)
+            }
         }
 
         trace("loading board")
@@ -122,6 +148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let window = NSApp.keyWindow,
                   event.window === window else { return event }
 
+            // A panel that drives itself from the keyboard gets first refusal,
+            // through one register rather than a second monitor. Two monitors
+            // fire in an order AppKit does not promise, which is why the source
+            // control panel's own digits were sometimes firing pads instead of
+            // choosing a source.
+            if let claim = ModalKeys.current, claim(event) { return nil }
+
             // Somebody is typing. The field editor is an NSTextView whatever
             // control it belongs to, so this one check covers every text field,
             // search field and combo box in the app.
@@ -131,6 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
             if event.keyCode == 53 {                       // Escape
+                // Escape belongs to whatever is in front. Taking it here for
+                // the stop counter meant Preferences, and every other dialog in
+                // the app, could not be closed with it: the key never reached
+                // them. Only the main window's own Escape stops the show.
+                guard NSApp.modalWindow == nil, window === self.main.window else { return event }
                 self.main.escapePressed()
                 return nil
             }
@@ -152,6 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.main.trigger(slot)
                 return nil
             }
+            // Every binding a command has after its first one. The menu can
+            // only carry one key each, so these arrive nowhere else. Never
+            // while typing: Delete, Return and a bare letter all belong to the
+            // field somebody is in.
+            if !typing, let command = KeyMap.aliasCommand(for: event),
+               let action = self.actions[command] {
+                NSApp.sendAction(action, to: self, from: nil)
+                return nil
+            }
             // The Windows Control combinations, accepted where the system
             // leaves them free. Never while typing: Control F is "forward one
             // character" in every Cocoa text field, and that key is the
@@ -159,7 +206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !typing, mods == [.control],
                let chars = event.charactersIgnoringModifiers?.lowercased(),
                let command = KeyMap.windowsAliases[chars] {
-                self.perform(command)
+                if let action = self.actions[command] {
+                    NSApp.sendAction(action, to: self, from: nil)
+                } else {
+                    self.perform(command)
+                }
                 return nil
             }
             return event
@@ -201,6 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let m = NSMenuItem(title: title, action: action, keyEquivalent: "")
         m.target = self
         m.representedObject = command.rawValue
+        // The menu can only carry one key equivalent. Every other binding a
+        // command has is an alias, and this is what lets the key monitor
+        // dispatch it to exactly the same place the menu item goes.
+        actions[command] = action
         if let (key, mods) = KeyMap.menuKey(command) {
             m.keyEquivalent = key
             m.keyEquivalentModifierMask = mods
@@ -353,6 +408,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(plain("Open the recordings folder", #selector(openRecordings)))
         air.addItem(.separator())
         air.addItem(item("Source control...", .sourceControl, #selector(sourceControl)))
+        muteSourcesItem = item("Mute every source", .muteSources, #selector(muteSources))
+        air.addItem(muteSourcesItem)
+        soloItem = item("Solo the microphone", .soloMic, #selector(soloMic))
+        air.addItem(soloItem)
         air.addItem(item("Audio sources...", .sources, #selector(showSources)))
         air.addItem(.separator())
         air.addItem(plain("Set up streaming...", #selector(streamSetup)))
@@ -447,6 +506,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         micItem?.state = main.mic.isOpen ? .on : .off
         recordItem?.title = main.recorder.isRecording ? "Stop recording" : "Start recording"
         globalHotkeyItem?.state = main.hotkeys.enabled ? .on : .off
+        let sources = main.sourceGroup.all
+        let allMuted = !sources.isEmpty && sources.allSatisfy { $0.config.muted }
+        muteSourcesItem?.title = allMuted ? "Unmute every source" : "Mute every source"
+        muteSourcesItem?.state = allMuted ? .on : .off
+        soloItem?.title = main.sourceGroup.soloed == nil ? "Solo the microphone" : "Drop the solo"
+        soloItem?.state = main.sourceGroup.soloed == nil ? .off : .on
         rebuildStationMenu()
     }
 
@@ -469,6 +534,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc func muteSources() { main.toggleSourceMute(); refreshAirMenu() }
+    @objc func soloMic() { main.toggleSolo(); refreshAirMenu() }
     @objc func pickStation(_ sender: NSMenuItem) { main.pickStation(sender.title) }
     @objc func importBank() { main.importOldBank() }
     @objc func toggleLoop() { main.toggleLoopFocused() }

@@ -141,6 +141,23 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.3.0": ("VoiceOver now hears everything this app says. Announcements were "
+              "being posted to a view instead of the window, so VoiceOver said "
+              "nothing at all and every line landed only in the status bar: "
+              "Command D changed the ducking silently and Command Shift B "
+              "answered into a box at the bottom of the screen. Ducking, the "
+              "microphone, the stream, the recorder and the faders now speak at "
+              "every speech level. Escape closes Preferences and every other "
+              "dialog again. Source control has a key of its own, Option "
+              "Command C, after sharing one with Go to the soundboard and "
+              "losing; Option Command M mutes every source and Option Command S "
+              "solos the microphone. Preferences is a category list beside its "
+              "settings, the shape VoiceOver Utility uses. Streaming adds Opus "
+              "in Ogg and uncompressed WAV beside AAC. The microphone can be "
+              "kept in stereo for a loopback or desk feed. Every running "
+              "program is in Audio sources now, not only the ones already "
+              "making a sound. Command E, Command P, Option Return and Delete "
+              "work again."),
     "3.2.2": ("The first Mac release. Everything the Windows copy does, natively, "
               "for VoiceOver: the four banks, the running order, drops, the "
               "microphone and its voice chain, other programs on the air, "

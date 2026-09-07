@@ -309,6 +309,16 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         parts.append(mic?.isOpen == true ? "Mic on" : "Mic off")
         parts.append(streamer.state == .off ? "Off air" : streamer.state.spoken.uppercased())
         if recorder.isRecording { parts.append("RECORDING") }
+        // Muted and soloed sources are the two states you can hear the effect
+        // of but not the cause of, so the line says them rather than leaving
+        // somebody to wonder why a guest has gone quiet.
+        if sourceGroup.soloed != nil { parts.append("SOLO") }
+        let sources = sourceGroup.all
+        if !sources.isEmpty, sources.allSatisfy({ $0.config.muted }) {
+            parts.append("SOURCES MUTED")
+        } else if sources.contains(where: { $0.config.muted }) {
+            parts.append("\(sources.filter { $0.config.muted }.count) muted")
+        }
         statusState.stringValue = parts.joined(separator: "   ")
         stopButton.title = stopButtonTitle()
         stopButton.setAccessibilityLabel(stopButtonTitle())
@@ -510,15 +520,15 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         case C.busBed:
             board.bedVolume = min(1, max(0, board.bedVolume + step))
             group.setBusGain(C.busBed, board.bedVolume)
-            speaker.announce("Bed volume \(percent(board.bedVolume))")
+            speaker.announceState("Bed volume \(percent(board.bedVolume))")
         case C.busPlaylist:
             board.playlistVolume = min(1, max(0, board.playlistVolume + step))
             group.setBusGain(C.busPlaylist, board.playlistVolume)
-            speaker.announce("Playlist volume \(percent(board.playlistVolume))")
+            speaker.announceState("Playlist volume \(percent(board.playlistVolume))")
         default:
             board.sfxVolume = min(1, max(0, board.sfxVolume + step))
             group.setBusGain(C.busSFX, board.sfxVolume)
-            speaker.announce("Sound volume \(percent(board.sfxVolume))")
+            speaker.announceState("Sound volume \(percent(board.sfxVolume))")
         }
         updateStatusLine()
         touch()
@@ -527,7 +537,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     func toggleDucking() {
         board.ducking.toggle()
         group.ducking = board.ducking
-        speaker.announce(board.ducking ? "Ducking on" : "Ducking off")
+        speaker.announceState(board.ducking ? "Ducking on" : "Ducking off")
         updateStatusLine()
         touch()
     }

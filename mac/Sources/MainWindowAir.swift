@@ -16,7 +16,7 @@ extension MainWindow {
     func toggleMic() {
         if mic.isOpen {
             mic.close()
-            speaker.announce("Microphone off. Music back up")
+            speaker.announceState("Microphone off. Music back up")
             updateStatusLine()
             return
         }
@@ -33,13 +33,13 @@ extension MainWindow {
             }
         }
         guard mic.open(deviceUID: board.micDeviceUID, outputRate: group.sampleRate) else {
-            speaker.announce("The microphone would not open. "
-                             + (mic.lastError ?? "no reason given"))
+            speaker.announceState("The microphone would not open. "
+                                  + (mic.lastError ?? "no reason given"))
             return
         }
         board.micDeviceUID = mic.deviceUID
         board.micDeviceName = mic.deviceName
-        speaker.announce("Microphone on, \(mic.deviceName ?? "default input"). Music ducked")
+        speaker.announceState("Microphone on, \(mic.deviceName ?? "default input"). Music ducked")
         updateStatusLine()
         touch()
     }
@@ -61,7 +61,7 @@ extension MainWindow {
             // The recorder took its own bus off the taps; this puts the mixers
             // back to not building an air sum if nothing else wants one.
             group.syncTaps()
-            speaker.announce(summary ?? "The recording stopped")
+            speaker.announceState(summary ?? "The recording stopped")
             updateStatusLine()
             return
         }
@@ -69,13 +69,13 @@ extension MainWindow {
                                         format: board.recordFormat,
                                         bitrate: board.recordBitrate,
                                         folder: board.recordFolder) else {
-            speaker.announce("Recording would not start. "
-                             + (recorder.lastError ?? "no reason given"))
+            speaker.announceState("Recording would not start. "
+                                  + (recorder.lastError ?? "no reason given"))
             return
         }
         // The taps only feed the mixers once something is listening.
         group.syncTaps()
-        speaker.announce("Recording to \((path as NSString).lastPathComponent)")
+        speaker.announceState("Recording to \((path as NSString).lastPathComponent)")
         updateStatusLine()
     }
 
@@ -92,12 +92,12 @@ extension MainWindow {
     func toggleStream() {
         if streamer.isOn {
             streamer.stop(group: group)
-            speaker.announce("Off air")
+            speaker.announceState("Off air")
             updateStatusLine()
             return
         }
         guard !board.stream.host.isEmpty else {
-            speaker.announce("There is no server set up yet. "
+            speaker.announceState("There is no server set up yet. "
                              + "Set up streaming is on the On air menu")
             return
         }
@@ -106,15 +106,15 @@ extension MainWindow {
             self.updateStatusLine()
             self.updateAirMenu()
             switch state {
-            case .live: self.speaker.announce("On air")
-            case .failed: self.speaker.announce("Could not go on air. \(detail)")
-            case .retrying: self.speaker.announce("Off air, trying again. \(detail)")
+            case .live: self.speaker.announceState("On air")
+            case .failed: self.speaker.announceState("Could not go on air. \(detail)")
+            case .retrying: self.speaker.announceState("Off air, trying again. \(detail)")
             default: break
             }
         }
         mic.onAir = board.stream.sendMic
         _ = streamer.start(group: group, settings: board.stream)
-        speaker.announce("Connecting to \(board.stream.host)")
+        speaker.announceState("Connecting to \(board.stream.host)")
         updateStatusLine()
     }
 
@@ -245,6 +245,62 @@ extension MainWindow {
         touch()
     }
 
+    /// Option Command M. Every extra source at once, off and back on.
+    ///
+    /// Not the microphone: that is Command M and it is a different thing, an
+    /// open sound card rather than a gain. This is the key for the guest's
+    /// laptop, the phone line or the desk feed all going quiet in one press,
+    /// with the music and the pads untouched.
+    func toggleSourceMute() {
+        let sources = sourceGroup.all
+        guard !sources.isEmpty else {
+            speaker.announceState("There are no extra sources to mute. "
+                                  + "Option Shift S adds one, and Command M is the microphone")
+            return
+        }
+        // Anything still open means the press is a mute. It takes two presses
+        // to unmute a half muted desk, and that is the right way round: the
+        // first press is the one you make in a hurry.
+        let muting = sources.contains { !$0.config.muted }
+        for source in sources { source.config.muted = muting }
+        for source in sources {
+            if let index = board.sources.firstIndex(where: { $0.id == source.config.id }) {
+                board.sources[index] = source.config
+            }
+        }
+        let n = sources.count
+        let word = n == 1 ? "\(sources[0].config.name)" : "all \(n) sources"
+        speaker.announceState(muting ? "\(word) muted" : "\(word) unmuted")
+        updateStatusLine()
+        touch()
+    }
+
+    /// Option Command S. Just me, and back.
+    ///
+    /// Solo is on the source sum only, so the music and the running order carry
+    /// on: this is "take every other input off the air", not "stop the show".
+    /// Pressed with a solo already set it drops it, whatever was soloed, so the
+    /// key always has a way back.
+    func toggleSolo() {
+        if let soloed = sourceGroup.soloed {
+            sourceGroup.soloed = nil
+            let name = soloed == micDuckKey ? "The microphone"
+                     : (sourceGroup.source(id: soloed)?.config.name ?? "That source")
+            speaker.announceState("\(name) no longer soloed. Every source is back")
+            updateStatusLine()
+            return
+        }
+        guard mic.isOpen else {
+            speaker.announceState("The microphone is off, so there is nothing to solo it over. "
+                                  + "Command M opens it, and Option Command C solos any source")
+            return
+        }
+        sourceGroup.soloed = micDuckKey
+        speaker.announceState("Microphone soloed. Every other source is silent, "
+                              + "and the music carries on")
+        updateStatusLine()
+    }
+
     // ------------------------------------------------------- global hotkeys ---
 
     /// Command G arms and disarms the whole set.
@@ -252,7 +308,7 @@ extension MainWindow {
         if hotkeys.enabled {
             hotkeys.unregisterAll()
             board.globalHotkeysOn = false
-            speaker.announce("Global hotkeys off. Other programs have those keys back.")
+            speaker.announceState("Global hotkeys off. Other programs have those keys back.")
         } else {
             armGlobalHotkeys(announce: true)
         }
@@ -271,7 +327,7 @@ extension MainWindow {
             line += " These could not be registered, most likely because another "
                   + "program already uses them: " + refused.joined(separator: ", ")
         }
-        speaker.announce(line)
+        speaker.announceState(line)
     }
 
     /// A key for one slot, inside this app, for bank four only.

@@ -14,8 +14,10 @@ import AppKit
 final class KeyboardCheckPanel: NSObject {
 
     private var log: NSTextView!
-    private var monitor: Any?
     private var seen = Set<String>()
+    /// Escape is one of the keys under test, so the first press is reported
+    /// and only the second one closes the window.
+    private var escapedOnce = false
 
     private static let wanted: [(String, String)] = [
         ("1", "bank 1, sound 1"),
@@ -47,7 +49,7 @@ final class KeyboardCheckPanel: NSObject {
             arrives, so anything missing from the list is a key something else on this Mac \
             took first, usually VoiceOver.
 
-            Nothing here plays a sound and nothing is saved.
+            Nothing here plays a sound and nothing is saved. Escape is one of the keys             being checked, so it is reported rather than acted on: press it twice in a row to             leave.
             """
         alert.addButton(withTitle: "Done")
 
@@ -70,13 +72,23 @@ final class KeyboardCheckPanel: NSObject {
         box.addSubview(scroll)
         alert.accessoryView = box
 
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            self?.record(event, speaker: speaker)
-            return nil          // nothing here fires a pad
+        // Every key is claimed, because reporting what arrived is the whole
+        // job and a key that fired a pad instead would never be reported. The
+        // one way out from the keyboard is Escape twice: this window checks
+        // Escape too, so the first press is a reading and the second leaves.
+        ModalKeys.claim({ [weak self] event in
+            guard let self else { return false }
+            self.record(event, speaker: speaker)
+            if event.keyCode == 53 {
+                if self.escapedOnce { return false }   // let the alert cancel
+                self.escapedOnce = true
+                return true
+            }
+            self.escapedOnce = false
+            return true                                 // nothing here fires a pad
+        }) {
+            alert.runModal()
         }
-        alert.runModal()
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
 
         let missing = Self.wanted.filter { !seen.contains($0.0) }
         if missing.isEmpty {

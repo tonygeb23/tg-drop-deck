@@ -153,6 +153,61 @@ like the app simply failing to open. `MainWindow.startAudio` is called from a
 `DispatchQueue.main.async` after the window is up, and the cards are then left
 open for the life of the app so no keypress ever pays to open one.
 
+## Speech, and the one line that made all of it silent
+
+Four channels became five in 3.3.0, and the reason is worth keeping.
+
+**An announcement is only honoured on an NSWindow or on NSApp.** Until 3.3.0
+`Speaker.say` posted `.announcementRequested` to `window.contentView`, and
+VoiceOver said nothing at all. Every channel also writes the status line, so the
+app looked like it was working: Command D really did toggle the ducking and the
+words really did appear at the bottom of the window. They were simply never
+spoken. Post to `NSApp.keyWindow`, which is also what puts a line spoken from
+inside an NSAlert into that alert rather than behind it. Chat Grid had this
+right all along, in `Announcer.say(_:in:)`, which is where the shape came from.
+
+**`announceState` is the fifth channel.** A switch you pressed and cannot see
+speaks at every level, including "none", for the same reason an answer does:
+"none" means stop narrating, not stop answering. Ducking, the microphone, the
+stream, the recorder, global hotkeys, source mute and solo and the three faders
+are on it. Windows classes these as `announce`, which is right there because
+NVDA is not the app; here the app IS the only thing that says so.
+
+## Escape, and who owns a key while a dialog is up
+
+`AppDelegate.installKeyMonitor` runs before AppKit dispatches anything, so
+whatever it claims, nothing else can have. It was claiming Escape unconditionally
+and handing it to the stop counter, which meant **no dialog in the app could be
+closed with Escape**, Preferences included. It now claims Escape only when there
+is no modal session and the key window is the main window.
+
+`ModalKeys` is the other half. A panel that drives itself from the keyboard used
+to install a second local monitor and hope it was asked first; AppKit promises no
+order between monitors, and the source control panel's digits, which are the
+whole point of it mid link, were sometimes losing to the digit map and firing
+pads. A panel now sets `ModalKeys.current` for the length of its `runModal` and
+the window's monitor asks it first. `SourceControlPanel`, `HotkeyPanel` and
+`KeyboardCheckPanel` all use it.
+
+## Two commands on one key is not an error anything reports
+
+`.viewBoard` and `.sourceControl` were both on Option+Command+Shift+S. AppKit
+gives the key to whichever menu item it reaches first in the menu bar and says
+nothing at all, so Source control was unreachable from the keyboard from 3.2.2
+until 3.3.0. It is the same shape as the Windows bug where a frame accelerator
+took Ctrl+Shift+S off Save board as. `SelfTest.testKeyMap` now refuses a build
+with two commands on one key, comparing `KeyMap.identity` rather than
+`KeyMap.spell`: `spell` is written for a person and calls both the forward
+delete and Backspace "Delete".
+
+**Every binding after the first is an alias, and until 3.3.0 nothing dispatched
+one.** A menu item carries one key equivalent, so Command E, Command P, Option
+Return, Command Shift bracket and Backspace were declared in `KeyMap.bindings`
+and reached nowhere. `KeyMap.aliasCommand(for:)` resolves them and the monitor
+sends them to the same selector the menu item uses, through the `actions` table
+that `item(_:_:_:)` fills in as the menus are built, so the two cannot drift
+apart. An alias that is some other command's real menu key is never claimed.
+
 ## Formats
 
 The extension list is **asked of Core Audio at runtime** rather than typed out,
@@ -165,11 +220,26 @@ except **wma, webm, mka, ape and wv**, which are refused honestly. The demo
 pack is FLAC and Ogg Vorbis and plays untouched.
 
 **There is no MP3 encoder on macOS**, in AudioToolbox or anywhere else. It is
-decode only, measured three ways. So `C.recordFormatKeys` offers WAV, AAC,
-Opus and FLAC rather than the Windows WAV, MP3, AAC and Opus. When streaming
-lands, AAC in ADTS is the format that needs nothing vendored; MP3 would mean
-LAME and a licensing decision, and Ogg would mean writing the muxer, because
-Apple's own `afconvert` cannot produce an Ogg file either.
+decode only, measured three ways and again in 3.3.0: asked directly,
+`kAudioFormatProperty_Encoders` returns nothing for `.mp3` while returning
+`appl/aac`, `appl/opus`, `appl/flac` and `appl/alac`, and `AVAudioConverter` to
+MP3 is nil at every rate. `afconvert -hf` lists MP3 because it can READ it, which
+is the trap. MP3 out means vendoring LAME: a licensing decision and a third party
+binary inside a notarized bundle, and Tony's call rather than something to slip
+into a release.
+
+**The Ogg muxer is ours.** `OggStream` in `StreamOut.swift` writes the pages,
+because Apple encodes Opus perfectly well and then has nowhere to put it. Two
+things in it cannot be eyeballed and are checked by the self test instead: the
+CRC is the Ogg variant, polynomial 0x04c11db7 with no reflection and no final
+xor rather than the one in zlib, and the granule position is counted in 48 kHz
+samples whatever the card is doing. Opus does not run at 44.1 kHz at all, so the
+same `AVAudioConverter` resamples and encodes in one step. Verified with
+`ffprobe` against the bytes the self test writes to
+`$TMPDIR/dropdeck-selftest/stream-sample.opus`.
+
+So `C.streamFormatKeys` is AAC in ADTS, Opus in Ogg and WAV, and
+`C.recordFormatKeys` is still WAV, AAC and FLAC.
 
 ## The board file
 
@@ -191,7 +261,19 @@ them. Same for `mac_device_uid` and `mac_bank_scheme`.
 ```
 ./build.sh              build and install into /Applications
 ./build.sh --no-copy    build only
+
+DROPDECK_ADHOC_SIGN=1 ./build.sh --no-copy    seconds rather than minutes
 ```
+
+**Two things turn a one minute build into a ten minute one, and both look
+exactly like a hung compiler.** `--timestamp` is a round trip to
+timestamp.apple.com and blocks when that server is slow;
+`DROPDECK_NO_TIMESTAMP=1` drops it. Signing with Developer ID needs the private
+key out of the login keychain, and if macOS decides to ask permission the dialog
+sits on screen and `codesign` waits for it for ever, with nothing on stderr;
+`DROPDECK_ADHOC_SIGN=1` signs ad hoc and needs no key at all. `release_mac.py`
+sets neither and a release always has both. If a build seems stuck, look for a
+`codesign` process at nought per cent and a running `SecurityAgent`.
 
 `swiftc` straight to a bundle, no Xcode project, the same shape as Chat Grid.
 The build goes to `~/Library/Application Support/TG Studios Build/drop-deck-mac`
@@ -211,7 +293,7 @@ them.
 "/Applications/TG Drop Deck.app/Contents/MacOS/TGDropDeck" --selftest
 ```
 
-294 checks and they run against the **built app**, not the source, because the
+Over three hundred checks and they run against the **built app**, not the source, because the
 source passing tells you nothing about whether the shipped bundle can find its
 demo pack or open a sound card. The last section opens a real output device and
 renders a quarter second of silence through it, so a dead audio backend shows
@@ -230,6 +312,11 @@ Several of the checks are there because they have already caught a real fault:
   reads `paths`, so a board's idents vanished on a round trip through the Mac.
   The library test now asserts the Windows key, and the loader still reads the
   old one for the handful of boards this build wrote that way.
+- Two commands on one key, which nothing else reports. See above.
+- The stream encoders are driven for real: two seconds of a tone through each
+  of the three, then the bytes are read the way a server would read them, every
+  Ogg page's CRC checked, and each stream written out beside the other scratch
+  files so it can be opened in a player when something is argued about.
 - The canonical bytes test holds Python's own `json.dumps(sort_keys=True,
   separators=(",", ":"))` output for a string full of awkward characters. Get
   one escape wrong and every update manifest is "signed by the wrong key" for

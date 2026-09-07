@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.2.2"
+    static let appVersion = "3.3.0"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -272,23 +272,44 @@ enum C {
 
     /// What this build can send.
     ///
-    /// The Windows copy offers MP3 and Ogg Opus. macOS has no MP3 encoder at
-    /// any layer, measured three ways, and its Ogg muxer cannot write a file
-    /// even in Apple's own afconvert. AAC encodes natively and ADTS is self
-    /// framing, so it is the format that needs nothing vendored, and Icecast
-    /// serves it as audio/aacp.
-    /// AAC low complexity, in ADTS, which is self framing and streamable.
+    /// Everything macOS can really encode, rather than the one that was easiest
+    /// to write, because the format is the server's choice and not ours.
     ///
-    /// HE-AAC encodes here too, but its ADTS signalling carries the base rate
-    /// with SBR implied and getting that wrong ships a stream that plays at
-    /// half speed on some players and not at all on others. It is not in the
-    /// list until it has been tested against a real server rather than
-    /// reasoned about.
-    static let streamFormatKeys = ["aac"]
+    /// MP3 IS NOT IN THIS LIST AND CANNOT BE. macOS has no MP3 encoder at any
+    /// layer: kAudioFormatProperty_Encoders returns nothing at all for '.mp3'
+    /// while returning Apple's own for AAC, Opus, FLAC and ALAC, and
+    /// AVAudioConverter to MP3 is nil at every rate. afconvert lists MP3
+    /// because it can READ it. MP3 out would mean vendoring LAME, which is a
+    /// licensing decision and a third party binary inside a notarized bundle.
+    /// The Streaming tab says this in as many words rather than leaving
+    /// somebody to wonder.
+    ///
+    /// HE-AAC encodes here too and is deliberately not offered: its ADTS
+    /// signalling carries the base rate with SBR implied, and getting that
+    /// wrong ships a stream that plays at half speed on some players and not at
+    /// all on others. Not until it has been tested against a real server.
+    static let streamFormatAAC = "aac"
+    static let streamFormatOpus = "opus"
+    static let streamFormatWAV = "wav"
+    static let streamFormatKeys = [streamFormatAAC, streamFormatOpus, streamFormatWAV]
     static let streamFormatLabels: [String: String] = [
-        "aac": "AAC, which most players handle",
+        streamFormatAAC: "AAC in ADTS, which most players and mounts handle",
+        streamFormatOpus: "Opus in Ogg, the best sound for the bandwidth",
+        streamFormatWAV: "WAV, uncompressed, for a relay rather than an audience",
     ]
-    static let defaultStreamFormat = "aac"
+    static let defaultStreamFormat = streamFormatAAC
+
+    /// A format named on a board written somewhere else, moved to the nearest
+    /// thing this build can really send. An Ogg mount wants an Ogg stream, so
+    /// Vorbis becomes Opus rather than AAC.
+    static func streamFormatFor(_ saved: String) -> String {
+        if streamFormatKeys.contains(saved) { return saved }
+        switch saved.lowercased() {
+        case "ogg", "vorbis", "ogg_vorbis", "oggvorbis", "ogg_opus": return streamFormatOpus
+        case "pcm", "wave", "raw": return streamFormatWAV
+        default: return defaultStreamFormat
+        }
+    }
 
     static let streamServerIcecast = "icecast"
     static let streamServerShoutcast = "shoutcast"

@@ -65,8 +65,15 @@ printf 'APPL????' > "${CONTENTS}/PkgInfo"
 #
 # Developer ID is the one to use once it exists, because it is also what
 # notarisation needs. Apple Development is already an improvement on ad hoc.
+# DROPDECK_ADHOC_SIGN=1 skips the certificate entirely. A Developer ID signature
+# needs the private key out of the login keychain, and if macOS decides to ask
+# permission for that the dialog sits on screen and codesign waits for it for
+# ever, which looks exactly like a hung build. An ad hoc signature needs no key
+# and no prompt, so it is the one to use while iterating. release_mac.py never
+# sets it and refuses to ship a bundle signed this way.
 IDENTITY=""
 for WANTED in "Developer ID Application" "Apple Development"; do
+  if [ "${DROPDECK_ADHOC_SIGN:-}" = "1" ]; then break; fi
   # The "|| true" matters: pipefail plus set -e would end the script here on
   # the first identity that is simply not installed.
   FOUND=$(security find-identity -v -p codesigning 2>/dev/null \
@@ -74,11 +81,23 @@ for WANTED in "Developer ID Application" "Apple Development"; do
   if [ -n "${FOUND}" ]; then IDENTITY="${FOUND}"; break; fi
 done
 
+# The secure timestamp is a round trip to timestamp.apple.com and notarization
+# will not accept a signature without one, so a release always has it. It is
+# also the slowest part of a build by a wide margin and it hangs outright when
+# that server is having a bad day, which turns a one minute rebuild into ten.
+# DROPDECK_NO_TIMESTAMP=1 leaves it out for a build nobody is going to ship;
+# release_mac.py never sets it.
+TIMESTAMP_FLAG="--timestamp"
+if [ "${DROPDECK_NO_TIMESTAMP:-}" = "1" ]; then
+  TIMESTAMP_FLAG="--timestamp=none"
+  echo "Signing WITHOUT a secure timestamp; this build cannot be notarized."
+fi
+
 if [ -n "${IDENTITY}" ]; then
   echo "Signing as ${IDENTITY}..."
   codesign --force --sign "${IDENTITY}" \
     --options runtime \
-    --timestamp \
+    ${TIMESTAMP_FLAG} \
     --entitlements Resources/DropDeck.entitlements \
     "${BUNDLE}"
 else

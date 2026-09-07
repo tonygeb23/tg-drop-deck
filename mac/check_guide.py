@@ -46,6 +46,8 @@ EXPLAINED = {
     "6": "an example slot number in prose",
     "Command+Space": "Spotlight, named to explain why the stop key moved to Option+Space",
     "Control+Space": "the input source switcher, named for the same reason",
+    "Tab": "AppKit's own key for moving between controls, named in prose",
+    "Option+Control+Shift+S": "the literal Windows Source control key, kept as an alias",
 }
 
 MODIFIER_ORDER = ["Control", "Option", "Shift", "Command"]
@@ -155,7 +157,15 @@ def main():
 
     print()
     print("Things the guide states as fact")
-    check("the guide names the AAC only format", "AAC" in text)
+    check("the guide names every format the app can send",
+          all(w in text for w in ("AAC", "Opus", "WAV")))
+    check("the guide says why there is no MP3",
+          "no MP3" in text and "MP3 encoder" in text)
+    check("the guide says the microphone can be kept in stereo",
+          "keep it in stereo" in text.lower())
+    check("the guide names the three source keys",
+          all(k in text for k in ("Option+Command+C", "Option+Command+M",
+                                  "Option+Command+S")))
     check("the guide says which macOS the taps need", "14.2" in text)
     check("the guide does not use an em dash or an en dash",
           "—" not in text and "–" not in text)

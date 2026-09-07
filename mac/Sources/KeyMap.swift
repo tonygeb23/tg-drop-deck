@@ -32,6 +32,28 @@
 
 import AppKit
 
+/// The one place a modal panel says "these keys are mine".
+///
+/// The window's key monitor consults this before it does anything else, so a
+/// panel that drives itself with bare digits and arrow keys does not have to
+/// install a second monitor and hope it is asked first. AppKit does not promise
+/// an order between local monitors, and the source control panel's digits, the
+/// ones that jump straight to a source mid link, were losing that race to the
+/// digit map and firing pads instead.
+enum ModalKeys {
+    /// Returns true when the panel has dealt with the key. Set on the way in,
+    /// cleared on the way out, and never left set.
+    static var current: ((NSEvent) -> Bool)?
+
+    /// Claim the keyboard for the length of one modal panel.
+    static func claim(_ handler: @escaping (NSEvent) -> Bool, during body: () -> Void) {
+        let previous = current
+        current = handler
+        body()
+        current = previous
+    }
+}
+
 enum BankScheme: String {
     /// Command, the Mac translation of the Windows Ctrl. The default.
     case command
@@ -58,7 +80,7 @@ enum Command: String, CaseIterable {
     case playlistStop, playlistCrossfade, playlistSave, playlistOpen, playlistClear
     case micToggle, micSettings
     case streamToggle, streamStatus, streamStats, streamSetup
-    case record, recordFolder, sources, sourceControl
+    case record, recordFolder, sources, sourceControl, muteSources, soloMic
     case shortcuts, userGuide, checkUpdates, feedback, donate, about
     case keyboardCheck, globalHotkeysToggle
 }
@@ -262,8 +284,24 @@ enum KeyMap {
         .streamStatus:  [Binding("b", [.command, .shift])],
         .streamStats:   [Binding("a", [.command, .shift])],
         .record:        [Binding("r", [.command])],
+        // The three source keys are one family: Option Command and then C, M or
+        // S for control, mute and solo.
+        //
+        // Source control used to be Option Command Shift S, the literal Windows
+        // key, and that is also what "Go to the soundboard" had to become when
+        // Command Shift S went to Save board as. Two menu items with one key is
+        // not a clash AppKit reports: the first one in the menu bar simply wins
+        // and the other is unreachable for ever. The Playlist menu comes first,
+        // so from 3.2.2 until now that key went to the soundboard and source
+        // control could only be opened with the mouse. The soundboard keeps the
+        // key it has been answering to; source control gets one of its own, and
+        // the Windows combination stays on as an alias where the system leaves
+        // it free. `SelfTest` now refuses a build with two commands on one key.
         .sources:       [Binding("s", [.option, .shift])],
-        .sourceControl: [Binding("s", [.option, .command, .shift])],
+        .sourceControl: [Binding("c", [.option, .command]),
+                         Binding("s", [.option, .control, .shift], primary: false)],
+        .muteSources:   [Binding("m", [.option, .command])],
+        .soloMic:       [Binding("s", [.option, .command])],
         // Command G arms and disarms the global hotkeys. A new key on Windows
         // too, taken off nothing.
         .globalHotkeysToggle: [Binding("g", [.command])],
@@ -283,6 +321,73 @@ enum KeyMap {
         "f": .search, "e": .search, "l": .whatsPlaying, "d": .ducking,
         "b": .streamToggle, "r": .record, "g": .globalHotkeysToggle, "m": .micToggle,
     ]
+
+    /// The characters a binding is written with, for one real event.
+    ///
+    /// Not just `charactersIgnoringModifiers`: a Mac's Delete key does not
+    /// produce `NSDeleteFunctionKey`, and Shift IS applied to that property, so
+    /// Command Shift `]` arrives as `}`. Those keys are taken off the key code
+    /// for the same reason `digitFor` does it, and with the same caveat: the
+    /// number row and these few punctuation keys are stable across the layouts
+    /// this app has been asked about.
+    static func eventKey(_ event: NSEvent) -> String? {
+        let byCode: [UInt16: String] = [
+            51: "\u{8}",                                          // Delete
+            117: String(UnicodeScalar(NSDeleteFunctionKey)!),     // forward Delete
+            36: "\r", 76: "\r", 48: "\t", 49: " ",
+            33: "[", 30: "]", 43: ",",
+        ]
+        if let named = byCode[event.keyCode] { return named }
+        if let digit = digitFor(event: event) { return digit }
+        guard let chars = event.charactersIgnoringModifiers?.lowercased(),
+              !chars.isEmpty else { return nil }
+        return chars
+    }
+
+    /// One key and its modifiers, as a string nothing else can collide with.
+    ///
+    /// NOT `spell`, which is written for a person and calls both the forward
+    /// delete and the Backspace a Mac keyboard's Delete key sends "Delete".
+    /// Those are two different keys and a check that cannot tell them apart
+    /// would report a clash that is not there and miss one that is.
+    static func identity(key: String, mods: NSEvent.ModifierFlags) -> String {
+        let scalars = key.lowercased().unicodeScalars.map { String($0.value) }.joined(separator: ".")
+        return "\(mods.rawValue & 0x00FF_0000):\(scalars)"
+    }
+
+    /// Every key a menu item really carries. Anything in here belongs to AppKit
+    /// and must never be claimed by the alias dispatcher below.
+    static let primaryKeys: Set<String> = {
+        var out = Set<String>()
+        for (_, list) in bindings {
+            for b in list where b.primary { out.insert(identity(key: b.key, mods: b.mods)) }
+        }
+        return out
+    }()
+
+    /// The command an ALIAS binding names, for a key the menus do not carry.
+    ///
+    /// Every binding after the first is an alias: the Windows key kept alive,
+    /// or the second Mac idiom for the same thing. A menu item can only show
+    /// one key equivalent, so until 3.3.0 every one of those aliases was
+    /// declared here and dispatched nowhere. Command E did not search, Option
+    /// Return did not open properties, Command P did not open Preferences, and
+    /// Delete on a laptop keyboard, which sends Backspace and not the forward
+    /// delete the menu carries, did not clear a slot.
+    ///
+    /// A key that is some other command's real menu key is never claimed here,
+    /// so an alias can never shadow the map.
+    static func aliasCommand(for event: NSEvent) -> Command? {
+        guard let key = eventKey(event) else { return nil }
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard !primaryKeys.contains(identity(key: key, mods: mods)) else { return nil }
+        for (command, list) in bindings {
+            for b in list where !b.primary && b.mods == mods && b.key.lowercased() == key {
+                return command
+            }
+        }
+        return nil
+    }
 
     /// Does this event match any binding for the command?
     static func matches(_ event: NSEvent, _ command: Command) -> Bool {

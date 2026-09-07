@@ -23,8 +23,7 @@ extension MainWindow {
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
 
-        let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 620, height: 400))
-        tabs.setAccessibilityLabel("Settings")
+        let tabs = SettingsCategories()
 
         let outputs = AudioDevices.outputs()
         let inputs = AudioDevices.inputs()
@@ -185,15 +184,31 @@ extension MainWindow {
         passwordField.setAccessibilityLabel("Password")
         streamBox.addArrangedSubview(field("Password", passwordField))
 
+        let streamFormatPopup = NSPopUpButton()
+        streamFormatPopup.setAccessibilityLabel("Send as")
+        for key in C.streamFormatKeys {
+            streamFormatPopup.addItem(withTitle: C.streamFormatLabels[key] ?? key)
+        }
+        streamFormatPopup.selectItem(
+            at: C.streamFormatKeys.firstIndex(of: board.stream.format) ?? 0)
+        streamBox.addArrangedSubview(field("Send as", streamFormatPopup))
+
         let bitratePopup = NSPopUpButton()
         bitratePopup.setAccessibilityLabel("Bit rate")
         for b in C.streamBitrates { bitratePopup.addItem(withTitle: "\(b) kbps") }
         bitratePopup.selectItem(at: C.streamBitrates.firstIndex(of: board.stream.bitrate) ?? 2)
         streamBox.addArrangedSubview(field("Bit rate", bitratePopup))
         streamBox.addArrangedSubview(note(
-            "This build sends AAC. macOS has no MP3 encoder at any layer and cannot write an "
-            + "Ogg container, so those two are not offered rather than offered and then "
-            + "failing when you press Command B."))
+            "AAC is what most Icecast and SHOUTcast mounts take. Opus in Ogg sounds better at "
+            + "half the bitrate and is what Icecast recommends now; an Ogg mount wants it. WAV "
+            + "is uncompressed and has no bit rate: it is for a relay or for feeding another "
+            + "encoder, not for an audience, because anyone who joins part way through a WAV "
+            + "stream misses the header and hears nothing.\n\n"
+            + "MP3 is not offered, and that is not an oversight. macOS has no MP3 encoder at "
+            + "any layer: it decodes MP3 and cannot write it. Sending MP3 from a Mac needs a "
+            + "third party encoder inside the app, which is a licensing decision rather than "
+            + "a missing feature. A station saved on Windows that names MP3 comes in here as "
+            + "AAC so it can still go on air."))
 
         let nameField = text(board.stream.name, "Station name")
         streamBox.addArrangedSubview(field("Station name", nameField))
@@ -239,6 +254,8 @@ extension MainWindow {
             mountField.stringValue = board.stream.mount
             userField.stringValue = board.stream.user
             passwordField.stringValue = board.stream.password
+            streamFormatPopup.selectItem(
+                at: C.streamFormatKeys.firstIndex(of: board.stream.format) ?? 0)
             bitratePopup.selectItem(at: C.streamBitrates.firstIndex(of: board.stream.bitrate) ?? 2)
             nameField.stringValue = board.stream.name
             genreField.stringValue = board.stream.genre
@@ -262,6 +279,9 @@ extension MainWindow {
             board.stream.mount = mountField.stringValue.trimmingCharacters(in: .whitespaces)
             board.stream.user = userField.stringValue.trimmingCharacters(in: .whitespaces)
             board.stream.password = passwordField.stringValue
+            board.stream.format = C.streamFormatKeys[
+                max(0, min(C.streamFormatKeys.count - 1,
+                           streamFormatPopup.indexOfSelectedItem))]
             board.stream.bitrate = C.streamBitrates[max(0, bitratePopup.indexOfSelectedItem)]
             board.stream.name = name
             board.stream.genre = genreField.stringValue
@@ -389,10 +409,9 @@ extension MainWindow {
             + "this app has to say is ever only spoken."))
         add(tabs, "Speech", speechBox)
 
-        if let wanted, let index = tabs.tabViewItems.firstIndex(where: { $0.label == wanted }) {
-            tabs.selectTabViewItem(at: index)
-        }
-        alert.accessoryView = tabs
+        tabs.select(wanted ?? "Output")
+        alert.accessoryView = tabs.view
+        alert.window.initialFirstResponder = tabs.list
 
         // The Voice tab changes the live chain as you move, so Cancel has to
         // put it back.
@@ -476,6 +495,8 @@ extension MainWindow {
         mic.onAir = board.stream.sendMic
 
         board.recordFormat = C.recordFormatKeys[max(0, formatPopup.indexOfSelectedItem)]
+        board.stream.format = C.streamFormatKeys[
+            max(0, min(C.streamFormatKeys.count - 1, streamFormatPopup.indexOfSelectedItem))]
         board.recordBitrate = C.streamBitrates[max(0, recordBitrate.indexOfSelectedItem)]
         let folder = folderField.stringValue.trimmingCharacters(in: .whitespaces)
         board.recordFolder = folder.isEmpty ? nil : folder
@@ -536,11 +557,8 @@ extension MainWindow {
 
     // ------------------------------------------------------------- helpers ---
 
-    private func add(_ tabs: NSTabView, _ label: String, _ box: NSStackView) {
-        let item = NSTabViewItem(identifier: label)
-        item.label = label
-        item.view = wrap(box)
-        tabs.addTabViewItem(item)
+    private func add(_ tabs: SettingsCategories, _ label: String, _ box: NSStackView) {
+        tabs.add(label, wrap(box))
     }
 
     private func stack() -> NSStackView {
@@ -721,5 +739,101 @@ final class VoiceParameterList: NSObject, NSTableViewDataSource, NSTableViewDele
         field.setAccessibilityLabel(tableColumn.identifier.rawValue == "value"
                                     ? parameter.spoken(value) : text)
         return field
+    }
+}
+
+// ------------------------------------------------------ the settings layout ---
+
+/// Categories down the left, the chosen category's settings beside them.
+///
+/// The same shape as VoiceOver Utility, and chosen for the same reason it is
+/// the shape VoiceOver Utility uses: a list is one object with rows you arrow
+/// through, and a tab view is a control you have to interact with before its
+/// tabs exist at all. Eight tabs meant eight VO interactions to find out what
+/// was in them. A list says where you are the moment you arrow onto it, and the
+/// settings for that category are the very next thing in the Tab order.
+///
+/// Nothing here is a new preference. The tabs, their contents and the OK and
+/// Cancel behaviour are exactly what they were; only the way you move between
+/// them has changed.
+final class SettingsCategories: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+
+    private(set) var labels: [String] = []
+    private var panes: [NSView] = []
+
+    let list = NSTableView()
+    private let detail = NSView(frame: NSRect(x: 216, y: 0, width: 464, height: 420))
+    private let box = NSView(frame: NSRect(x: 0, y: 0, width: 680, height: 420))
+    private let heading = NSTextField(labelWithString: "")
+
+    var view: NSView { box }
+
+    override init() {
+        super.init()
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("category"))
+        column.title = "Category"
+        column.width = 190
+        list.addTableColumn(column)
+        list.headerView = nil
+        list.rowHeight = 22
+        list.dataSource = self
+        list.delegate = self
+        list.setAccessibilityLabel("Settings categories")
+        list.allowsEmptySelection = false
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 206, height: 420))
+        scroll.documentView = list
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        box.addSubview(scroll)
+
+        // The heading is what a sighted user reads to know which pane this is,
+        // and what VoiceOver reads when it enters the pane, because the group
+        // itself carries the same name.
+        heading.frame = NSRect(x: 216, y: 396, width: 464, height: 20)
+        heading.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        box.addSubview(heading)
+
+        detail.frame = NSRect(x: 216, y: 0, width: 464, height: 392)
+        box.addSubview(detail)
+    }
+
+    func add(_ label: String, _ pane: NSView) {
+        labels.append(label)
+        pane.frame = detail.bounds
+        pane.autoresizingMask = [.width, .height]
+        pane.setAccessibilityLabel("\(label) settings")
+        panes.append(pane)
+        list.reloadData()
+    }
+
+    func select(_ label: String) {
+        let index = labels.firstIndex(of: label) ?? 0
+        guard index < panes.count else { return }
+        list.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        show(index)
+    }
+
+    private func show(_ index: Int) {
+        guard index >= 0, index < panes.count else { return }
+        detail.subviews.forEach { $0.removeFromSuperview() }
+        detail.addSubview(panes[index])
+        heading.stringValue = labels[index]
+        detail.setAccessibilityLabel("\(labels[index]) settings")
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { labels.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
+                   row: Int) -> NSView? {
+        guard row < labels.count else { return nil }
+        let field = NSTextField(labelWithString: labels[row])
+        field.setAccessibilityLabel(labels[row])
+        return field
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        show(list.selectedRow)
     }
 }

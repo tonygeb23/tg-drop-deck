@@ -59,6 +59,8 @@ final class SelfTest {
         testDecoding()
         testHandover()
         testCueTone()
+        testSettingsLayout()
+        testStreamEncoders()
         runMoreChecks()
         runAirChecks()
         testRealDevice()
@@ -198,6 +200,54 @@ final class SelfTest {
         KeyMap.scheme = .command
         check("the command scheme labels drops with Cmd",
               KeyMap.hotkeyLabel(bank: C.bankDrops, positionInBank: 0) == "Cmd+1")
+
+        // TWO COMMANDS ON ONE KEY IS NOT A CLASH ANYTHING REPORTS. AppKit gives
+        // the key to whichever menu item it reaches first in the menu bar and
+        // the other one is simply unreachable for ever, with nothing anywhere
+        // saying why. That is how "Go to the soundboard" quietly took Option
+        // Command Shift S off Source control between 3.2.2 and 3.3.0, and it is
+        // the same shape as the Windows bug where a frame accelerator took
+        // Ctrl+Shift+S off Save board as. Nothing but a check catches it.
+        var claimed: [String: String] = [:]
+        var collisions: [String] = []
+        for command in Command.allCases {
+            for binding in KeyMap.bindings[command] ?? [] {
+                let key = KeyMap.identity(key: binding.key, mods: binding.mods)
+                if let already = claimed[key], already != command.rawValue {
+                    collisions.append("\(KeyMap.spell(key: binding.key, mods: binding.mods)): "
+                                      + "\(already) and \(command.rawValue)")
+                } else {
+                    claimed[key] = command.rawValue
+                }
+            }
+        }
+        check("no two commands are on the same key", collisions.isEmpty,
+              collisions.joined(separator: "; "))
+
+        // An alias is only reachable because the key monitor dispatches it, and
+        // it must never be some other command's real menu key.
+        var shadowed: [String] = []
+        var aliases = 0
+        for command in Command.allCases {
+            for binding in KeyMap.bindings[command] ?? [] where !binding.primary {
+                aliases += 1
+                if KeyMap.primaryKeys.contains(
+                    KeyMap.identity(key: binding.key, mods: binding.mods)) {
+                    shadowed.append("\(KeyMap.spell(key: binding.key, mods: binding.mods)) "
+                                    + "for \(command.rawValue)")
+                }
+            }
+        }
+        check("every alias key is free of the menus", shadowed.isEmpty,
+              shadowed.joined(separator: "; "))
+        check("the aliases are still there to dispatch", aliases >= 8, "\(aliases)")
+
+        // The three keys that answer for the sources, which have to exist and
+        // have to be distinct from each other and from everything else.
+        for command in [Command.sourceControl, .muteSources, .soloMic] {
+            check("\(command.rawValue) has a key",
+                  KeyMap.menuKey(command) != nil)
+        }
         out.append("")
     }
 
@@ -798,6 +848,160 @@ extension SelfTest {
     ///
     /// Nothing audible is played: it opens the device, renders silence, and
     /// closes it again.
+    /// The Preferences layout, built and driven with no window on screen.
+    ///
+    /// It replaced an NSTabView, and the failure it would have is quiet: a pane
+    /// that is never put in front of you, or one with no accessibility label,
+    /// looks like an empty Preferences window and says nothing about why.
+    fileprivate func testSettingsLayout() {
+        out.append("The Preferences layout")
+        let pane = SettingsCategories()
+        var made: [NSView] = []
+        for name in ["Output", "Sounds and beds", "Streaming"] {
+            let box = NSStackView()
+            box.setAccessibilityLabel(name)
+            made.append(box)
+            pane.add(name, box)
+        }
+        check("every category is in the list", pane.labels.count == 3)
+        check("the list has a row for each", pane.list.numberOfRows == 3,
+              "\(pane.list.numberOfRows)")
+
+        pane.select("Streaming")
+        check("choosing a category selects its row", pane.list.selectedRow == 2,
+              "\(pane.list.selectedRow)")
+        check("and puts that category's settings in front",
+              made[2].superview != nil && made[0].superview == nil)
+        check("and the settings say which category they are",
+              made[2].accessibilityLabel() == "Streaming settings",
+              made[2].accessibilityLabel() ?? "none")
+
+        pane.select("Output")
+        check("choosing another swaps them over",
+              made[0].superview != nil && made[2].superview == nil)
+        check("a category that is not there falls back to the first",
+              { pane.select("Nonsense"); return pane.list.selectedRow == 0 }())
+        check("the list itself is named for a screen reader",
+              pane.list.accessibilityLabel() == "Settings categories",
+              pane.list.accessibilityLabel() ?? "none")
+        out.append("")
+    }
+
+    /// The three things a stream can be encoded as, driven for real.
+    ///
+    /// Not "does the encoder exist": two seconds of a real tone through each
+    /// one, and then the bytes are read the way a server would. An Ogg page
+    /// with a wrong CRC is refused by every player with no useful message, and
+    /// the CRC here is the Ogg variant rather than the one in zlib, so it is
+    /// checked rather than trusted. Each stream is also written out beside the
+    /// other scratch files so it can be opened in a player when something is
+    /// argued about.
+    fileprivate func testStreamEncoders() {
+        out.append("The stream encoders")
+        let rate = 44100.0
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else {
+            check("a float format for the encoders", false)
+            return
+        }
+        let folder = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("dropdeck-selftest")
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+
+        for key in C.streamFormatKeys {
+            guard let encoder = makeStreamEncoder(format: key, rate: rate, bitrate: 128) else {
+                check("\(key): an encoder is made", false)
+                continue
+            }
+            check("\(key): an encoder is made and is usable", encoder.isUsable)
+            var body = Data()
+            if let preamble = encoder.preamble() { body.append(preamble) }
+            let preambleLength = body.count
+
+            var phase = 0.0
+            let chunk = encoder.frameSize
+            var fed = 0
+            while fed < Int(rate * 2) {
+                guard let pcm = AVAudioPCMBuffer(pcmFormat: format,
+                                                 frameCapacity: AVAudioFrameCount(chunk))
+                else { break }
+                pcm.frameLength = AVAudioFrameCount(chunk)
+                for i in 0..<chunk {
+                    let v = Float(sin(phase) * 0.3)
+                    phase += 2 * Double.pi * 440 / rate
+                    pcm.floatChannelData![0][i] = v
+                    pcm.floatChannelData![1][i] = v
+                }
+                fed += chunk
+                if let bytes = encoder.encode(pcm) { body.append(bytes) }
+            }
+            check("\(key): two seconds of tone produced bytes", body.count > preambleLength,
+                  "\(body.count) bytes")
+            check("\(key): no error was left behind", encoder.lastError == nil,
+                  encoder.lastError ?? "")
+
+            let bytes = [UInt8](body)
+            switch key {
+            case C.streamFormatAAC:
+                // Every ADTS frame begins with the twelve bit sync word.
+                check("aac: it starts with an ADTS sync word",
+                      bytes.count > 7 && bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0)
+                check("aac: the content type is the one a mount expects",
+                      encoder.mimeType == "audio/aac")
+            case C.streamFormatOpus:
+                check("opus: the first page is a beginning of stream page",
+                      bytes.count > 28 && Array(bytes[0..<4]) == Array("OggS".utf8)
+                      && bytes[5] == 0x02)
+                let head = String(decoding: bytes.prefix(64), as: UTF8.self)
+                check("opus: the first packet is an OpusHead", head.contains("OpusHead"))
+                check("opus: the second page is the OpusTags",
+                      String(decoding: bytes.prefix(160), as: UTF8.self).contains("OpusTags"))
+                check("opus: it is served as Ogg", encoder.mimeType == "audio/ogg")
+                // Walk every page and check its CRC, which is the one thing
+                // that cannot be eyeballed and the one thing that silently
+                // breaks every player at once.
+                var at = 0, pages = 0, bad = 0
+                while at + 27 <= bytes.count, Array(bytes[at..<(at + 4)]) == Array("OggS".utf8) {
+                    let segments = Int(bytes[at + 26])
+                    guard at + 27 + segments <= bytes.count else { break }
+                    var payload = 0
+                    for i in 0..<segments { payload += Int(bytes[at + 27 + i]) }
+                    let length = 27 + segments + payload
+                    guard at + length <= bytes.count else { break }
+                    var page = Array(bytes[at..<(at + length)])
+                    let stated = UInt32(page[22]) | UInt32(page[23]) << 8
+                                 | UInt32(page[24]) << 16 | UInt32(page[25]) << 24
+                    for i in 22...25 { page[i] = 0 }
+                    if OggStream.crc(page) != stated { bad += 1 }
+                    pages += 1
+                    at += length
+                }
+                check("opus: every Ogg page checksums", bad == 0, "\(bad) of \(pages) bad")
+                check("opus: the pages account for every byte", at == bytes.count,
+                      "stopped at \(at) of \(bytes.count)")
+                check("opus: two seconds is more than a hundred pages", pages > 100, "\(pages)")
+            default:
+                check("wav: it starts with a RIFF WAVE header",
+                      bytes.count > 44 && Array(bytes[0..<4]) == Array("RIFF".utf8)
+                      && Array(bytes[8..<12]) == Array("WAVE".utf8))
+                check("wav: the header is the usual 44 bytes", preambleLength == 44,
+                      "\(preambleLength)")
+                check("wav: the sample rate in the header is the card's",
+                      bytes.count > 28
+                      && (UInt32(bytes[24]) | UInt32(bytes[25]) << 8
+                          | UInt32(bytes[26]) << 16 | UInt32(bytes[27]) << 24) == UInt32(rate))
+                check("wav: sixteen bit stereo is four bytes a frame",
+                      (body.count - preambleLength) % 4 == 0)
+                check("wav: it is served as WAV", encoder.mimeType == "audio/wav")
+            }
+
+            let ext = key == C.streamFormatOpus ? "opus" : (key == C.streamFormatWAV ? "wav" : "aac")
+            let path = (folder as NSString).appendingPathComponent("stream-sample.\(ext)")
+            try? body.write(to: URL(fileURLWithPath: path))
+            out.append("  note  \(path)")
+        }
+        out.append("")
+    }
+
     fileprivate func testRealDevice() {
         out.append("The sound card, opened for real")
 

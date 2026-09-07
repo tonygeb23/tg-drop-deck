@@ -1,5 +1,67 @@
 # Changelog
 
+## 3.3.0 for Mac, 7 September 2026
+
+A Mac only release. Nothing on Windows changed.
+
+**VoiceOver can hear the app again.** Every spoken line was being posted to the
+window's content view, and an announcement request is only honoured on a window
+or on the application, so VoiceOver said nothing at all and the words landed
+only in the status bar. Command D changed the ducking in silence; Command Shift
+B answered into a box at the bottom of the screen. Announcements now go to
+whichever window is in front, which also puts them inside a dialog rather than
+behind it.
+
+**Switches say what they did, at every speech level.** Ducking, the microphone,
+going live, the recorder, global hotkeys and the three faders are on a channel
+of their own now. "None" means stop narrating, not stop answering: a switch you
+pressed that then says nothing is not quiet, it is a switch you have to go and
+look up.
+
+**Escape closes a dialog again.** The main window was claiming Escape for the
+stop counter before any dialog could see it, so Preferences, and every other
+window in the app, could only be left with the mouse or by finding Cancel.
+Escape now belongs to whatever is in front, and only the main window's own
+Escape stops the show. The keyboard check, which reports Escape rather than
+acting on it, says to press it twice to leave.
+
+**Preferences is laid out like VoiceOver Utility.** The eight tabs are a
+category list down the left with that category's settings beside them. A list
+says where you are the moment you arrow onto it, where a tab view has to be
+interacted with before its tabs exist at all.
+
+**Source control has a key of its own.** It was on Option Command Shift S, and
+so was Go to the soundboard; AppKit gives a shared key to whichever menu item it
+reaches first and says nothing, so Source control could only be opened with the
+mouse. It is Option Command C now. Option Command M mutes every source at once
+and Option Command S solos the microphone, both without opening anything, and
+the status line carries SOLO and SOURCES MUTED while they are on. The self test
+now refuses a build with two commands on one key.
+
+**Keys that were declared and went nowhere.** Every binding after a command's
+first one is an alias, and the menu can only carry one key each, so none of them
+were dispatched anywhere: Command E did not search, Command P did not open
+Preferences, Option Return did not open properties, Command Shift bracket did
+not change bank, and Delete on a laptop keyboard did not clear a slot, because
+the menu carries the forward delete and a Mac's Delete key sends Backspace. All
+of them work.
+
+**Streaming in Opus and WAV, beside AAC.** Opus in Ogg is what Icecast
+recommends now and it is what an Ogg mount expects; the Ogg pages are written by
+the app because macOS cannot write one. WAV is uncompressed PCM for a relay or
+for feeding another encoder, and Preferences says plainly that it is not for an
+audience. MP3 is still not offered: macOS has no MP3 encoder at any layer, and
+the Streaming tab now says so rather than leaving somebody to wonder.
+
+**A stereo microphone.** A microphone input is not always a microphone. Set to
+"Keep it in stereo" it no longer folds a loopback device, a desk feed or a
+mixer's main output down to mono.
+
+**Every running program is in Audio sources.** The list came from Core Audio,
+which only knows about programs that have already opened audio, so Spotify
+sitting paused was not in it. Everything that is running is listed now, marked
+as playing now, has played, or running.
+
 ## 3.2.2 for Mac, 6 September 2026
 
 **TG Drop Deck runs on a Mac.** The same soundboard, written natively for

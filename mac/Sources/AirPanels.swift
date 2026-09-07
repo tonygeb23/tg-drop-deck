@@ -28,7 +28,6 @@ final class HotkeyPanel {
     private var captured: HotkeyCombination?
     private var readout: NSTextField!
     private var warning: NSTextField!
-    private var monitor: Any?
 
     init(title: String, global: Bool, current: String?, speaker: Speaker) {
         self.title = title
@@ -72,14 +71,12 @@ final class HotkeyPanel {
 
         alert.accessoryView = box
 
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) {
-            [weak self] event in
-            guard let self else { return event }
-            return self.capture(event) ? nil : event
+        // Claimed rather than monitored, so the digit map cannot fire a pad
+        // while somebody is pressing the very combination they want to bind.
+        var response: NSApplication.ModalResponse = .cancel
+        ModalKeys.claim({ [weak self] event in self?.capture(event) ?? false }) {
+            response = alert.runModal()
         }
-        let response = alert.runModal()
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
 
         switch response {
         case .alertFirstButtonReturn:
@@ -177,7 +174,8 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             a hardware mixer, or one single program captured straight from it.
 
             Your screen reader is in the program list, so a demonstration goes out the \
-            way any other program does.
+            way any other program does. Every program that is running is listed, whether \
+            or not it is making a sound yet, and the ones playing right now come first.
             """
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
@@ -246,7 +244,12 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         label("Program", 90)
         programPopup = NSPopUpButton(frame: NSRect(x: 310, y: 64, width: 300, height: 26))
         for p in programs {
-            programPopup.addItem(withTitle: p.isPlaying ? "\(p.name)  (playing)" : p.name)
+            // Say which of the three a program is, because "not in the list"
+            // and "in the list but silent" are different problems and only one
+            // of them is yours to fix.
+            let suffix = p.isPlaying ? "  (playing now)"
+                       : p.isKnownToCoreAudio ? "  (has played)" : "  (running)"
+            programPopup.addItem(withTitle: p.name + suffix)
         }
         programPopup.setAccessibilityLabel("Program")
         programPopup.target = self
@@ -402,7 +405,6 @@ final class SourceControlPanel: NSObject {
     private let speaker: Speaker
     private var table: NSTableView!
     private var actionLabel: NSTextField!
-    private var monitor: Any?
     private var action = 0
     private static let actions = ["mute", "solo", "rename", "remove"]
 
@@ -460,14 +462,12 @@ final class SourceControlPanel: NSObject {
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         describe()
 
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) {
-            [weak self] event in
-            guard let self else { return event }
-            return self.handle(event) ? nil : event
+        // The keys are claimed rather than monitored. See ModalKeys: a second
+        // local monitor raced the window's own and the digits, which are the
+        // whole point of this panel mid link, sometimes fired pads instead.
+        ModalKeys.claim({ [weak self] event in self?.handle(event) ?? false }) {
+            alert.runModal()
         }
-        alert.runModal()
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
     }
 
     private func describe() {
