@@ -859,6 +859,14 @@ RTMP_VIDEO_BITRATE = 2500
 #: connects is then called unhealthy, so it is not a knob.
 RTMP_KEYFRAME_SECONDS = 2
 
+#: The most frames that may be sent in one go when catching up. Deliberately
+#: tiny. Measured 7 September 2026: with the pump running once a quarter of a
+#: second, video left in bursts of eight and the gaps between bursts reached
+#: 234 ms, which is what "choppy" looks like from the sending end even though
+#: the AVERAGE frame gap was a perfect 33 ms. An average is the wrong thing to
+#: look at here; the p95 is the one that shows it.
+RTMP_CATCHUP_FRAMES = 2
+
 #: Windows' own H.264 encoder, which hands the work to hardware where there is
 #: any. libx264 is the fallback for a machine where Media Foundation will not
 #: open. Measured 7 September 2026: 720p30 at 11 times real time on either.

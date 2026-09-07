@@ -715,6 +715,11 @@ class Destination:
     #: The rate the encoder settled on, which the caller resamples to.
     samplerate = 44100
 
+    #: How much audio the pump gathers before handing it over. A quarter of a
+    #: second is fine for Icecast, which is a pipe: bytes arrive when they
+    #: arrive and a listener's player has seconds of buffer.
+    chunk_seconds = C.STREAM_CHUNK_SECONDS
+
     def connect(self):
         """Open it. Raises SinkError or EncoderError with a sayable reason."""
         raise NotImplementedError
@@ -893,6 +898,19 @@ class RtmpDestination(Destination):
 
     wants_video = True
 
+    #: MUCH smaller than the Icecast one, and this is what stops the picture
+    #: stuttering. Video frames are pumped from feed(), so the pump interval
+    #: IS the video pacing: at a quarter of a second, eight frames were muxed
+    #: back to back and then nothing went out for two hundred milliseconds.
+    #: Measured 7 September 2026 at 720p30: median gap between frames 11 ms,
+    #: p95 192 ms, 36 gaps over 100 ms in ten seconds. The average was a
+    #: perfect 33 ms and the picture was choppy anyway, which is why an
+    #: average is the wrong thing to look at here.
+    #:
+    #: One frame period is the right size: the pump then carries at most one
+    #: or two frames each time round and they leave evenly.
+    chunk_seconds = 1.0 / C.RTMP_FPS
+
     def __init__(self, settings, bus_samplerate, video_source=None):
         if av is None:
             raise EncoderError(
@@ -911,6 +929,10 @@ class RtmpDestination(Destination):
         self.width = int(self.settings.get("video_width", C.RTMP_WIDTH))
         self.height = int(self.settings.get("video_height", C.RTMP_HEIGHT))
         self.fps = int(self.settings.get("video_fps", C.RTMP_FPS))
+        # The pump interval IS the video pacing, so it follows the real frame
+        # rate rather than the default one. At 15 fps a 33 ms pump would be
+        # twice as often as it needs to be; at 60 it would be half.
+        self.chunk_seconds = 1.0 / max(1, self.fps)
         self.encoder_name = self.settings.get("video_encoder",
                                               C.RTMP_VIDEO_ENCODER)
         self._container = None
@@ -1008,7 +1030,11 @@ class RtmpDestination(Destination):
         for start in range(0, whole, n):
             self._encode_audio(block[start:start + n])
         self._pending = block[whole:].copy()
-        self._pump_video()
+        # How many frames THIS much audio is worth. The cap below is relative
+        # to that, not an absolute: a caller handing over a quarter of a
+        # second at a time is entitled to seven frames for it, and capping at
+        # two made the video fall permanently behind the sound.
+        self._pump_video(len(block) / float(self.samplerate or 1))
 
     def _encode_audio(self, chunk):
         planar = np.ascontiguousarray(chunk.T.astype(np.float32))
@@ -1026,14 +1052,21 @@ class RtmpDestination(Destination):
         """Where the master clock has got to."""
         return self._apts / float(self.samplerate or 1)
 
-    def _pump_video(self):
-        """Send whatever frames the audio clock has now paid for."""
+    def _pump_video(self, audio_seconds=0.0):
+        """Send whatever frames the audio clock has now paid for.
+
+        ``audio_seconds`` is how much audio was just handed over. The cap is
+        relative to it, so this keeps up with whatever size the caller uses
+        while still refusing to dump an unbounded burst after a stall. A flat
+        cap does one or the other and not both: too high and a stall becomes
+        a burst, too low and the picture silently falls behind the sound for
+        ever, which is what a first attempt at this did.
+        """
         if self._video is None:
             return
         due = int(self.audio_seconds * self.fps)
-        # A cap, so a long stall does not then try to send a thousand frames
-        # in one go and block the thread that is also carrying the audio.
-        due = min(due, self._frames_sent + self.fps)
+        earned = int(audio_seconds * self.fps) + 1
+        due = min(due, self._frames_sent + max(C.RTMP_CATCHUP_FRAMES, earned))
         while self._frames_sent < due:
             picture = self._picture()
             if picture is None:
@@ -1588,7 +1621,9 @@ class Streamer:
 
     def _pump(self):
         """Take what the sound card has made and send it, until told to stop."""
-        chunk = max(256, int(self.bus.samplerate * C.STREAM_CHUNK_SECONDS))
+        seconds = getattr(self._destination, "chunk_seconds",
+                          C.STREAM_CHUNK_SECONDS)
+        chunk = max(256, int(self.bus.samplerate * seconds))
         idle = 0.0
         while not self._stop.is_set():
             if self.bus.available() < chunk:

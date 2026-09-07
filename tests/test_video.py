@@ -973,5 +973,83 @@ check("it builds an RTMP destination like the others",
 check("and whether it goes live is recorded as depending on the user",
       C.RTMP_GOES_LIVE_AT_ONCE["restream"] is None)
 
+
+# ---------------------------------------------------------------------------
+print("\nPacing, which is what made the picture choppy")
+# ---------------------------------------------------------------------------
+
+# The bug: video is pumped from feed(), so the pump interval IS the video
+# pacing. At a quarter of a second, eight frames were muxed back to back and
+# then nothing went out for over 200 ms. The AVERAGE gap was a perfect 33 ms
+# the whole time, which is why an average is the wrong thing to measure and
+# why this test looks at the p95 and the long gaps instead.
+
+check("an RTMP destination pumps once per frame period, not once a quarter "
+      "second",
+      abs(RtmpDestination({"server": "rtmp", "host": "rtmp://x",
+                           "password": "k", "video_fps": 30},
+                          RATE).chunk_seconds - 1 / 30.0) < 0.001)
+check("and it follows the frame rate actually chosen",
+      abs(RtmpDestination({"server": "rtmp", "host": "rtmp://x",
+                           "password": "k", "video_fps": 15},
+                          RATE).chunk_seconds - 1 / 15.0) < 0.001)
+check("while Icecast keeps the quarter second, being a pipe",
+      streamout.IcecastDestination({"server": "icecast"},
+                                   RATE).chunk_seconds
+      == C.STREAM_CHUNK_SECONDS)
+check("catching up is capped at a couple of frames, not a whole second of them",
+      C.RTMP_CATCHUP_FRAMES <= 4, C.RTMP_CATCHUP_FRAMES)
+
+_paced = []
+_orig_mux = RtmpDestination._mux
+
+
+def _timed_mux(self, packet):
+    _paced.append((time.perf_counter(), getattr(packet.stream, "type", "?")))
+    return _orig_mux(self, packet)
+
+
+RtmpDestination._mux = _timed_mux
+try:
+    with MockRTMP.spawn(seconds=40) as server:
+        host, key = server.url.rsplit("/", 1)
+        bus = AirBus(RATE)
+        paced = Streamer(bus, {"server": "rtmp", "host": host,
+                               "password": key, "bitrate": 128,
+                               "video_width": 640, "video_height": 360,
+                               "video_fps": 30, "video_bitrate": 1200},
+                         video_source=picture.CardSource(name="Pacing"))
+        paced.start()
+        # Fed at REAL TIME, the way a sound card does it. Feeding as fast as
+        # the loop will go hides the whole problem.
+        deadline = time.time() + 6
+        pushed = 0
+        block = 2048
+        nxt = time.perf_counter()
+        while time.time() < deadline:
+            bus.write("main", tone(block, start=pushed))
+            pushed += block
+            nxt += block / float(RATE)
+            wait = nxt - time.perf_counter()
+            if wait > 0:
+                time.sleep(wait)
+        paced.stop()
+finally:
+    RtmpDestination._mux = _orig_mux
+
+_video = [t for t, kind in _paced if kind == "video"]
+check("frames really went out", len(_video) > 100, len(_video))
+if len(_video) > 100:
+    gaps = np.diff(_video) * 1000.0
+    long_gaps = int((gaps > 100).sum())
+    check("no gap between frames over 100 ms", long_gaps == 0,
+          "%d of %d" % (long_gaps, len(gaps)))
+    check("the middle frame arrives about a frame period after the last",
+          20 < float(np.median(gaps)) < 50, "%.1f ms" % np.median(gaps))
+    # The measure that actually caught this: the average was always fine.
+    check("and the slow tail stays inside two frame periods",
+          float(np.percentile(gaps, 95)) < 90,
+          "p95 %.1f ms" % np.percentile(gaps, 95))
+
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)
