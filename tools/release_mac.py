@@ -6,6 +6,7 @@
     python tools/release_mac.py rehearse  # run the built app's own verifier on the staged manifest
     python tools/release_mac.py publish   # stage, rehearse, then upload the zip and the manifest
     python tools/release_mac.py verify    # behave like a Mac client against the live feed
+    python tools/release_mac.py feeds     # both platforms' live feeds: signature, version, downloads
 
 The same shape and the same update key as release_app.py, on purpose: one
 update mechanism across every TG Studios app. Only the feed differs,
@@ -55,7 +56,12 @@ APP_NAME = _constant(os.path.join(HERE, "dropdeck", "constants.py"), "APP_NAME")
 APP_VERSION = _constant(os.path.join(HERE, "dropdeck", "constants.py"), "APP_VERSION")
 PUBLIC_KEY_B64 = _constant(os.path.join(HERE, "dropdeck", "appupdate.py"), "PUBLIC_KEY_B64")
 
+#: The shared TG Studios update key, on the Windows machine, and the Mac's own,
+#: made on the Mac that cuts Mac releases. The Mac app trusts both, so either
+#: signs a Mac manifest; the Windows app trusts only the first.
 PRIVATE_KEY_PATH = os.path.join(os.path.expanduser("~"), ".tgstudios", "update-private-key.pem")
+MAC_PRIVATE_KEY_PATH = os.path.join(os.path.expanduser("~"), ".tgstudios", "update-private-key-mac.pem")
+WINDOWS_MANIFEST_URL = "https://tgstudios.app/updates/drop-deck-app.json"
 SERVER = os.environ.get("RELEASE_SERVER", "tony@server.tonygebhard.me")
 REMOTE_DOWNLOADS = "/home/tony/tgstudios/downloads"
 REMOTE_UPDATES = "/home/tony/tgstudios/updates"
@@ -69,27 +75,54 @@ def canonical(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def trusted_keys():
+    """The public keys baked into the Mac app, read out of its source, with the
+    one check that matters: the first must be the key the Windows app carries,
+    or the two copies have drifted."""
+    swift = open(os.path.join(HERE, "mac", "Sources", "AppUpdate.swift"), encoding="utf-8").read()
+    found = re.findall(r'static let (?:publicKeyB64|macPublicKeyB64) = "([^"]+)"', swift)
+    if len(found) != 2:
+        raise SystemExit("Could not read the two trusted keys from mac/Sources/AppUpdate.swift")
+    if found[0] != PUBLIC_KEY_B64:
+        raise SystemExit("The Mac app's first trusted key is not the Windows app's key. "
+                         "mac/Sources/AppUpdate.swift and dropdeck/appupdate.py have drifted.")
+    return found
+
+
+def signing_key_path():
+    for path in (MAC_PRIVATE_KEY_PATH, PRIVATE_KEY_PATH):
+        if os.path.exists(path):
+            return path
+    raise SystemExit("No update signing key. The Mac key belongs at %s and the shared "
+                     "Windows key at %s." % (MAC_PRIVATE_KEY_PATH, PRIVATE_KEY_PATH))
+
+
 def sign(payload):
     import base64
     from cryptography.hazmat.primitives import serialization
-    if not os.path.exists(PRIVATE_KEY_PATH):
-        raise SystemExit("No update signing key at %s. It lives on the Windows machine; "
-                         "copy it here or run stage there." % PRIVATE_KEY_PATH)
-    with open(PRIVATE_KEY_PATH, "rb") as fh:
+    path = signing_key_path()
+    with open(path, "rb") as fh:
         private = serialization.load_pem_private_key(fh.read(), password=None)
+    public = base64.b64encode(private.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode("ascii")
+    if public not in trusted_keys():
+        raise SystemExit("The key at %s is not one the Mac app trusts. A manifest signed with it "
+                         "would be rejected by every installed copy." % path)
     return base64.b64encode(private.sign(payload)).decode("ascii")
 
 
-def verify(payload, signature_b64):
+def verify(payload, signature_b64, keys=None):
     import base64
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    key = Ed25519PublicKey.from_public_bytes(base64.b64decode(PUBLIC_KEY_B64))
-    try:
-        key.verify(base64.b64decode(signature_b64), payload)
-        return True
-    except InvalidSignature:
-        return False
+    for key_b64 in (keys or trusted_keys()):
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(key_b64))
+        try:
+            key.verify(base64.b64decode(signature_b64), payload)
+            return True
+        except InvalidSignature:
+            continue
+    return False
 
 
 MAC_DIR = os.path.join(HERE, "mac")
@@ -243,9 +276,8 @@ def stage():
         json.dump(envelope, fh, indent=2)
 
     if not verify(payload, envelope["signature"]):
-        raise SystemExit("FAILED: the manifest does not verify against the public key the "
-                         "apps carry. The private key at %s is not the update key."
-                         % PRIVATE_KEY_PATH)
+        raise SystemExit("FAILED: the manifest does not verify against the keys the Mac app "
+                         "carries. Signed with %s." % signing_key_path())
     print("Staged %s" % out)
     print("  version : %s" % manifest["version"])
     print("  file    : %s (%.1f MB)" % (os.path.basename(portable), len(blob) / (1024.0 * 1024.0)))
@@ -258,7 +290,13 @@ def rehearse():
     own baked in key, and refuses a copy edited after signing."""
     portable, manifest = stage()
     if not os.path.exists(BINARY):
-        raise SystemExit("No built app at %s. Run: python tools/release_mac.py build" % BINARY)
+        # Signing on the Windows machine, where the built Mac app is not. The
+        # Python check above already proved the signature against the keys read
+        # out of the app's own source, which is the same fact by construction.
+        print("\nNo built Mac app on this machine, so the app's own verifier was not run. "
+              "The signature was checked against the keys in mac/Sources/AppUpdate.swift.")
+        print("Rehearsal passed, in Python only.")
+        return portable, manifest
     print()
     print("The built app, checking the staged manifest")
     result = subprocess.run([BINARY, "--verify-manifest", manifest], capture_output=True, text=True)
@@ -291,10 +329,70 @@ def publish():
     run(["ssh", server, "chmod 644 %s/%s %s/%s" % (downloads, os.path.basename(portable),
                                                     updates, MANIFEST_NAME)])
     print("\nPublished. Verifying live...")
-    verify()
+    verify_live()
 
 
-def verify():
+def feeds(download=False):
+    """Both platforms' feeds, checked the way the apps check them: the
+    signature against the key that platform's app carries, the version, and
+    that the download it names is really there at the size it says. With
+    --download the file is fetched and hashed as well."""
+    import urllib.request
+    problems = []
+    checks = [
+        ("Windows", WINDOWS_MANIFEST_URL, [PUBLIC_KEY_B64], ("url", "size", "sha256"), ("zip_url", "zip_size", "zip_sha256")),
+        ("Mac", MANIFEST_URL, trusted_keys(), ("url", "size", "sha256"), None),
+    ]
+    for platform, url, keys, main, extra in checks:
+        print("%s: %s" % (platform, url))
+        try:
+            raw = urllib.request.urlopen(url, timeout=30).read()
+            envelope = json.loads(raw.decode("utf-8"))
+            manifest = envelope["manifest"]
+        except Exception as exc:
+            problems.append("%s feed unreadable: %s" % (platform, exc))
+            print("  UNREADABLE: %s" % exc)
+            continue
+        ok = verify(canonical(manifest), envelope["signature"], keys)
+        print("  signature verifies with that app's key : %s" % ok)
+        if not ok:
+            problems.append("%s feed signature does not verify" % platform)
+        print("  version                                 : %s%s" % (
+            manifest.get("version"),
+            "" if manifest.get("version") == APP_VERSION else "  (constants.py says %s)" % APP_VERSION))
+        for fields in (main, extra):
+            if not fields or not manifest.get(fields[0]):
+                continue
+            link, size_key, hash_key = fields
+            target = manifest[link]
+            request = urllib.request.Request(target, method="HEAD")
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    length = int(response.headers.get("Content-Length") or 0)
+                status = "200, %.1f MB" % (length / (1024.0 * 1024.0))
+                if manifest.get(size_key) not in (None, length):
+                    status += "  SIZE MISMATCH, manifest says %s" % manifest.get(size_key)
+                    problems.append("%s: %s is not the size the manifest says" % (platform, target))
+            except Exception as exc:
+                status = "MISSING (%s)" % exc
+                problems.append("%s: %s is not there" % (platform, target))
+            print("  %-38s : %s" % (os.path.basename(target), status))
+            if download and "MISSING" not in status:
+                blob = urllib.request.urlopen(target, timeout=600).read()
+                digest = hashlib.sha256(blob).hexdigest()
+                matched = digest == manifest.get(hash_key)
+                print("  %-38s : sha256 %s" % ("", "matched" if matched else "DOES NOT MATCH"))
+                if not matched:
+                    problems.append("%s: %s does not match its signed hash" % (platform, target))
+    print()
+    if problems:
+        for p in problems:
+            print("FAILED: " + p)
+        raise SystemExit(1)
+    print("Both feeds are good. Every installed copy that checks will get a true answer.")
+
+
+def verify_live():
     """Behave exactly like an installed Mac would."""
     import urllib.request
     print("Fetching %s" % MANIFEST_URL)
@@ -325,6 +423,8 @@ if __name__ == "__main__":
     elif cmd == "publish":
         publish()
     elif cmd == "verify":
-        verify()
+        verify_live()
+    elif cmd == "feeds":
+        feeds(download="--download" in sys.argv)
     else:
         raise SystemExit(__doc__)

@@ -404,9 +404,13 @@ extension SelfTest {
             check("the canonical form parses as JSON", false)
         }
 
-        check("the baked in public key is a real ed25519 key",
-              Data(base64Encoded: AppUpdate.publicKeyB64).flatMap {
-                  try? Curve25519.Signing.PublicKey(rawRepresentation: $0) } != nil)
+        for (name, key) in [("Windows", AppUpdate.publicKeyB64), ("Mac", AppUpdate.macPublicKeyB64)] {
+            check("the baked in \(name) public key is a real ed25519 key",
+                  Data(base64Encoded: key).flatMap {
+                      try? Curve25519.Signing.PublicKey(rawRepresentation: $0) } != nil)
+        }
+        check("both keys are trusted and they are different",
+              AppUpdate.trustedKeysB64.count == 2 && AppUpdate.publicKeyB64 != AppUpdate.macPublicKeyB64)
 
         // Sign a manifest with a key made here and verify it with the client's
         // own code.
@@ -424,24 +428,24 @@ extension SelfTest {
             try! JSONSerialization.data(withJSONObject: ["manifest": m, "signature": sig])
         }
         let good = AppUpdate.evaluate(envelope(manifest, signature), currentVersion: "3.2.2",
-                                      publicKeyB64: publicB64)
+                                      trustedKeys: [publicB64])
         check("a signed manifest verifies", good.info != nil, good.message)
         check("and an old client is offered it", good.available && good.info?.version == "9.9.9")
         check("with its notes", good.info?.notes.hasPrefix("Everything is better") == true)
         let current = AppUpdate.evaluate(envelope(manifest, signature), currentVersion: "9.9.9",
-                                         publicKeyB64: publicB64)
+                                         trustedKeys: [publicB64])
         check("a client already on it is not", !current.available && current.message.contains("newest"))
 
         var tampered = manifest
         tampered["version"] = "99.0.0"
         let edited = AppUpdate.evaluate(envelope(tampered, signature), currentVersion: "3.2.2",
-                                        publicKeyB64: publicB64)
+                                        trustedKeys: [publicB64])
         check("a manifest edited after signing is rejected",
               edited.info == nil && edited.message.contains("wrong key"), edited.message)
         let wrongKey = AppUpdate.evaluate(envelope(manifest, signature), currentVersion: "3.2.2")
         check("a manifest signed by somebody else's key is rejected", wrongKey.info == nil)
         let unreadable = AppUpdate.evaluate(Data("not json".utf8), currentVersion: "3.2.2",
-                                            publicKeyB64: publicB64)
+                                            trustedKeys: [publicB64])
         check("nonsense from the server is said to be unreadable",
               unreadable.message.contains("unreadable"))
         var noURL = manifest
@@ -449,7 +453,7 @@ extension SelfTest {
         let noSig = (try? key.signature(for: AppUpdate.canonical(noURL)))?.base64EncodedString() ?? ""
         check("a manifest with no download in it is unreadable too",
               AppUpdate.evaluate(envelope(noURL, noSig), currentVersion: "0.0.0",
-                                 publicKeyB64: publicB64).info == nil)
+                                 trustedKeys: [publicB64]).info == nil)
 
         check("SHA-256 is the real thing",
               SHA256.hash(data: Data("abc".utf8)).map { String(format: "%02x", $0) }.joined()
@@ -463,6 +467,64 @@ extension SelfTest {
               AppUpdate.shouldCheck(scratch, now: Date().timeIntervalSince1970 + 25 * 3600))
         AppUpdate.stampCheck(scratch, when: Date().timeIntervalSince1970 + 7200)
         check("a clock that went backwards counts as due", AppUpdate.shouldCheck(scratch))
+        out.append("")
+
+        testUpdateInstall()
+    }
+
+    /// The swap itself, rehearsed on scratch bundles: a zip of this very app is
+    /// unpacked the way a download is, and put in place of a copy standing in
+    /// for the installed one. The arithmetic of an update is nothing; this is
+    /// the part that has to work on a Tuesday night.
+    private func testUpdateInstall() {
+        out.append("Replacing the app with a new copy, rehearsed on scratch bundles")
+        let fm = FileManager.default
+        let bundle = Bundle.main.bundlePath
+        guard bundle.hasSuffix(".app") else {
+            out.append("  note  not running from a bundle, so this was not checked")
+            out.append("")
+            return
+        }
+        let scratch = scratchFolder("install")
+        let zip = scratch + "/download.zip"
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", bundle, zip]
+        ditto.standardOutput = FileHandle.nullDevice
+        try? ditto.run()
+        ditto.waitUntilExit()
+        check("a zip of the app can be made the way the release script makes one",
+              ditto.terminationStatus == 0)
+
+        var unpacked: String?
+        do {
+            unpacked = try AppUpdate.unpack(zipPath: zip, version: "selftest")
+        } catch {
+            check("the download unpacks and passes its signature check", false,
+                  error.localizedDescription)
+        }
+        if let unpacked {
+            check("the download unpacks and passes its signature check",
+                  unpacked.hasSuffix(".app"), unpacked)
+            let apps = scratch + "/Applications"
+            try? fm.createDirectory(atPath: apps, withIntermediateDirectories: true)
+            let target = apps + "/TG Drop Deck.app"
+            try? fm.copyItem(atPath: bundle, toPath: target)
+            // Mark the new copy, so a swap can be told from nothing happening.
+            fm.createFile(atPath: unpacked + "/Contents/Resources/selftest-marker",
+                          contents: Data("new".utf8))
+            check("the folder the app lives in can be written to", AppUpdate.canReplace(target))
+            let (ok, message) = AppUpdate.replace(target: target, with: unpacked)
+            check("the new copy goes where the old one was", ok, message)
+            check("and it really is the new copy",
+                  fm.fileExists(atPath: target + "/Contents/Resources/selftest-marker"))
+            check("the old copy is set aside rather than deleted",
+                  fm.fileExists(atPath: target + ".replaced"))
+            check("and the staging copy has moved rather than been copied",
+                  !fm.fileExists(atPath: unpacked))
+        }
+        try? fm.removeItem(atPath: (AppUpdate.stagingRoot() as NSString).appendingPathComponent("selftest"))
+        try? fm.removeItem(atPath: scratch)
         out.append("")
     }
 }

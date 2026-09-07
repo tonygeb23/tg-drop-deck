@@ -20,6 +20,21 @@ if CommandLine.arguments.contains("--dump-keys") {
     exit(0)
 }
 
+// Ask the live server, the way the daily check does, and say what came back.
+// This is how a release is proved end to end: the installed app itself reads
+// the feed, verifies the signature and compares versions.
+if CommandLine.arguments.contains("--check-updates") {
+    let result = AppUpdate.check()
+    print("manifest  : \(AppUpdate.manifestURL)")
+    print("verified  : \(result.info != nil)")
+    print("available : \(result.available)")
+    print("message   : \(result.message)")
+    if let info = result.info {
+        print("feed says : \(info.version)  \(info.url)")
+    }
+    exit(result.info != nil ? 0 : 1)
+}
+
 // The release script's rehearsal: verify a staged manifest with the key baked
 // into THIS build, before anything is uploaded. Signing with a key the app does
 // not carry is the exact failure that produces a silent outage.

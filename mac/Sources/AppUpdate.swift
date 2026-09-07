@@ -43,8 +43,19 @@ import CryptoKit
 
 enum AppUpdate {
 
-    /// Public half of the TG Studios installer update key. Baked in.
+    /// Public halves of the TG Studios update keys. Baked in; neither may ever
+    /// change once shipped, or every installed copy silently stops seeing
+    /// updates.
+    ///
+    /// Two rather than one, deliberately. The first is the key every TG Studios
+    /// Windows app has always been signed for, and its private half lives on
+    /// the Windows machine. The second was made on the Mac that cuts the Mac
+    /// releases, so a Mac release never needs both machines in the room. A
+    /// manifest signed by either is trusted, so the feeds can be published from
+    /// whichever machine has a key, today and later.
     static let publicKeyB64 = "kJOlcZKYCyYBk/1JrmyfxFSX5Vf6JiM7oXf+0PEDZ04="
+    static let macPublicKeyB64 = "szxtt1SKXgqCu3rX9c4BGnbxoUvpvTbBloA6WgMODU0="
+    static let trustedKeysB64 = [publicKeyB64, macPublicKeyB64]
 
     static let manifestURL = URL(string: "https://tgstudios.app/updates/drop-deck-mac.json")!
     static let timeout: TimeInterval = 30
@@ -201,9 +212,15 @@ enum AppUpdate {
         return key.isValidSignature(signature, for: payload)
     }
 
+    /// A manifest signed by any of the trusted keys.
+    static func verifyTrusted(_ payload: Data, signatureB64: String,
+                              trustedKeys: [String] = trustedKeysB64) -> Bool {
+        trustedKeys.contains { verify(payload, signatureB64: signatureB64, publicKeyB64: $0) }
+    }
+
     /// Parse an envelope and check its signature. The message is what the user
     /// is told when it fails.
-    static func parseEnvelope(_ data: Data, publicKeyB64: String = publicKeyB64)
+    static func parseEnvelope(_ data: Data, trustedKeys: [String] = trustedKeysB64)
         -> (info: Info?, message: String?) {
         guard let raw = try? JSONSerialization.jsonObject(with: data),
               let envelope = raw as? [String: Any],
@@ -211,7 +228,7 @@ enum AppUpdate {
               let signature = envelope["signature"] as? String else {
             return (nil, "The update server sent something unreadable.")
         }
-        guard verify(canonical(manifest), signatureB64: signature, publicKeyB64: publicKeyB64) else {
+        guard verifyTrusted(canonical(manifest), signatureB64: signature, trustedKeys: trustedKeys) else {
             return (nil, "The update was signed by the wrong key and was rejected. Nothing was changed.")
         }
         guard let info = Info(manifest) else {
@@ -222,8 +239,8 @@ enum AppUpdate {
 
     /// Is there a newer build, given the envelope bytes?
     static func evaluate(_ data: Data, currentVersion: String,
-                         publicKeyB64: String = publicKeyB64) -> CheckResult {
-        let (info, problem) = parseEnvelope(data, publicKeyB64: publicKeyB64)
+                         trustedKeys: [String] = trustedKeysB64) -> CheckResult {
+        let (info, problem) = parseEnvelope(data, trustedKeys: trustedKeys)
         guard let info else { return CheckResult(available: false, info: nil, message: problem ?? "") }
         guard isNewer(info.version, than: currentVersion) else {
             return CheckResult(available: false, info: info, message: "You have the newest version.")

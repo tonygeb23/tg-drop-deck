@@ -281,8 +281,16 @@ to lose to a reflex.
 through the same on-disk queue (`feedback_queue.json` in the support folder),
 and never a name or a path. `AppUpdate.swift` reads
 `tgstudios.app/updates/drop-deck-mac.json`, a second manifest beside the
-Windows one, signed with the same ed25519 update key whose public half is
-baked in. Three things about it are not obvious:
+Windows one, ed25519 signed. Four things about it are not obvious:
+
+- **The app trusts two keys**, `publicKeyB64` and `macPublicKeyB64`, and a
+  manifest signed by either is accepted. The first is the shared TG Studios
+  update key every Windows app carries, whose private half lives on the
+  Windows machine. The second was made on this Mac on 6 September 2026
+  (`~/.tgstudios/update-private-key-mac.pem`) so a Mac release never needs
+  both machines. Neither key may change once shipped. **Back the Mac key up**:
+  lose it and Mac manifests can only be signed with the Windows key, which
+  still works because the app trusts both, but only from that machine.
 
 - **The signed bytes are rebuilt from the parsed manifest** exactly as Python
   serialises them: sorted keys, no spaces, and everything outside space to
@@ -302,6 +310,14 @@ baked in. Three things about it are not obvious:
 
 An update is never installed while the stream or the recorder is running, and
 the daily check stays silent unless there is something.
+
+**`TGDropDeck --check-updates` is how a release is proved.** The installed app
+itself fetches the live manifest, verifies the signature and compares
+versions, and prints what it concluded. Run it after every publish. The self
+test also rehearses the swap itself on scratch bundles: a zip of the running
+app is unpacked the way a download is and put in place of a copy standing in
+for the installed one, because the arithmetic of an update is nothing and the
+swap is the part that has to work on a Tuesday night.
 
 `NSAppTransportSecurity` allows arbitrary loads. Who is listening asks an
 Icecast server for `status-json.xsl`, and Icecast is almost always plain http
@@ -333,16 +349,25 @@ python3 tools/release_mac.py publish   # stage, rehearse, upload zip and manifes
 ```
 
 The zip is made with `ditto --keepParent`, which is what the app itself unpacks
-with. The manifest is signed by `tools/release_app.py`'s `sign`, so publishing
-needs the update key at `~/.tgstudios/update-private-key.pem`, which lives on
-the Windows machine and not on this Mac: `build` works here, `stage` and
-`publish` need the key. The rehearsal runs the built app's own verifier on the
-staged manifest and refuses to upload one it rejects.
+with. `release_mac.py` is standalone on purpose: it reads the version and the
+keys out of the source as text rather than importing `dropdeck/`, which needs
+numpy and wx that a Mac does not have. It signs with the Mac key when that is
+present and the shared Windows key otherwise, refuses a key the app does not
+trust, and the rehearsal runs the built app's own verifier on the staged
+manifest before anything is uploaded. `build` also notarizes and staples when
+the bundle is Developer ID signed and a `TGStudios` notarytool profile exists,
+and says plainly when it is skipping that.
 
-No Mac release has been published yet. The version stays in lockstep with the
-Windows copy, 3.2.2, and the first Mac release also needs a download button on
-`drop-deck.md` on the site, which `deploy.py` will then check exists on the
-server.
+`python3 tools/release_mac.py feeds` checks BOTH platforms' live feeds the way
+the apps do: signature against the key that app carries, version, and that
+every download named is really there at the size it says. `--download` hashes
+them too. The site's `deploy.py` runs the same check on every deploy and fails
+the deploy if either feed is broken, so a site deploy can never quietly leave
+an installed copy cut off from its next update.
+
+The first Mac release, 3.2.2, was published on 6 September 2026: zip, manifest
+and the download button on `drop-deck.md`, and the installed app confirmed the
+feed with `--check-updates`. Version numbers stay in lockstep with Windows.
 
 ## Signing
 
@@ -362,7 +387,10 @@ the app for the first time has to be told about.
 
 ## Still to do
 
-- **Notarisation**, above.
+- **Notarisation**, above. A Developer ID Application certificate was
+  requested on 6 September 2026 with the CSR in `~/.tgstudios/`; once it is
+  in the login keychain `build.sh` signs with it automatically, and the
+  notarytool profile is the one step left.
 - **Hosting Audio Units in the voice chain**, the Mac's answer to the Windows
   VST3 hosting. The entitlement for it is already in place
   (`disable-library-validation`), the parameter list the chain uses is the
@@ -371,4 +399,3 @@ the app for the first time has to be told about.
 - **An Intel build.** `build.sh` targets arm64 only. A universal binary is a
   second `-target` and a `lipo`, and nothing in the code is architecture
   specific, but it has not been built or tested.
-- **The first release**, which needs the signing key and the download button.
