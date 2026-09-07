@@ -162,6 +162,13 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.3.1": ("MP3. You can stream in MP3 and record in MP3, which every server "
+              "and every player takes and which a great many Icecast mounts and "
+              "every SHOUTcast v1 server want. macOS has no MP3 encoder of its "
+              "own, so this one is LAME, included with the app as a separate "
+              "library under its own licence; Help, About says where it comes "
+              "from. A station saved on Windows as MP3 now stays MP3 here "
+              "instead of being moved to AAC. Nothing else changed."),
     "3.3.0": ("VoiceOver now hears everything this app says. Announcements were "
               "being posted to a view instead of the window, so VoiceOver said "
               "nothing at all and every line landed only in the status bar: "

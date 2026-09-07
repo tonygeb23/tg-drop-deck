@@ -350,11 +350,18 @@ extension SelfTest {
     fileprivate func testRecorder() {
         out.append("Recording")
 
-        check("MP3 is not offered, because macOS cannot encode it",
-              !C.recordFormatKeys.contains("mp3"))
-        check("nor is Ogg Opus, because macOS cannot write the container",
+        // MP3 is offered from 3.3.1 and does not come from macOS, which still
+        // has no MP3 encoder anywhere. It comes from the LAME inside the
+        // bundle, so the check that matters is that the library is really
+        // there and really answers, not that the key is in a list.
+        check("MP3 is offered", C.recordFormatKeys.contains("mp3"))
+        check("and there is a working encoder behind it",
+              MP3Encoder(rate: 44100, bitrate: 128, forFile: true)?.isUsable == true)
+        check("Ogg Opus is not, because a recording has to be right at the end",
               !C.recordFormatKeys.contains("opus"))
-        check("WAV, AAC and FLAC are", C.recordFormatKeys == ["wav", "aac", "flac"])
+        check("WAV, MP3, AAC and FLAC are the four",
+              C.recordFormatKeys == ["wav", "mp3", "aac", "flac"])
+        check("an MP3 recording is named .mp3", Recorder.fileExtension(for: "mp3") == ".mp3")
 
         let scratch = NSTemporaryDirectory() + "dropdeck-selftest-rec"
         try? FileManager.default.removeItem(atPath: scratch)
@@ -378,37 +385,64 @@ extension SelfTest {
         check("AAC goes in an m4a", Recorder.fileExtension(for: "aac") == ".m4a")
 
         // A real recording, through the real bus, with no sound card.
-        let rate = 48000.0
-        let taps = Taps()
-        let recorder = Recorder()
+        //
+        // MP3 goes through this too, and it has to: it is the one format that
+        // does not use AVAudioFile at all. It is LAME, a file handle, a flush
+        // at the end and then the Info tag written back over the placeholder
+        // at offset zero, and getting that seek wrong makes a file whose first
+        // frame is rubbish.
         try? FileManager.default.removeItem(atPath: first)
-        guard let path = recorder.start(taps: taps, rate: rate, format: "wav",
-                                        bitrate: 192, folder: scratch) else {
-            check("a recording starts", false, recorder.lastError ?? "no reason given")
-            return
-        }
-        check("a recording starts", true)
-
-        let frames = 1024
-        let block = [Float](repeating: 0.3, count: frames * 2)
-        // Half a second of programme, written the way a mixer would write it.
-        block.withUnsafeBufferPointer { p in
-            for _ in 0..<24 {
-                taps.write(key: "main", samples: p.baseAddress!, frames: frames, rate: rate)
-                Thread.sleep(forTimeInterval: 0.01)
+        for format in ["wav", "mp3"] {
+            let rate = 48000.0
+            let taps = Taps()
+            let recorder = Recorder()
+            guard let path = recorder.start(taps: taps, rate: rate, format: format,
+                                            bitrate: 192, folder: scratch) else {
+                check("\(format): a recording starts", false,
+                      recorder.lastError ?? "no reason given")
+                continue
             }
-        }
-        Thread.sleep(forTimeInterval: 0.3)
-        let summary = recorder.stop(taps: taps)
-        check("and stops with something to say about it", summary != nil, summary ?? "nil")
+            check("\(format): a recording starts", true)
 
-        check("the file is really there", FileManager.default.fileExists(atPath: path))
-        if let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) {
+            let frames = 1024
+            let block = [Float](repeating: 0.3, count: frames * 2)
+            // Half a second of programme, written the way a mixer would write it.
+            block.withUnsafeBufferPointer { p in
+                for _ in 0..<24 {
+                    taps.write(key: "main", samples: p.baseAddress!, frames: frames, rate: rate)
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+            let summary = recorder.stop(taps: taps)
+            check("\(format): and stops with something to say about it",
+                  summary != nil, summary ?? "nil")
+            check("\(format): the file is really there",
+                  FileManager.default.fileExists(atPath: path))
+
+            guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else {
+                check("\(format): and opens as audio", false)
+                continue
+            }
             let seconds = Double(file.length) / file.fileFormat.sampleRate
-            check("and holds about the audio it was given",
-                  seconds > 0.3 && seconds < 0.8, String(format: "%.2f s", seconds))
-        } else {
-            check("and opens as audio", false)
+            // MP3 carries the encoder's own padding at each end, so it is
+            // allowed to be a little longer than the audio that went in.
+            check("\(format): and holds about the audio it was given",
+                  seconds > 0.3 && seconds < 1.0, String(format: "%.2f s", seconds))
+
+            // And it is really the audio, at the level it was given. This is
+            // the check that catches an encoder fed the wrong float scale.
+            var peak: Float = 0
+            if let heard = AVAudioFormat(standardFormatWithSampleRate:
+                                            file.processingFormat.sampleRate, channels: 2),
+               let buffer = AVAudioPCMBuffer(pcmFormat: heard, frameCapacity: 65536) {
+                file.framePosition = AVAudioFramePosition(file.processingFormat.sampleRate * 0.2)
+                if (try? file.read(into: buffer)) != nil, let channels = buffer.floatChannelData {
+                    for i in 0..<Int(buffer.frameLength) { peak = max(peak, abs(channels[0][i])) }
+                }
+            }
+            check("\(format): and it decodes back near the 0.3 it was given",
+                  peak > 0.15 && peak < 0.9, String(format: "peak %.3f", peak))
         }
         try? FileManager.default.removeItem(atPath: scratch)
         out.append("")
@@ -493,16 +527,23 @@ extension SelfTest {
               board.toDict()["mic_open"] == nil && board.toDict()["mic_on"] == nil)
 
         // A board written on Windows names a format this build cannot send.
-        // It is moved rather than refused, or the station could not go on air
-        // at all on a Mac.
+        // Since 3.3.1 an MP3 station from Windows is simply an MP3 station
+        // here. It used to be moved to something the Mac could send, and a
+        // board that came back the other way had quietly changed format.
         var windows = board.toDict()
         windows["stream_format"] = "mp3"
         windows["record_format"] = "mp3"
         let migrated = Board.from(dict: windows, relativeTo: nil)
-        check("a Windows MP3 stream setting is moved to one that works",
-              migrated.stream.format == C.defaultStreamFormat, migrated.stream.format)
-        check("and so is a Windows MP3 recording setting",
-              migrated.recordFormat == C.defaultRecordFormat, migrated.recordFormat)
+        check("a Windows MP3 station stays MP3 on the Mac",
+              migrated.stream.format == "mp3", migrated.stream.format)
+        check("and so does a Windows MP3 recording setting",
+              migrated.recordFormat == "mp3", migrated.recordFormat)
+        // Vorbis is the one that still has to move: macOS has no Vorbis
+        // encoder either, and Opus is the Ogg stream it can make.
+        windows["stream_format"] = "ogg"
+        let vorbis = Board.from(dict: windows, relativeTo: nil)
+        check("a Windows Ogg station becomes Ogg Opus",
+              vorbis.stream.format == C.streamFormatOpus, vorbis.stream.format)
         out.append("")
     }
 }

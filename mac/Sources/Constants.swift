@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.3.0"
+    static let appVersion = "3.3.1"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -275,29 +275,32 @@ enum C {
     /// Everything macOS can really encode, rather than the one that was easiest
     /// to write, because the format is the server's choice and not ours.
     ///
-    /// MP3 IS NOT IN THIS LIST AND CANNOT BE. macOS has no MP3 encoder at any
-    /// layer: kAudioFormatProperty_Encoders returns nothing at all for '.mp3'
-    /// while returning Apple's own for AAC, Opus, FLAC and ALAC, and
-    /// AVAudioConverter to MP3 is nil at every rate. afconvert lists MP3
-    /// because it can READ it. MP3 out would mean vendoring LAME, which is a
-    /// licensing decision and a third party binary inside a notarized bundle.
-    /// The Streaming tab says this in as many words rather than leaving
-    /// somebody to wonder.
+    /// MP3 IS HERE FROM 3.3.1, and it does not come from macOS, which has no
+    /// MP3 encoder at any layer: kAudioFormatProperty_Encoders returns nothing
+    /// at all for '.mp3' while returning Apple's own for AAC, Opus, FLAC and
+    /// ALAC, and AVAudioConverter to MP3 is nil at every rate. It comes from
+    /// LAME, dynamically linked and shipped as its own file in
+    /// Contents/Frameworks, which is what keeps its LGPL and this app's MIT
+    /// apart. mac/vendor/README.md is the whole reasoning. It is first in the
+    /// list because it is what most mounts want.
     ///
     /// HE-AAC encodes here too and is deliberately not offered: its ADTS
     /// signalling carries the base rate with SBR implied, and getting that
     /// wrong ships a stream that plays at half speed on some players and not at
     /// all on others. Not until it has been tested against a real server.
+    static let streamFormatMP3 = "mp3"
     static let streamFormatAAC = "aac"
     static let streamFormatOpus = "opus"
     static let streamFormatWAV = "wav"
-    static let streamFormatKeys = [streamFormatAAC, streamFormatOpus, streamFormatWAV]
+    static let streamFormatKeys = [streamFormatMP3, streamFormatAAC,
+                                   streamFormatOpus, streamFormatWAV]
     static let streamFormatLabels: [String: String] = [
-        streamFormatAAC: "AAC in ADTS, which most players and mounts handle",
+        streamFormatMP3: "MP3, which every server and every player takes",
+        streamFormatAAC: "AAC in ADTS, smaller than MP3 at the same quality",
         streamFormatOpus: "Opus in Ogg, the best sound for the bandwidth",
         streamFormatWAV: "WAV, uncompressed, for a relay rather than an audience",
     ]
-    static let defaultStreamFormat = streamFormatAAC
+    static let defaultStreamFormat = streamFormatMP3
 
     /// A format named on a board written somewhere else, moved to the nearest
     /// thing this build can really send. An Ogg mount wants an Ogg stream, so
@@ -307,6 +310,7 @@ enum C {
         switch saved.lowercased() {
         case "ogg", "vorbis", "ogg_vorbis", "oggvorbis", "ogg_opus": return streamFormatOpus
         case "pcm", "wave", "raw": return streamFormatWAV
+        case "mpeg", "mp3lame", "lame": return streamFormatMP3
         default: return defaultStreamFormat
         }
     }
@@ -337,20 +341,21 @@ enum C {
     // ----------------------------------------------------------- records ---
     /// What a recording can be written as.
     ///
-    /// The Windows list is wav, mp3, aac and opus. macOS has no MP3 ENCODER in
-    /// AudioToolbox, only a decoder, which was measured rather than assumed:
-    /// kAudioFormatProperty_EncodeFormatIDs offers aac, alac, flac, opus and
-    /// the linear formats and does not offer mp3. So this build writes AAC in
-    /// its place and says so, rather than offering a format that would fail at
-    /// the moment somebody pressed record.
-    /// Opus is not here either, and for a different reason from MP3: macOS
-    /// encodes Opus perfectly well but cannot write an Ogg container. Apple's
-    /// own afconvert produces a zero byte file, measured. Opus inside a CAF
-    /// does work and nothing outside macOS will open it, so it would be a
-    /// recording the user could not send anybody.
-    static let recordFormatKeys = ["wav", "aac", "flac"]
+    /// The Windows list is wav, mp3, aac and opus, and from 3.3.1 the first
+    /// three of those are here too. MP3 does not come from macOS, which has no
+    /// MP3 encoder in AudioToolbox at all, only a decoder: it comes from LAME,
+    /// shipped as its own dynamic library. See mac/vendor/README.md.
+    ///
+    /// Opus is still not here, and for a reason that has nothing to do with
+    /// MP3: macOS encodes Opus perfectly well but cannot write an Ogg
+    /// container, and while the streamer now writes Ogg pages itself, a
+    /// RECORDING is a file that has to be seekable and correct at the end,
+    /// which is a different job from a stream that only ever goes forwards.
+    /// FLAC covers the lossless case and Opus is offered on the stream.
+    static let recordFormatKeys = ["wav", "mp3", "aac", "flac"]
     static let recordFormatLabels: [String: String] = [
         "wav": "WAV, uncompressed",
+        "mp3": "MP3, which opens anywhere",
         "aac": "AAC, in an m4a file",
         "flac": "FLAC, lossless and about half the size of WAV",
     ]

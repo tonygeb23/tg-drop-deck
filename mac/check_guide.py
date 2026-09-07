@@ -159,8 +159,10 @@ def main():
     print("Things the guide states as fact")
     check("the guide names every format the app can send",
           all(w in text for w in ("AAC", "Opus", "WAV")))
-    check("the guide says why there is no MP3",
-          "no MP3" in text and "MP3 encoder" in text)
+    check("the guide credits LAME for MP3, which its licence asks for",
+          "LAME" in text and "lame.sourceforge.io" in text)
+    check("and says macOS has no MP3 encoder of its own",
+          "no MP3 encoder of its own" in text)
     check("the guide says the microphone can be kept in stereo",
           "keep it in stereo" in text.lower())
     check("the guide names the three source keys",

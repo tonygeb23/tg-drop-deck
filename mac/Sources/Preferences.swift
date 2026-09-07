@@ -199,16 +199,15 @@ extension MainWindow {
         bitratePopup.selectItem(at: C.streamBitrates.firstIndex(of: board.stream.bitrate) ?? 2)
         streamBox.addArrangedSubview(field("Bit rate", bitratePopup))
         streamBox.addArrangedSubview(note(
-            "AAC is what most Icecast and SHOUTcast mounts take. Opus in Ogg sounds better at "
-            + "half the bitrate and is what Icecast recommends now; an Ogg mount wants it. WAV "
-            + "is uncompressed and has no bit rate: it is for a relay or for feeding another "
-            + "encoder, not for an audience, because anyone who joins part way through a WAV "
-            + "stream misses the header and hears nothing.\n\n"
-            + "MP3 is not offered, and that is not an oversight. macOS has no MP3 encoder at "
-            + "any layer: it decodes MP3 and cannot write it. Sending MP3 from a Mac needs a "
-            + "third party encoder inside the app, which is a licensing decision rather than "
-            + "a missing feature. A station saved on Windows that names MP3 comes in here as "
-            + "AAC so it can still go on air."))
+            "MP3 is what every server and every player takes, and it is the safe answer if "
+            + "you are not sure what your mount wants. AAC is smaller at the same quality and "
+            + "most mounts take it. Opus in Ogg sounds better again at half the bit rate and "
+            + "is what Icecast recommends now; an Ogg mount wants it. WAV is uncompressed and "
+            + "has no bit rate: it is for a relay or for feeding another encoder, not for an "
+            + "audience, because anyone who joins part way through a WAV stream misses the "
+            + "header and hears nothing.\n\n"
+            + "macOS has no MP3 encoder of its own, so MP3 here is LAME, included with the "
+            + "app as a separate library. Help, About says where it comes from."))
 
         let nameField = text(board.stream.name, "Station name")
         streamBox.addArrangedSubview(field("Station name", nameField))

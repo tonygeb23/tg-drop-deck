@@ -21,8 +21,15 @@ rm -rf "${BUILD_ROOT}"
 mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 
 echo "Compiling..."
+# MP3 comes from LAME, dynamically linked, because macOS has no MP3 encoder at
+# any layer. Separate library, its own file in Contents/Frameworks, nothing of
+# it linked into our binary: see vendor/README.md for why that shape matters.
 swiftc -O \
   -target arm64-apple-macos14.0 \
+  -import-objc-header Sources/LAMEBridge.h \
+  -I vendor/include \
+  -L vendor -lmp3lame \
+  -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -framework AppKit \
   -framework AVFoundation \
   -framework AudioToolbox \
@@ -35,6 +42,14 @@ swiftc -O \
   Sources/*.swift
 
 cp Resources/Info.plist "${CONTENTS}/Info.plist"
+
+# LAME goes in beside the binary, with its licence where a person can find it.
+# It is signed separately below, because notarization refuses a bundle with
+# anything unsigned inside it.
+mkdir -p "${CONTENTS}/Frameworks"
+cp vendor/libmp3lame.dylib "${CONTENTS}/Frameworks/libmp3lame.dylib"
+chmod 755 "${CONTENTS}/Frameworks/libmp3lame.dylib"
+cp vendor/LAME-LICENSE.txt "${CONTENTS}/Resources/LAME-LICENSE.txt"
 
 # The icon is drawn, not stored: the same mark appicon.py draws for Windows.
 # Only redrawn when it is missing or the drawing has changed, because a Swift
@@ -93,8 +108,12 @@ if [ "${DROPDECK_NO_TIMESTAMP:-}" = "1" ]; then
   echo "Signing WITHOUT a secure timestamp; this build cannot be notarized."
 fi
 
+# Inside out: a nested library has to carry its own signature before the bundle
+# is sealed around it, or codesign seals a copy it will then call modified.
 if [ -n "${IDENTITY}" ]; then
   echo "Signing as ${IDENTITY}..."
+  codesign --force --sign "${IDENTITY}" --options runtime ${TIMESTAMP_FLAG} \
+    "${CONTENTS}/Frameworks/libmp3lame.dylib"
   codesign --force --sign "${IDENTITY}" \
     --options runtime \
     ${TIMESTAMP_FLAG} \
@@ -102,6 +121,8 @@ if [ -n "${IDENTITY}" ]; then
     "${BUNDLE}"
 else
   echo "Signing ad hoc, no certificate found..."
+  codesign --force --sign - --options runtime \
+    "${CONTENTS}/Frameworks/libmp3lame.dylib"
   codesign --force --sign - \
     --options runtime \
     --entitlements Resources/DropDeck.entitlements \

@@ -979,6 +979,15 @@ extension SelfTest {
                 check("opus: the pages account for every byte", at == bytes.count,
                       "stopped at \(at) of \(bytes.count)")
                 check("opus: two seconds is more than a hundred pages", pages > 100, "\(pages)")
+            case C.streamFormatMP3:
+                // Every MPEG audio frame starts with eleven set bits. Nothing
+                // wraps it, which is what makes it joinable part way through.
+                check("mp3: it starts with an MPEG frame sync",
+                      bytes.count > 4 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+                check("mp3: layer III, not I or II",
+                      bytes.count > 1 && ((bytes[1] >> 1) & 0x03) == 0x01)
+                check("mp3: nothing is sent before the audio", preambleLength == 0)
+                check("mp3: it is served as MPEG audio", encoder.mimeType == "audio/mpeg")
             default:
                 check("wav: it starts with a RIFF WAVE header",
                       bytes.count > 44 && Array(bytes[0..<4]) == Array("RIFF".utf8)
@@ -994,10 +1003,45 @@ extension SelfTest {
                 check("wav: it is served as WAV", encoder.mimeType == "audio/wav")
             }
 
-            let ext = key == C.streamFormatOpus ? "opus" : (key == C.streamFormatWAV ? "wav" : "aac")
+            let ext = ["opus": "opus", "wav": "wav", "mp3": "mp3"][key] ?? "aac"
             let path = (folder as NSString).appendingPathComponent("stream-sample.\(ext)")
             try? body.write(to: URL(fileURLWithPath: path))
             out.append("  note  \(path)")
+
+            // AND THEN LISTEN TO IT. Valid framing is not the same as correct
+            // audio: MP3's first version of this shipped a stream that was
+            // nothing but clipping, because LAME has two float entry points one
+            // letter apart, one wanting plus or minus 1 and the other plus or
+            // minus 32768. It framed perfectly and decoded as a perfectly good
+            // MP3. Only the level says which one you fed.
+            //
+            // macOS decodes all of these even where it cannot encode them, so
+            // the round trip costs nothing and is the only check here that
+            // could tell the difference.
+            if key != C.streamFormatWAV, let decoded = try? AVAudioFile(
+                forReading: URL(fileURLWithPath: path)) {
+                let heard = AVAudioFormat(standardFormatWithSampleRate:
+                                            decoded.processingFormat.sampleRate, channels: 2)
+                var peak: Float = 0
+                if let heard, let block = AVAudioPCMBuffer(pcmFormat: heard,
+                                                           frameCapacity: 65536) {
+                    // Past the first tenth of a second, so an encoder's own
+                    // start up padding is not what gets measured.
+                    decoded.framePosition = AVAudioFramePosition(
+                        decoded.processingFormat.sampleRate * 0.2)
+                    if (try? decoded.read(into: block)) != nil,
+                       let channels = block.floatChannelData {
+                        for i in 0..<Int(block.frameLength) {
+                            peak = max(peak, abs(channels[0][i]))
+                        }
+                    }
+                }
+                // The tone went in at 0.3. A lossy encoder overshoots a pure
+                // sine by a little; 32768 times too loud is the failure this
+                // is here for, and so is silence.
+                check("\(key): it decodes back at the level it went in at",
+                      peak > 0.15 && peak < 0.9, String(format: "peak %.3f", peak))
+            }
         }
         out.append("")
     }

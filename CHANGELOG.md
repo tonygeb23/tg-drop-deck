@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.3.1 for Mac, 7 September 2026
+
+**MP3.** You can stream in MP3 and record in MP3.
+
+It is the format a great many Icecast mounts and every SHOUTcast v1 server
+want, and until now a Mac could not send it. macOS has no MP3 encoder of its
+own, at any layer: it decodes MP3 everywhere and writes it nowhere. So this one
+comes from LAME, which is included with the app as a separate library under its
+own licence. Help, About says where it comes from and links to the source, and
+`mac/vendor/README.md` in the repository has the whole reasoning.
+
+MP3 is now the default for a new station, because it is the safe answer when
+you are not sure what your mount wants. AAC, Opus in Ogg and WAV are all still
+there, and a station saved on Windows as MP3 stays MP3 here instead of being
+quietly moved to AAC.
+
+**Recording gets MP3 too**, alongside WAV, AAC and FLAC.
+
+Nothing else changed.
+
 ## 3.3.0 for Mac, 7 September 2026
 
 A Mac only release. Nothing on Windows changed.

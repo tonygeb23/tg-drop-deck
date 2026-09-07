@@ -254,6 +254,12 @@ extension MainWindow {
             The forty sounds and beds in the demo pack were generated with ElevenLabs AI. \
             Nothing in it is recorded or sampled from a commercial sound library.
 
+            MP3 encoding is by LAME, https://lame.sourceforge.io/, which is included \
+            as a separate library under the GNU Library General Public License. Its full \
+            licence is in the app, at Contents/Resources/LAME-LICENSE.txt, and the source \
+            is at https://tgstudios.app/downloads/lame-3.100.tar.gz. macOS has no MP3 \
+            encoder of its own.
+
             (C) 2026 Tony Gebhard. MIT licensed.
             https://tgstudios.app/drop-deck/
             """)

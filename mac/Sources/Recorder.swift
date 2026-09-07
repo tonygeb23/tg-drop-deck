@@ -25,6 +25,10 @@ final class Recorder {
 
     private var bus: AirBus?
     private var file: AVAudioFile?
+    // MP3 does not go through AVAudioFile, which cannot write one. It is LAME
+    // and a file handle, and the two paths meet again in `write`.
+    private var mp3: MP3Encoder?
+    private var mp3File: FileHandle?
     private var thread: Thread?
     private var stopping = false
     private let lock = NSLock()
@@ -47,6 +51,7 @@ final class Recorder {
         switch format {
         case "aac": return ".m4a"
         case "flac": return ".flac"
+        case "mp3": return ".mp3"
         default: return ".wav"
         }
     }
@@ -114,15 +119,29 @@ final class Recorder {
         }
         let destination = Recorder.nextPath(folder: target, format: format)
 
-        do {
-            file = try AVAudioFile(
-                forWriting: URL(fileURLWithPath: destination),
-                settings: Recorder.settings(format: format, rate: rate, bitrate: bitrate),
-                commonFormat: .pcmFormatFloat32, interleaved: false)
-        } catch {
-            lastError = "The recording would not start. \(error.localizedDescription)"
-            file = nil
-            return nil
+        if format == "mp3" {
+            guard let encoder = MP3Encoder(rate: rate, bitrate: bitrate, forFile: true) else {
+                lastError = "The MP3 encoder would not start."
+                return nil
+            }
+            guard FileManager.default.createFile(atPath: destination, contents: nil),
+                  let handle = FileHandle(forWritingAtPath: destination) else {
+                lastError = "The recording file could not be made."
+                return nil
+            }
+            mp3 = encoder
+            mp3File = handle
+        } else {
+            do {
+                file = try AVAudioFile(
+                    forWriting: URL(fileURLWithPath: destination),
+                    settings: Recorder.settings(format: format, rate: rate, bitrate: bitrate),
+                    commonFormat: .pcmFormatFloat32, interleaved: false)
+            } catch {
+                lastError = "The recording would not start. \(error.localizedDescription)"
+                file = nil
+                return nil
+            }
         }
 
         let bus = AirBus(sampleRate: rate)
@@ -141,7 +160,7 @@ final class Recorder {
     }
 
     private func run() {
-        guard let bus, let file else { return }
+        guard let bus, file != nil || mp3File != nil else { return }
         let chunk = max(256, Int(bus.sampleRate * C.streamChunkSeconds))
         guard let format = AVAudioFormat(standardFormatWithSampleRate: bus.sampleRate,
                                          channels: 2),
@@ -158,14 +177,16 @@ final class Recorder {
                 // of it, so the remaining ring is drained before the file is
                 // closed.
                 if finishing {
-                    if ready > 0 { write(ready, bus, file, buffer, &interleaved) }
+                    if ready > 0 { write(ready, bus, buffer, &interleaved) }
                     break
                 }
                 Thread.sleep(forTimeInterval: C.streamPollSeconds)
                 continue
             }
-            write(chunk, bus, file, buffer, &interleaved)
+            write(chunk, bus, buffer, &interleaved)
         }
+
+        finishMP3()
 
         lock.lock()
         self.file = nil
@@ -173,7 +194,24 @@ final class Recorder {
         lock.unlock()
     }
 
-    private func write(_ frames: Int, _ bus: AirBus, _ file: AVAudioFile,
+    /// Whatever LAME is still holding, and then the Info tag over the
+    /// placeholder it left at the very start of the file.
+    private func finishMP3() {
+        guard let encoder = mp3, let handle = mp3File else { return }
+        if let tail = encoder.flush() { handle.write(tail) }
+        if let tag = encoder.infoTagFrame() {
+            // Over the placeholder, not inserted: it is the same size, and
+            // seeking back is the whole reason a file can have this and a
+            // stream cannot.
+            try? handle.seek(toOffset: 0)
+            handle.write(tag)
+        }
+        try? handle.close()
+        mp3File = nil
+        mp3 = nil
+    }
+
+    private func write(_ frames: Int, _ bus: AirBus,
                        _ buffer: AVAudioPCMBuffer, _ interleaved: inout [Float]) {
         if interleaved.count < frames * 2 {
             interleaved = [Float](repeating: 0, count: frames * 2)
@@ -187,6 +225,17 @@ final class Recorder {
                 channels[1][i] = raw[i * 2 + 1]
             }
         }
+        if let encoder = mp3, let handle = mp3File {
+            if let bytes = encoder.encode(buffer) { handle.write(bytes) }
+            if let problem = encoder.lastError {
+                lastError = "The recording stopped. \(problem)"
+                lock.lock(); stopping = true; lock.unlock()
+                return
+            }
+            framesWritten += frames
+            return
+        }
+        guard let file else { return }
         do {
             try file.write(from: buffer)
             framesWritten += frames
@@ -213,6 +262,10 @@ final class Recorder {
         }
         if let bus { taps.remove(bus) }
         bus = nil
+        // If the writer did not finish inside the deadline the MP3 is still
+        // open and still missing its tail, so it is closed here rather than
+        // left as a file that ends mid frame.
+        finishMP3()
         file = nil
         isRecording = false
         thread = nil

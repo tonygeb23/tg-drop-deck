@@ -57,6 +57,7 @@ func makeStreamEncoder(format: String, rate: Double, bitrate: Int) -> StreamEnco
     switch format {
     case C.streamFormatOpus: return OggOpusEncoder(rate: rate, bitrate: bitrate)
     case C.streamFormatWAV: return PCMEncoder(rate: rate)
+    case C.streamFormatMP3: return MP3Encoder(rate: rate, bitrate: bitrate)
     default: return AACEncoder(rate: rate, bitrate: bitrate)
     }
 }
@@ -339,6 +340,134 @@ final class OggOpusEncoder: StreamEncoder {
             out.append(ogg.page(packet, granule: granule))
         }
         return out.isEmpty ? nil : out
+    }
+}
+
+/// MP3, through LAME.
+///
+/// **macOS has no MP3 encoder**, so this is the one format in the app that
+/// comes from somewhere else. LAME is dynamically linked and lives in
+/// Contents/Frameworks as its own file, which is what keeps its LGPL and this
+/// app's MIT apart; `vendor/README.md` is the whole reasoning and
+/// `vendor/build-lame.sh` reproduces the library from published source.
+///
+/// It is worth having. A great many Icecast mounts and every SHOUTcast v1
+/// server want MP3, and a soundboard that cannot send it is one some people
+/// cannot use.
+///
+/// MP3 frames are self framing, like ADTS and unlike Ogg, so there is no
+/// container and a listener can join part way through.
+final class MP3Encoder: StreamEncoder {
+
+    private var lame: OpaquePointer?
+    private let rate: Double
+    private(set) var lastError: String?
+
+    /// LAME's own advice for the output buffer: 1.25 times the input plus a
+    /// slack of 7200, which is enough for any frame it can emit.
+    private var mp3Buffer: [UInt8]
+
+    /// A comfortable lump. Nothing about MP3 requires a particular size, and
+    /// LAME keeps whatever it cannot make a frame out of yet.
+    var frameSize: Int { 1152 }
+    var mimeType: String { "audio/mpeg" }
+    var isUsable: Bool { lame != nil }
+    func preamble() -> Data? { nil }
+
+    /// The sample rates MPEG-1 and MPEG-2 layer III actually have. A card
+    /// running at something else is resampled by LAME itself, which is what
+    /// `lame_set_out_samplerate` at zero asks it to decide.
+    static let supportedRates: Set<Double> = [
+        48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
+    ]
+
+    /// `forFile` is the one difference between a stream and a recording.
+    ///
+    /// A file gets LAME's Info tag, the frame at the very start that carries
+    /// the length and the encoder delay so a player seeks accurately and does
+    /// not play the padding. Writing it means going back to the beginning
+    /// afterwards, which a file allows and a socket does not, so a STREAM
+    /// leaves it off: with it on, the blank placeholder frame goes out as the
+    /// first thing a listener hears and some players report a zero length
+    /// track and refuse to start.
+    init?(rate: Double, bitrate: Int, forFile: Bool = false) {
+        self.rate = rate
+        mp3Buffer = [UInt8](repeating: 0, count: Int(Double(1152) * 1.25) + 7200)
+        guard let flags = lame_init() else { return nil }
+        lame_set_in_samplerate(flags, Int32(rate))
+        lame_set_num_channels(flags, 2)
+        lame_set_brate(flags, Int32(min(320, max(32, bitrate))))
+        lame_set_mode(flags, JOINT_STEREO)
+        // 2 is LAME's "near best quality, not too slow". 0 is slower for a
+        // difference nobody hears on a stream, and 5 is audibly worse.
+        lame_set_quality(flags, 2)
+        lame_set_bWriteVbrTag(flags, forFile ? 1 : 0)
+        guard lame_init_params(flags) >= 0 else {
+            lame_close(flags)
+            return nil
+        }
+        lame = flags
+    }
+
+    /// The Info tag frame, once everything has been encoded and flushed. It is
+    /// exactly the same size as the placeholder LAME put at the start of the
+    /// file, so it is written over it rather than inserted.
+    func infoTagFrame() -> Data? {
+        guard let lame else { return nil }
+        var tag = [UInt8](repeating: 0, count: 16384)
+        let written = tag.withUnsafeMutableBufferPointer { buffer in
+            lame_get_lametag_frame(lame, buffer.baseAddress, buffer.count)
+        }
+        guard written > 0, written <= tag.count else { return nil }
+        return Data(tag[0..<written])
+    }
+
+    deinit {
+        if let lame { lame_close(lame) }
+    }
+
+    func encode(_ pcm: AVAudioPCMBuffer) -> Data? {
+        guard let lame, let channels = pcm.floatChannelData else { return nil }
+        let frames = Int(pcm.frameLength)
+        guard frames > 0 else { return nil }
+
+        let needed = Int(Double(frames) * 1.25) + 7200
+        if mp3Buffer.count < needed { mp3Buffer = [UInt8](repeating: 0, count: needed) }
+
+        // THE SCALE MATTERS AND LAME HAS TWO OF THEM. The `ieee_float` entry
+        // points take plus or minus ONE, which is what the mixer works in;
+        // `lame_encode_buffer_float`, one letter away in the header, takes plus
+        // or minus 32768. Feeding the second scale to the first multiplies
+        // everything by 32768 and ships a stream that is nothing but clipping,
+        // and it still decodes as a perfectly valid MP3, so only listening to
+        // it, or the round trip check in the self test, catches it.
+        //
+        // The planar form is used rather than the interleaved one because the
+        // mixer's buffer is already two separate channels, so there is nothing
+        // to copy.
+        let written = mp3Buffer.withUnsafeMutableBufferPointer { output in
+            lame_encode_buffer_ieee_float(
+                lame, channels[0], channels[1], Int32(frames),
+                output.baseAddress, Int32(output.count))
+        }
+        if written < 0 {
+            lastError = written == -1 ? "the MP3 buffer was too small"
+                                      : "LAME refused the audio (\(written))"
+            return nil
+        }
+        guard written > 0 else { return nil }   // it wanted more before a frame
+        return Data(mp3Buffer[0..<Int(written)])
+    }
+
+    /// Whatever LAME is still holding. A stream that stops mid frame leaves a
+    /// fragment on the wire, which players cope with, but flushing is free.
+    func flush() -> Data? {
+        guard let lame else { return nil }
+        let written = mp3Buffer.withUnsafeMutableBufferPointer { output in
+            lame_encode_flush(lame, output.baseAddress, Int32(output.count))
+        }
+        guard written > 0 else { return nil }
+        return Data(mp3Buffer[0..<Int(written)])
     }
 }
 

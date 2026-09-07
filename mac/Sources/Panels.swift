@@ -382,8 +382,8 @@ enum KeyboardHelp {
         RECORDING THE SHOW
           Command R                     Start and stop recording
 
-          The same mix that goes on air, to your Documents folder, in WAV, AAC
-          or FLAC. It does not need you to be on air, it does not fight with the
+          The same mix that goes on air, to your Documents folder, in WAV, MP3,
+          AAC or FLAC. It does not need you to be on air, it does not fight with the
           stream, and closing the app finishes the file first so a recording
           always opens.
 

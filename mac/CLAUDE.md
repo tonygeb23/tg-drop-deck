@@ -219,14 +219,37 @@ m4a, m4b, mp4, aac, ac3 and amr. That is everything the Windows build plays
 except **wma, webm, mka, ape and wv**, which are refused honestly. The demo
 pack is FLAC and Ogg Vorbis and plays untouched.
 
-**There is no MP3 encoder on macOS**, in AudioToolbox or anywhere else. It is
-decode only, measured three ways and again in 3.3.0: asked directly,
+**There is still no MP3 encoder on macOS**, in AudioToolbox or anywhere else. It
+is decode only, measured three ways and again in 3.3.0: asked directly,
 `kAudioFormatProperty_Encoders` returns nothing for `.mp3` while returning
 `appl/aac`, `appl/opus`, `appl/flac` and `appl/alac`, and `AVAudioConverter` to
 MP3 is nil at every rate. `afconvert -hf` lists MP3 because it can READ it, which
-is the trap. MP3 out means vendoring LAME: a licensing decision and a third party
-binary inside a notarized bundle, and Tony's call rather than something to slip
-into a release.
+is the trap.
+
+**So from 3.3.1 MP3 comes from LAME**, in `mac/vendor/`, dynamically linked and
+shipped as its own file in `Contents/Frameworks`. `mac/vendor/README.md` is the
+licensing reasoning and `mac/vendor/build-lame.sh` reproduces the library from
+published source, refusing to build anything whose sha256 is not LAME 3.100's.
+Three things about it are not obvious:
+
+- **LAME has two float entry points one letter apart and they use different
+  scales.** `lame_encode_buffer_ieee_float` wants plus or minus ONE, which is
+  what the mixer works in. `lame_encode_buffer_float` wants plus or minus 32768.
+  Feeding the second scale to the first multiplies everything by 32768 and ships
+  a stream that is nothing but clipping, AND IT STILL FRAMES AND DECODES AS A
+  PERFECTLY VALID MP3. The first cut of this shipped that way for an hour. The
+  only thing that can tell the difference is listening, so the self test now
+  decodes each format back with macOS, which decodes everything it cannot
+  encode, and asserts the level. That check was verified by putting the bug back
+  and watching it fail at peak 1.000.
+- **The Info tag is for files only.** `lame_set_bWriteVbrTag(1)` makes LAME
+  reserve a blank frame at the start which `lame_get_lametag_frame` later fills
+  in, written back over offset zero. A socket has no offset zero, so a stream
+  sets it to 0; leaving it on sends the blank placeholder as the first thing a
+  listener hears and some players call it a zero length track and refuse it.
+- **The dylib is signed separately, before the bundle.** Notarization refuses a
+  bundle with anything unsigned inside it, and codesign has to work inside out
+  or it seals a copy it will then call modified.
 
 **The Ogg muxer is ours.** `OggStream` in `StreamOut.swift` writes the pages,
 because Apple encodes Opus perfectly well and then has nowhere to put it. Two
@@ -238,8 +261,11 @@ same `AVAudioConverter` resamples and encodes in one step. Verified with
 `ffprobe` against the bytes the self test writes to
 `$TMPDIR/dropdeck-selftest/stream-sample.opus`.
 
-So `C.streamFormatKeys` is AAC in ADTS, Opus in Ogg and WAV, and
-`C.recordFormatKeys` is still WAV, AAC and FLAC.
+So `C.streamFormatKeys` is MP3, AAC in ADTS, Opus in Ogg and WAV, with MP3 the
+default because it is what most mounts want; `C.recordFormatKeys` is WAV, MP3,
+AAC and FLAC. Recording has no Opus, and not for MP3's reason: the streamer
+writes Ogg pages going forwards, and a FILE has to be right at the end too,
+which is a different job.
 
 ## The board file
 
