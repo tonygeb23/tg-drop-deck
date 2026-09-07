@@ -452,9 +452,24 @@ them too. The site's `deploy.py` runs the same check on every deploy and fails
 the deploy if either feed is broken, so a site deploy can never quietly leave
 an installed copy cut off from its next update.
 
+**Uploading goes to the `tonyserver` ssh alias**, which is where the key is.
+`tony@server.tonygebhard.me` is the same machine with the same host key and no
+identity file configured, so it fails at scp after the build, the notarization
+and the rehearsal have all passed. `release_mac.py` now picks the alias itself
+when `~/.ssh/config` has it, and `RELEASE_SERVER` still overrides.
+
 The first Mac release, 3.2.2, was published on 6 September 2026: zip, manifest
 and the download button on `drop-deck.md`, and the installed app confirmed the
-feed with `--check-updates`. Version numbers stay in lockstep with Windows.
+feed with `--check-updates`.
+
+**The two copies can be on different versions, and 3.3.0 is the first time they
+are.** `release_mac.py` reads the version out of `dropdeck/constants.py` and
+refuses a bundle that disagrees, so a Mac only release bumps both constants and
+leaves the WINDOWS FEED where it is until Windows is next built on the PC.
+`feeds` notes the difference rather than failing, and the site's `deploy.py`
+checks each platform's feed against that platform's own download link on the
+page rather than against one "Version x.y.z" in the prose, which cannot tell
+which platform it belongs to.
 
 ## Signing
 

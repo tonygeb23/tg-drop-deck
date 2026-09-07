@@ -62,7 +62,28 @@ PUBLIC_KEY_B64 = _constant(os.path.join(HERE, "dropdeck", "appupdate.py"), "PUBL
 PRIVATE_KEY_PATH = os.path.join(os.path.expanduser("~"), ".tgstudios", "update-private-key.pem")
 MAC_PRIVATE_KEY_PATH = os.path.join(os.path.expanduser("~"), ".tgstudios", "update-private-key-mac.pem")
 WINDOWS_MANIFEST_URL = "https://tgstudios.app/updates/drop-deck-app.json"
-SERVER = os.environ.get("RELEASE_SERVER", "tony@server.tonygebhard.me")
+def _default_server():
+    """Where the release is uploaded.
+
+    The ssh alias FIRST, when this machine has one. `tony@server.tonygebhard.me`
+    resolves to the same machine and offers the same host key, but no identity
+    file is configured for that name on this Mac, so scp gets as far as
+    "Permission denied" only after the build, the notarization and the rehearsal
+    have all succeeded, which is the worst possible moment to find out. The
+    alias in ~/.ssh/config carries the key, and the site's deploy.py uses it too.
+    """
+    config = os.path.join(os.path.expanduser("~"), ".ssh", "config")
+    try:
+        with open(config, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip().lower().split()[:2] == ["host", "tonyserver"]:
+                    return "tonyserver"
+    except OSError:
+        pass
+    return "tony@server.tonygebhard.me"
+
+
+SERVER = os.environ.get("RELEASE_SERVER") or _default_server()
 REMOTE_DOWNLOADS = "/home/tony/tgstudios/downloads"
 REMOTE_UPDATES = "/home/tony/tgstudios/updates"
 DOWNLOAD_BASE = "https://tgstudios.app/downloads"
