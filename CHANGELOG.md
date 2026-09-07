@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.2.2 for Mac, 6 September 2026
+
+**TG Drop Deck runs on a Mac.** The same soundboard, written natively for
+VoiceOver rather than ported: the four banks on the number row, the running
+order with its crossfades, drops library and M3U files, the microphone and
+its voice chain, other programs on the air including VoiceOver itself,
+recording, streaming with saved stations, global hotkeys, feedback and signed
+updates. It reads and writes the same board file as the Windows copy, so a
+show built on one machine opens on the other, and the two copies share a
+version number from here on.
+
+**One key moved, for a reason.** On a Mac, Control plus Option is VoiceOver's
+own modifier, so the drops are on Command and the beds on Option plus Command
+rather than the Windows Control keys. Everything else is the Windows key with
+Command where Windows has Ctrl, the Windows Control keys still work where the
+system leaves them free, and the Keyboard tab offers the literal Windows map.
+
+**What a Mac cannot do.** It sends AAC rather than MP3 or Ogg, because macOS
+has no MP3 encoder and cannot write an Ogg container; it cannot read WMA; and
+it does not host VST3 plugins in the voice chain yet. The Mac manual, at
+tgstudios.app/drop-deck-guide-mac, says so wherever it matters.
+
 ## 3.2.2, 6 September 2026
 
 **Your screen reader can go on the air.** NVDA, JAWS, Narrator, ZoomText,

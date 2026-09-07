@@ -5,11 +5,14 @@ Eighty sounds a keypress away, a playlist that crossfades, a processed
 microphone, and a stream to your own station. Keyboard first, screen reader
 first.
 
-Free, MIT licensed, Windows.
+Free, MIT licensed. Windows, and a native Mac copy for VoiceOver in `mac/`,
+both reading the same board file.
 
 - **Download:** [tgstudios.app/drop-deck](https://tgstudios.app/drop-deck/)
 - **The manual:** [tgstudios.app/drop-deck-guide](https://tgstudios.app/drop-deck-guide/)
   covers every feature and every key. This page is the short version.
+- **The Mac manual:** [tgstudios.app/drop-deck-guide-mac](https://tgstudios.app/drop-deck-guide-mac/),
+  where `Ctrl` below is `Command` and `Alt+Ctrl` is `Option+Command`.
 
 ## Why
 

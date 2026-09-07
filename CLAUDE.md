@@ -169,6 +169,16 @@ And specific to this one:
   every time was two announcements for one keystroke. `_hinted_banks` on the
   frame is what makes it once.
 
+## The Mac copy
+
+`mac/` is the same product on macOS: native Swift and AppKit for VoiceOver,
+reading and writing the same `board.json`, versioned in lockstep with this
+one. Read [mac/CLAUDE.md](mac/CLAUDE.md) before touching it. Every porting
+decision and its reason is there, including why the wxPython app could not
+simply be run on a Mac and why one key on the frozen digit map had to move.
+The Mac manual is a page of its own, tgstudios.app/drop-deck-guide-mac, kept
+honest by `mac/check_guide.py` the way `tools/check_guide.py` keeps this one.
+
 ## Layout
 
 ```
