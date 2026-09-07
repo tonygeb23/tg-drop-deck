@@ -43,6 +43,7 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.3.2": ("A Mac only release. Nothing on Windows changed."),
     "3.3.1": ("A Mac only release: MP3 streaming and recording. Windows has had "
               "both since the beginning and nothing on Windows changed."),
     # 3.3.0 is a Mac release. The version number is shared so the two copies

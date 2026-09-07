@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.3.2 for Mac, 7 September 2026
+
+**The app now tells you when your microphone is not reaching the air.**
+
+**Put the microphone on the air**, on the Streaming tab, is on by default and
+always has been. What was wrong is that turning it off was invisible: you go on
+hearing yourself either way, so a stream with no presenter on it sounds exactly
+like a good one from where you are sitting, and nothing anywhere said
+otherwise. Reported by Kyle Smith, who had exactly that and worked out why
+himself.
+
+It was also mislabelled. It used to say "Send the microphone as well", and it
+does more than that: it governs the programme, which is the recording as much
+as the stream, so with it off your voice was missing from every recording too.
+
+Opening the microphone while live or recording now says so out loud, and so
+does going live or starting a recording with the microphone already open.
+`Command+Shift+B` reports it, and the status line says `Mic on, NOT on air`
+rather than a "Mic on" that is true and misleading.
+
+The stream status also stopped claiming AAC, now that there are four formats to
+choose from.
+
 ## 3.3.1 for Mac, 7 September 2026
 
 **MP3.** You can stream in MP3 and record in MP3.

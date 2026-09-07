@@ -162,6 +162,16 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.3.2": ("The app now tells you when your microphone is not reaching the "
+              "air. Put the microphone on the air, on the Streaming tab, is on "
+              "by default and always has been, but turning it off was invisible: "
+              "you go on hearing yourself either way, so a stream with no "
+              "presenter on it sounds exactly like a good one from where you "
+              "are sitting. It also covers recordings, not just the stream, "
+              "which its old name did not say. Opening the microphone while "
+              "live or recording now says so, Command Shift B reports it, and "
+              "the status line says Mic on, NOT on air. Reported by Kyle "
+              "Smith."),
     "3.3.1": ("MP3. You can stream in MP3 and record in MP3, which every server "
               "and every player takes and which a great many Icecast mounts and "
               "every SHOUTcast v1 server want. macOS has no MP3 encoder of its "
