@@ -178,6 +178,10 @@ decision and its reason is there, including why the wxPython app could not
 simply be run on a Mac and why one key on the frozen digit map had to move.
 The Mac manual is a page of its own, tgstudios.app/drop-deck-guide-mac, kept
 honest by `mac/check_guide.py` the way `tools/check_guide.py` keeps this one.
+Releasing either copy is [../RELEASING.md](../RELEASING.md): the Windows
+steps are the numbered sections and the Mac steps are the section near the
+end, run by `tools/release_mac.py`. Both end with `release_mac.py feeds`,
+which proves both platforms' update feeds the way the apps read them.
 
 ## Layout
 
