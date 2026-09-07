@@ -1580,6 +1580,11 @@ class SettingsDialog(wx.Dialog):
                 warning.SetLabel(
                     "Facebook shows you a preview first. Nothing is posted "
                     "until you press Go Live Now in Live Producer.")
+            elif kind == "restream":
+                warning.SetLabel(
+                    "Restream passes this on to whichever channels you have "
+                    "switched on there. Turn them all off and nothing leaves "
+                    "Restream, which makes this the safe way to test.")
             else:
                 warning.SetLabel(
                     "What happens when you connect is up to whoever runs "

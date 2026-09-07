@@ -1234,6 +1234,7 @@ def _explain_rtmp(exc, settings, server_said=""):
 DESTINATIONS = {
     "youtube": RtmpDestination,
     "facebook": RtmpDestination,
+    "restream": RtmpDestination,
     "rtmp": RtmpDestination,
 }
 
@@ -1243,6 +1244,7 @@ DESTINATIONS = {
 RTMP_LABELS = {
     "youtube": "YouTube Live",
     "facebook": "Facebook Live",
+    "restream": "Restream",
     "rtmp": "Custom RTMP server",
 }
 

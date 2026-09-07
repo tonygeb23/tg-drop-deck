@@ -763,7 +763,7 @@ STREAM_SERVER_ORDER = ("icecast", "shoutcast")
 STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")
 
 #: The video side. Same shape, different page.
-VIDEO_SERVER_ORDER = ("youtube", "facebook", "rtmp")
+VIDEO_SERVER_ORDER = ("youtube", "facebook", "restream", "rtmp")
 
 #: Which of the two Ctrl+B sends the show to. One at a time: sending to both
 #: means two encoders and twice the upload, and it is not built yet.
@@ -789,6 +789,10 @@ LIVE_TO_LABELS = {
 RTMP_INGEST = {
     "youtube": "rtmps://a.rtmps.youtube.com/live2",
     "facebook": "rtmps://live-api-s.facebook.com:443/rtmp",
+    # Restream takes one stream and sends it on to everywhere you have
+    # switched on there. Verified 7 September 2026: live.restream.io answers
+    # on 1935 and on 443, and 443 completes TLS 1.3.
+    "restream": "rtmps://live.restream.io:443/live",
 }
 
 #: Where a user goes to fetch their key. Opened for them, because hunting for
@@ -802,6 +806,7 @@ RTMP_KEY_PAGE = {
     "youtube": "https://www.youtube.com/live_dashboard",
     # The URL Facebook's own help page names, rather than the producer one.
     "facebook": "https://www.facebook.com/live/create",
+    "restream": "https://restream.io/settings/streaming-setup",
 }
 
 #: The backup ingest each platform publishes, for when the primary is refusing
@@ -824,7 +829,13 @@ RTMP_INGEST_BACKUP = {
 #:
 #: This is why the connection check never completes an RTMP handshake, and why
 #: going live says out loud what is about to happen.
-RTMP_GOES_LIVE_AT_ONCE = {"youtube": True, "facebook": False, "rtmp": False}
+#: Restream is a third answer: it goes live wherever YOU have switched
+#: channels on in your Restream account, so it is as safe or as public as you
+#: have made it. With every channel off it goes nowhere at all, which makes it
+#: the one place a full end to end test can be run without touching anybody's
+#: real audience. That is worth saying rather than guessing at.
+RTMP_GOES_LIVE_AT_ONCE = {"youtube": True, "facebook": False,
+                          "restream": None, "rtmp": False}
 
 #: What the picture is, when there is no camera. YouTube refuses an audio only
 #: ingest, so a radio show still has to send something, and a still card costs

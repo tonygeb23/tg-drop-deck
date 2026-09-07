@@ -631,7 +631,7 @@ try:
           == ["Icecast, or Liquidsoap harbor", "SHOUTcast"],
           _dialog.stream_server.GetStrings())
     check("and the video page only video platforms",
-          len(_dialog.video_server.GetStrings()) == 3,
+          len(_dialog.video_server.GetStrings()) == len(C.VIDEO_SERVER_ORDER),
           _dialog.video_server.GetStrings())
     check("no server appears on both",
           not set(C.STREAM_SERVER_ORDER) & set(C.VIDEO_SERVER_ORDER))
@@ -934,6 +934,22 @@ check("the YouTube key page is the redirect that always works",
 check("and there is a backup ingest recorded for YouTube",
       C.RTMP_INGEST_BACKUP["youtube"].startswith("rtmps://b."),
       C.RTMP_INGEST_BACKUP["youtube"])
+
+# Restream is the one place a full end to end test can go nowhere at all,
+# because it only passes the stream on to channels the user has switched on.
+check("Restream is offered as a platform of its own",
+      "restream" in C.VIDEO_SERVER_ORDER)
+check("and it is named, not left as a custom server",
+      streamout.server_label("restream") == "Restream")
+check("with its own encrypted ingest",
+      C.RTMP_INGEST["restream"].startswith("rtmps://live.restream.io"),
+      C.RTMP_INGEST["restream"])
+check("it builds an RTMP destination like the others",
+      isinstance(streamout.destination_for(
+          {"server": "restream", "host": C.RTMP_INGEST["restream"],
+           "password": "k"}, RATE), RtmpDestination))
+check("and whether it goes live is recorded as depending on the user",
+      C.RTMP_GOES_LIVE_AT_ONCE["restream"] is None)
 
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)
