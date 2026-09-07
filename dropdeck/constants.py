@@ -755,5 +755,63 @@ STREAM_BITRATES = (64, 96, 128, 160, 192, 256, 320)
 
 #: The order the Streaming tab offers them in. Kept here rather than taken
 #: from a dict so the list on screen cannot quietly reorder itself.
-STREAM_SERVER_ORDER = ("icecast", "shoutcast")
+STREAM_SERVER_ORDER = ("icecast", "shoutcast", "youtube", "facebook", "rtmp")
 STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")
+
+
+# ---------------------------------------------------------------------------
+# Going out on YouTube, Facebook and anything else that speaks RTMP
+# ---------------------------------------------------------------------------
+
+#: The ingest addresses, without the key. The key is a credential and is kept
+#: apart from these everywhere except the moment the URL is built.
+#:
+#: BOTH ARE RTMPS, AND THAT IS NOT A PREFERENCE. Facebook has refused
+#: unencrypted RTMP since 2018, and YouTube asks for RTMPS. Facebook's is on
+#: port 443 deliberately: it gets through firewalls that block 1935.
+RTMP_INGEST = {
+    "youtube": "rtmps://a.rtmps.youtube.com/live2",
+    "facebook": "rtmps://live-api-s.facebook.com:443/rtmp",
+}
+
+#: Where a user goes to fetch their key. Opened for them, because hunting for
+#: it in a video web app is the worst part of setting this up with a screen
+#: reader, and it is the ONE part the app can make easy.
+RTMP_KEY_PAGE = {
+    "youtube": "https://studio.youtube.com/channel/UC/livestreaming",
+    "facebook": "https://www.facebook.com/live/producer",
+}
+
+#: What the picture is, when there is no camera. YouTube refuses an audio only
+#: ingest, so a radio show still has to send something, and a still card costs
+#: about 64 kbps: measured 7 September 2026, not estimated.
+RTMP_WIDTH = 1280
+RTMP_HEIGHT = 720
+RTMP_FPS = 30
+RTMP_VIDEO_BITRATE = 2500
+
+#: Two seconds. YouTube asks for two and will not take more than four, and
+#: Facebook is the same. This is the number that decides whether a stream that
+#: connects is then called unhealthy, so it is not a knob.
+RTMP_KEYFRAME_SECONDS = 2
+
+#: Windows' own H.264 encoder, which hands the work to hardware where there is
+#: any. libx264 is the fallback for a machine where Media Foundation will not
+#: open. Measured 7 September 2026: 720p30 at 11 times real time on either.
+RTMP_VIDEO_ENCODER = "h264_mf"
+RTMP_VIDEO_ENCODER_FALLBACK = "libx264"
+
+#: What the picture can be. A camera is only one of them, and it is not the
+#: default: most of this app's users are running a radio show and have no
+#: reason to be on camera.
+PICTURE_CARD = "card"
+PICTURE_IMAGE = "image"
+PICTURE_CAMERA = "camera"
+PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA)
+
+#: What the card is drawn in. Dark with a light face, because a stream sits in
+#: a dark player on most sites, and high contrast because somebody sighted is
+#: reading it on a phone.
+CARD_BACKGROUND = (14, 18, 28)
+CARD_FOREGROUND = (240, 242, 248)
+CARD_ACCENT = (110, 170, 255)

@@ -1,0 +1,487 @@
+"""Going out on YouTube and Facebook: the picture, and the RTMP that carries it.
+
+Nothing here touches the internet. `tools/mock_rtmp.py` speaks enough of the
+protocol for FFmpeg's client to publish to it, keeps every message, and rebuilds
+them into an FLV. So these tests DECODE what arrived rather than counting bytes,
+for the reason `test_stream.py` gives: a stream that connects and sends silence
+looks perfect from the sending end.
+
+    python tests/test_video.py
+"""
+
+import fractions
+import io
+import os
+import sys
+import tempfile
+import time
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="dropdeck-video-test-")
+
+import av
+
+from dropdeck import constants as C
+from dropdeck import picture, streamout
+from dropdeck.engine import CHANNELS
+from dropdeck.streamout import AirBus, RtmpDestination, Streamer
+from mock_rtmp import MockRTMP
+
+CHECKS = []
+RATE = 44100
+
+
+def check(label, condition, detail=""):
+    CHECKS.append(bool(condition))
+    print(("  ok   " if condition else "  FAIL ") + label
+          + (("  " + str(detail)) if detail else ""))
+
+
+def tone(frames, freq=440.0, rate=RATE, level=0.4, start=0):
+    t = (np.arange(start, start + frames) / float(rate))
+    wave = (level * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    return np.repeat(wave[:, None], CHANNELS, axis=1)
+
+
+def dominant(pcm, rate=RATE):
+    """The loudest frequency in a block, for proving it is the real audio."""
+    n = min(len(pcm), rate)
+    if n < 256:
+        return 0.0
+    spectrum = np.abs(np.fft.rfft(pcm[:n] * np.hanning(n)))
+    return float(np.argmax(spectrum)) * rate / n
+
+
+def ink(canvas):
+    """How much of a card is not the background. Zero means nothing drawn."""
+    background = np.asarray(C.CARD_BACKGROUND, dtype=np.uint8)
+    return int(np.count_nonzero(np.any(canvas != background, axis=2)))
+
+
+# ---------------------------------------------------------------------------
+print("The card, which is what a radio show sends")
+# ---------------------------------------------------------------------------
+
+card = picture.CardSource(name="Tony Gebhard Show")
+frame = card.frame(1280, 720)
+check("it draws at the size asked for", frame.shape == (720, 1280, 3),
+      frame.shape)
+check("and it is 8 bit RGB, which is what the encoder wants",
+      frame.dtype == np.uint8, frame.dtype)
+check("the station name is actually on it", ink(frame) > 500, ink(frame))
+
+blank = picture.CardSource(name="")
+check("a card with no name still draws something",
+      ink(blank.frame(640, 360)) > 0)
+
+# The title
+before = ink(card.frame(1280, 720))
+card.set_title("Fleetwood Mac - Dreams")
+after_frame = card.frame(1280, 720)
+check("adding a title puts more on the card", ink(after_frame) > before,
+      "%d then %d" % (before, ink(after_frame)))
+check("and the card says what the title is", card.title == "Fleetwood Mac - Dreams")
+
+# Caching, which is the whole reason this is cheap
+card.redraws = 0
+card.set_title("Cache Test")
+for _ in range(50):
+    card.frame(1280, 720)
+check("the same card is drawn once, not fifty times", card.redraws == 1,
+      card.redraws)
+card.set_title("Something Else")
+card.frame(1280, 720)
+check("and a new title redraws it", card.redraws == 2, card.redraws)
+
+# A long title must not run off the edge or raise
+card.set_title("A" * 400)
+long_frame = card.frame(1280, 720)
+check("an absurdly long title still draws", long_frame.shape == (720, 1280, 3))
+check("and stays inside the picture", ink(long_frame) > 0)
+
+# Characters the font does not have
+card.set_title("Sigur Ros - Hoppipolla üé你好")
+odd = card.frame(640, 360)
+check("a title with characters the font lacks does not raise",
+      odd.shape == (360, 640, 3))
+
+start = time.perf_counter()
+fresh = picture.CardSource(name="Speed Test")
+for i in range(30):
+    fresh.set_title("Track %d" % i)
+    fresh.frame(1280, 720)
+cost = (time.perf_counter() - start) / 30 * 1000
+check("drawing a fresh card costs under 40 ms", cost < 40, "%.1f ms" % cost)
+
+
+# ---------------------------------------------------------------------------
+print("\nText that has to fit")
+# ---------------------------------------------------------------------------
+
+check("width grows with the string",
+      picture.text_width("AAAA", 2) > picture.text_width("AA", 2))
+check("an empty string is no width", picture.text_width("", 3) == 0)
+check("a big string gets a small scale",
+      picture.fit_scale("A" * 100, 600, 8) < picture.fit_scale("AB", 600, 8))
+check("shortening ends with a full stop rather than a hard cut",
+      picture.shorten("A" * 200, 200, 2).endswith("..."))
+check("and something that fits is left alone",
+      picture.shorten("SHORT", 4000, 2) == "SHORT")
+
+
+# ---------------------------------------------------------------------------
+print("\nA picture file, and what happens when it is not one")
+# ---------------------------------------------------------------------------
+
+art_dir = tempfile.mkdtemp(prefix="dropdeck-art-")
+art_path = os.path.join(art_dir, "art.png")
+with av.open(art_path, mode="w") as container:
+    stream = container.add_stream("png", rate=1)
+    stream.width, stream.height, stream.pix_fmt = 400, 200, "rgb24"
+    block = np.zeros((200, 400, 3), dtype=np.uint8)
+    block[:, :, 0] = 255                       # solid red, easy to recognise
+    art_frame = av.VideoFrame.from_ndarray(block, format="rgb24")
+    for packet in stream.encode(art_frame):
+        container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+
+image = picture.ImageSource(art_path)
+shown = image.frame(1280, 720)
+check("a picture file loads", shown.shape == (720, 1280, 3))
+check("and it is not blank", ink(shown) > 1000, ink(shown))
+reds = int(np.count_nonzero((shown[:, :, 0] > 200) & (shown[:, :, 1] < 60)))
+check("the red really reaches the frame", reds > 10000, reds)
+check("a 2:1 picture is letterboxed, not stretched",
+      int(np.count_nonzero(np.all(shown == np.asarray(C.CARD_BACKGROUND),
+                                  axis=2))) > 1000)
+
+missing = picture.ImageSource(os.path.join(art_dir, "nope.png"))
+mframe = missing.frame(640, 360)
+check("a missing picture gives a frame rather than raising",
+      mframe.shape == (360, 640, 3))
+check("and says what went wrong", "not there" in missing.error, missing.error)
+
+junk_path = os.path.join(art_dir, "junk.png")
+with open(junk_path, "wb") as handle:
+    handle.write(b"this is not a picture")
+junk = picture.ImageSource(junk_path)
+check("a file that is not a picture gives a frame too",
+      junk.frame(320, 180).shape == (180, 320, 3))
+check("and says so", bool(junk.error), junk.error)
+
+
+# ---------------------------------------------------------------------------
+print("\nA picture source that fails must not take the show off the air")
+# ---------------------------------------------------------------------------
+
+class Breaks(picture.PictureSource):
+    kind = C.PICTURE_CAMERA
+
+    def __init__(self):
+        self.calls = 0
+
+    def frame(self, width, height):
+        self.calls += 1
+        raise OSError("the camera was unplugged")
+
+    def describe(self):
+        return "a camera"
+
+
+said = []
+broken = picture.FallbackSource(Breaks(), picture.CardSource(name="Backup"),
+                                on_fallback=said.append)
+got = broken.frame(640, 360)
+check("a camera that throws still gives a picture",
+      got.shape == (360, 640, 3))
+check("and the presenter is told once", len(said) == 1, said)
+for _ in range(30):
+    broken.frame(640, 360)
+check("not once a frame, which would be thirty times a second",
+      len(said) == 1, len(said))
+check("the failing source is not asked again either",
+      broken.primary.calls == 1, broken.primary.calls)
+check("and it says it fell back", "card" in broken.describe(),
+      broken.describe())
+
+
+# ---------------------------------------------------------------------------
+print("\nThe keyframe interval, which decides whether YouTube is happy")
+# ---------------------------------------------------------------------------
+
+def keyframes(encoder, fps=30, frames=150):
+    """Where the keyframes land, on content that changes a lot."""
+    buf = io.BytesIO()
+    container = av.open(buf, mode="w", format="flv")
+    stream = container.add_stream(encoder, rate=fps)
+    stream.width, stream.height, stream.pix_fmt = 640, 360, "yuv420p"
+    stream.bit_rate = 2_000_000
+    stream.options = streamout._video_options(encoder, fps)
+    found = []
+    index = 0
+    for i in range(frames):
+        if i % 7 == 0:
+            block = np.random.randint(0, 60, (360, 640, 3), dtype=np.uint8)
+        else:
+            block = np.full((360, 640, 3), (i * 3) % 255, dtype=np.uint8)
+        video = av.VideoFrame.from_ndarray(block, format="rgb24")
+        video = video.reformat(format="yuv420p")
+        video.pts = i
+        for packet in stream.encode(video):
+            if packet.is_keyframe:
+                found.append(index)
+            index += 1
+    for packet in stream.encode():
+        if packet.is_keyframe:
+            found.append(index)
+        index += 1
+    container.close()
+    return found
+
+
+want = C.RTMP_FPS * C.RTMP_KEYFRAME_SECONDS
+for name in (C.RTMP_VIDEO_ENCODER, C.RTMP_VIDEO_ENCODER_FALLBACK):
+    try:
+        marks = keyframes(name)
+    except Exception as exc:
+        check("%s can encode at all" % name, False, exc)
+        continue
+    spacing = [b - a for a, b in zip(marks, marks[1:])]
+    check("%s puts a keyframe every %d frames" % (name, want),
+          spacing and all(gap == want for gap in spacing),
+          "gaps %s" % spacing[:5])
+
+check("which is two seconds, the number both platforms ask for",
+      C.RTMP_KEYFRAME_SECONDS == 2)
+check("and libx264 is told to stop scene cutting, or it ignores the interval",
+      streamout._video_options("libx264", 30).get("sc_threshold") == "0")
+check("while Media Foundation needs no such thing",
+      "sc_threshold" not in streamout._video_options("h264_mf", 30))
+
+
+# ---------------------------------------------------------------------------
+print("\nThe ingest addresses")
+# ---------------------------------------------------------------------------
+
+check("YouTube and Facebook are both offered",
+      "youtube" in C.STREAM_SERVER_ORDER and "facebook" in C.STREAM_SERVER_ORDER)
+check("both go out encrypted, which Facebook insists on",
+      all(url.startswith("rtmps://") for url in C.RTMP_INGEST.values()),
+      C.RTMP_INGEST)
+check("Facebook is on port 443, to get through firewalls",
+      ":443" in C.RTMP_INGEST["facebook"])
+check("every RTMP server has a name for the Preferences box",
+      all(streamout.server_label(k) and streamout.server_label(k) != k
+          for k in ("youtube", "facebook", "rtmp")))
+check("and every server in the list has one, which is how this broke before",
+      all(streamout.server_label(k) for k in C.STREAM_SERVER_ORDER))
+check("Icecast is still not an RTMP destination",
+      not streamout.is_rtmp("icecast") and streamout.is_rtmp("youtube"))
+
+settings = {"server": "youtube", "host": C.RTMP_INGEST["youtube"],
+            "password": "abcd-1234", "bitrate": 128}
+dest = streamout.destination_for(settings, RATE)
+check("a YouTube station builds an RTMP destination",
+      isinstance(dest, RtmpDestination))
+check("and the key is put on the end of the address",
+      dest.url() == C.RTMP_INGEST["youtube"] + "/abcd-1234", dest.url())
+check("an Icecast station still builds the old one",
+      isinstance(streamout.destination_for({"server": "icecast"}, RATE),
+                 streamout.IcecastDestination))
+
+for missing, word in (({"server": "youtube", "host": "", "password": "k"},
+                       "server address"),
+                      ({"server": "youtube", "host": "rtmps://x",
+                        "password": ""}, "stream key")):
+    try:
+        streamout.destination_for(missing, RATE).url()
+        check("a station with no %s is refused" % word, False)
+    except streamout.SinkError as exc:
+        check("a station with no %s says so" % word, word in str(exc), exc)
+
+check("the spoken description never contains the key",
+      "abcd-1234" not in dest.describe(), dest.describe())
+check("and names the platform instead",
+      "youtube" in dest.describe(), dest.describe())
+
+
+# ---------------------------------------------------------------------------
+print("\nEnd to end: a real publish to a real RTMP server, then decoded")
+# ---------------------------------------------------------------------------
+
+SECONDS = 4
+
+with MockRTMP.spawn(seconds=40) as server:
+    live = picture.CardSource(name="Test Station", title="The First Track")
+    destination = RtmpDestination(
+        {"server": "rtmp", "host": server.url.rsplit("/", 1)[0],
+         "password": server.url.rsplit("/", 1)[1], "bitrate": 128,
+         "video_width": 640, "video_height": 360, "video_fps": 30,
+         "video_bitrate": 1200},
+        RATE, video_source=live)
+    destination.connect()
+    block = int(RATE * 0.25)
+    sent = 0
+    while sent < RATE * SECONDS:
+        destination.feed(tone(block, freq=440.0, start=sent))
+        sent += block
+        if sent == RATE * 2:
+            live.set_title("The Second Track")
+    destination.close()
+
+result = server.result()
+check("the server saw a publish", result.publishing, result.commands)
+check("the whole RTMP command sequence happened",
+      all(c in result.commands
+          for c in ("connect", "createStream", "publish")), result.commands)
+check("the server parsed everything without complaining",
+      not result.error, result.error)
+check("audio arrived", result.audio > 100, result.audio)
+check("and so did video", result.video > 50, result.video)
+
+opened = result.container()
+kinds = sorted(s.type for s in opened.streams)
+check("what arrived has both a video and an audio stream",
+      "video" in kinds and "audio" in kinds, kinds)
+video_stream = opened.streams.video[0]
+check("the video is H.264", video_stream.codec_context.name == "h264",
+      video_stream.codec_context.name)
+check("at the size that was asked for",
+      (video_stream.width, video_stream.height) == (640, 360),
+      (video_stream.width, video_stream.height))
+check("the audio is AAC", opened.streams.audio[0].codec_context.name == "aac")
+opened.close()
+
+# Decoding, which is the only check that proves it is not silence and black.
+decoded_video = 0
+seen = []
+container = result.container()
+for frame in container.decode(video=0):
+    decoded_video += 1
+    if decoded_video in (10, 100):
+        seen.append(frame.to_ndarray(format="rgb24"))
+container.close()
+
+expected = SECONDS * 30
+check("about %d video frames come back out" % expected,
+      abs(decoded_video - expected) <= 6, decoded_video)
+check("and they are the card, not black",
+      seen and ink(seen[0]) > 500, ink(seen[0]) if seen else 0)
+
+samples = []
+container = result.container()
+for frame in container.decode(audio=0):
+    samples.append(frame.to_ndarray())
+container.close()
+pcm = np.concatenate([s.reshape(-1) for s in samples]).astype(np.float64)
+check("the audio that comes back is the tone that was sent",
+      abs(dominant(pcm) - 440.0) < 15, "%.0f Hz" % dominant(pcm))
+check("and there is roughly the right amount of it",
+      abs(len(pcm) / float(CHANNELS * RATE) - SECONDS) < 0.5,
+      "%.2f s" % (len(pcm) / float(CHANNELS * RATE)))
+
+if result.audio_timestamps and result.video_timestamps:
+    drift = abs(result.video_timestamps[-1] - result.audio_timestamps[-1])
+    check("audio and video finish together, inside a hundred milliseconds",
+          drift < 100, "%d ms apart" % drift)
+
+
+# ---------------------------------------------------------------------------
+print("\nThe Streamer drives it, exactly as it drives Icecast")
+# ---------------------------------------------------------------------------
+
+with MockRTMP.spawn(seconds=40) as server:
+    bus = AirBus(RATE)
+    host, key = server.url.rsplit("/", 1)
+    streamer = Streamer(bus, {"server": "rtmp", "host": host, "password": key,
+                              "bitrate": 128, "video_width": 320,
+                              "video_height": 180, "video_fps": 30,
+                              "video_bitrate": 600})
+    streamer.start()
+    deadline = time.time() + 15
+    while time.time() < deadline and streamer.state != streamout.ON_AIR:
+        bus.write("card", tone(2048))
+        time.sleep(0.01)
+    check("it goes on air", streamer.state == streamout.ON_AIR,
+          "%s %s" % (streamer.state, streamer.detail))
+
+    pushed = 0
+    while pushed < RATE * 2:
+        bus.write("card", tone(2048, start=pushed))
+        pushed += 2048
+        time.sleep(0.02)
+    time.sleep(0.5)
+    check("and the byte counter moves while it is still on air",
+          streamer.bytes_sent > 0, streamer.bytes_sent)
+    check("the spoken description says where it is going, not the key",
+          key not in streamer._describe(), streamer._describe())
+    streamer.stop()
+    check("stopping comes off air", streamer.state == streamout.OFF,
+          streamer.state)
+
+after = server.result()
+check("the server got the show through the Streamer",
+      after.audio > 20 and after.video > 10,
+      "%s audio, %s video" % (after.audio, after.video))
+
+
+# ---------------------------------------------------------------------------
+print("\nA server that is not there")
+# ---------------------------------------------------------------------------
+
+bus = AirBus(RATE)
+dead = Streamer(bus, {"server": "rtmp", "host": "rtmp://127.0.0.1:9",
+                      "password": "nokey", "bitrate": 128})
+dead.start()
+deadline = time.time() + 20
+while time.time() < deadline and dead.state not in (streamout.RECONNECTING,
+                                                    streamout.FAILED):
+    bus.write("card", tone(2048))
+    time.sleep(0.05)
+check("a dead server does not hang the app",
+      dead.state in (streamout.RECONNECTING, streamout.FAILED), dead.state)
+check("and the reason is worth hearing, not an errno",
+      dead.error and "Errno" not in dead.error, dead.error)
+dead.stop()
+check("and it stops cleanly", not dead.running)
+
+
+# ---------------------------------------------------------------------------
+print("\nFFmpeg's errors, turned into something a presenter can act on")
+# ---------------------------------------------------------------------------
+
+where = {"host": "rtmps://live-api-s.facebook.com:443/rtmp"}
+cases = [
+    ("[Errno 138] Error number -138 occurred", "could not reach"),
+    ("[Errno 5] I/O error", "stream key"),
+    ("Connection timed out", "did not answer"),
+    ("something nobody has seen before", "could not connect"),
+]
+for raw, want in cases:
+    said = streamout._explain_rtmp(OSError(raw), where)
+    check("%r is explained, not repeated" % raw[:28], want in said, said)
+    check("  and the errno is not read out", "Errno" not in said, said)
+
+check("the host is named so the user knows which station failed",
+      "facebook.com" in streamout._explain_rtmp(OSError("x"), where))
+
+try:
+    streamout._resolve("no-such-host-xyz123.invalid", 1935)
+    check("a hostname that does not exist is caught before FFmpeg", False)
+except streamout.SinkError as exc:
+    check("a hostname that does not exist is caught before FFmpeg",
+          "server address" in str(exc), exc)
+try:
+    streamout._resolve("127.0.0.1", 1935)
+    check("and a real one is not", True)
+except streamout.SinkError as exc:
+    check("and a real one is not", False, exc)
+
+
+print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
+sys.exit(0 if all(CHECKS) else 1)

@@ -1371,7 +1371,7 @@ class SettingsDialog(wx.Dialog):
         self.stream_server = field(
             "Se&rver",
             lambda: wx.Choice(panel, choices=[
-                streamout.SERVERS[key][0] for key in C.STREAM_SERVER_ORDER]),
+                streamout.server_label(key) for key in C.STREAM_SERVER_ORDER]),
             "Server type",
             "Icecast covers almost everything, including the Liquidsoap "
             "harbor a station puts in front of it so a presenter can take "

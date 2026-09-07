@@ -686,6 +686,521 @@ SERVERS = {
 
 
 # ---------------------------------------------------------------------------
+# Destinations: one place the show goes, and everything it takes to get there
+# ---------------------------------------------------------------------------
+
+class Destination:
+    """One place the show goes. Owns its encoder AND its transport.
+
+    Icecast and RTMP divide the work differently, and that is the whole reason
+    this layer exists.
+
+    With Icecast the encoder makes bytes and something else owns the socket,
+    which is why `Encoder` takes an `on_bytes` callback and `IcecastSink` does
+    the writing. RTMP is not a pipe you push bytes down: it is a session with a
+    handshake, chunk streams and AMF commands, and FFmpeg implements all of it.
+    So for RTMP, PyAV opens the network itself and there is no byte callback to
+    hook and no socket of ours to hold.
+
+    Rather than teach `Streamer` about both, it holds one of these and asks it
+    for what it needs. What `Streamer` still owns is the part that is the same
+    either way: the retry loop, the backlog watching and the spoken state.
+    """
+
+    #: Whether this destination needs pictures as well as sound. An RTMP one
+    #: does, and not because we want video: YouTube REFUSES an audio only
+    #: ingest, so something has to be on the screen even for a radio show.
+    wants_video = False
+
+    #: The rate the encoder settled on, which the caller resamples to.
+    samplerate = 44100
+
+    def connect(self):
+        """Open it. Raises SinkError or EncoderError with a sayable reason."""
+        raise NotImplementedError
+
+    def feed(self, block):
+        """A block of float32 audio, shaped (frames, CHANNELS)."""
+        raise NotImplementedError
+
+    def send_metadata(self, title):
+        """Tell the far end what is playing. False when it will not take it."""
+        return False
+
+    def describe(self):
+        """One short line for the status bar and for speech."""
+        return ""
+
+    def close(self):
+        raise NotImplementedError
+
+
+class IcecastDestination(Destination):
+    """The path that already worked: an `Encoder` feeding a `Sink`.
+
+    This is a wrapper and deliberately nothing more. Every decision inside it
+    was made and tested before this class existed, so it delegates rather than
+    reimplementing, and `SERVERS` stays the registry it always was. A test that
+    puts its own sink in `SERVERS` still works, which is the point.
+    """
+
+    def __init__(self, settings, bus_samplerate):
+        self.settings = dict(settings)
+        self.bus_samplerate = int(bus_samplerate)
+        self.encoder = None
+        self.sink = None
+        kind = self.settings.get("server", "icecast")
+        self._label, self._factory = SERVERS.get(kind, SERVERS["icecast"])
+        self.format = self.settings.get("format", "mp3")
+        self.spec = FORMATS.get(self.format) or FORMATS["mp3"]
+        self.bitrate = int(self.settings.get("bitrate", 128))
+        self.bytes_sent = 0
+
+    def connect(self):
+        # Built first, because the sink has to be told the rate the encoder
+        # settled on. Everything after this point is inside a try, because a
+        # server that is down or a password that is wrong raises out of
+        # connect() and an encoder that is never assigned is never closed:
+        # a FFmpeg codec context and its buffers, leaked once per attempt,
+        # and the reconnect loop attempts every few seconds all night.
+        encoder = Encoder(self._write, fmt=self.format,
+                          samplerate=self.bus_samplerate, bitrate=self.bitrate)
+        try:
+            sink = self._factory(
+                host=self.settings.get("host", ""),
+                port=int(self.settings.get("port", 8000)),
+                mount=self.settings.get("mount", "/live"),
+                user=self.settings.get("user", "source"),
+                password=self.settings.get("password", ""),
+                content_type=self.spec["content_type"],
+                name=self.settings.get("name", ""),
+                description=self.settings.get("description", ""),
+                genre=self.settings.get("genre", ""),
+                url=self.settings.get("url", ""),
+                bitrate=self.bitrate,
+                samplerate=encoder.samplerate,
+                public=bool(self.settings.get("public", False)),
+            )
+            sink.connect()
+        except Exception:
+            try:
+                encoder.close()
+            except Exception:
+                pass
+            raise
+        self.sink = sink
+        self.encoder = encoder
+        self.samplerate = encoder.samplerate
+        return self
+
+    def _write(self, data):
+        """The encoder's bytes, straight out of the door."""
+        sink = self.sink
+        if sink is None:
+            return
+        sink.write(data)
+        self.bytes_sent += len(data)
+
+    def feed(self, block):
+        if self.encoder is not None:
+            self.encoder.feed(block)
+
+    def send_metadata(self, title):
+        if self.sink is None:
+            return False
+        return self.sink.send_metadata(title)
+
+    def describe(self):
+        return "%d k %s to %s" % (self.bitrate, self.spec["label"],
+                                  self.settings.get("host", ""))
+
+    def close(self):
+        encoder, self.encoder = self.encoder, None
+        sink, self.sink = self.sink, None
+        # The encoder is closed first so its last packets have somewhere to
+        # go, so the sink is put back for the length of that call.
+        if encoder is not None:
+            self.sink = sink
+            try:
+                encoder.close()
+            except Exception:
+                pass
+            self.sink = None
+        if sink is not None:
+            try:
+                sink.close()
+            except Exception:
+                pass
+
+
+def _video_options(encoder, fps):
+    """Encoder options that give the keyframe interval the platforms want.
+
+    A keyframe every two seconds is what YouTube asks for and what Facebook
+    expects, and four seconds is the most either will take. Getting it wrong
+    is the classic "it connects and then the platform calls the stream
+    unhealthy", so it is worth being exact rather than hopeful.
+
+    **The two encoders need different arguments for it, which was measured on
+    7 September 2026 and is not obvious.** `h264_mf` honours a plain `g` and
+    puts keyframes exactly where it is told. `libx264` does NOT: `g` is only a
+    maximum, and its scene cut detector inserts extra keyframes whenever the
+    picture changes a lot. Measured with `preset=veryfast tune=zerolatency
+    g=60`, libx264 emitted a keyframe every SEVEN frames on changing content,
+    which is most of the bitrate spent on keyframes. `tune=zerolatency` does
+    not turn that off; only `sc_threshold=0` does, with `keyint_min` to stop
+    it going the other way.
+
+    Cutting between a card and a camera is exactly the kind of change that
+    triggers it, so this is not a theoretical case for this app.
+    """
+    interval = int(fps * C.RTMP_KEYFRAME_SECONDS)
+    options = {"g": str(interval)}
+    if encoder == "libx264":
+        options.update({
+            "preset": "veryfast",
+            "tune": "zerolatency",
+            # No B frames: they need reordering and a live FLV has nowhere to
+            # reorder into.
+            "bf": "0",
+            "keyint_min": str(interval),
+            "sc_threshold": "0",
+        })
+    return options
+
+
+class RtmpDestination(Destination):
+    """YouTube, Facebook, Twitch, or any RTMP server, with a picture.
+
+    **A picture is not optional.** YouTube refuses an ingest with no video
+    track, so even a radio show going out on YouTube has to send something.
+    That is what the card is for: a still image costs about 64 kbps and six
+    per cent of one core, measured, so a show with no camera pays almost
+    nothing for the picture it is obliged to send.
+
+    **The audio is the master clock and the video is stamped against it.** A
+    camera is a second clock and it is never quite the same speed as the sound
+    card, so a video frame is timestamped by where the AUDIO has got to rather
+    than by when the frame turned up. A camera running slow repeats a frame,
+    one running fast has a frame dropped, and neither drifts. Measured over
+    five seconds of this design: two milliseconds apart at the end, where lip
+    sync wants to be inside a hundred.
+
+    Video is pulled, never pushed. `feed` is called with audio from the
+    `Streamer` thread and asks the picture source for whatever frames that
+    audio has now paid for, so everything stays on one thread and one clock.
+    """
+
+    wants_video = True
+
+    def __init__(self, settings, bus_samplerate, video_source=None):
+        if av is None:
+            raise EncoderError(
+                "the encoder is missing, so this copy cannot stream")
+        self.settings = dict(settings)
+        self.bus_samplerate = int(bus_samplerate)
+        self.video_source = video_source
+        self.samplerate = int(settings.get("samplerate") or 44100)
+        self.bitrate = int(self.settings.get("bitrate", 128))
+        self.video_bitrate = int(self.settings.get("video_bitrate",
+                                                   C.RTMP_VIDEO_BITRATE))
+        self.width = int(self.settings.get("video_width", C.RTMP_WIDTH))
+        self.height = int(self.settings.get("video_height", C.RTMP_HEIGHT))
+        self.fps = int(self.settings.get("video_fps", C.RTMP_FPS))
+        self.encoder_name = self.settings.get("video_encoder",
+                                              C.RTMP_VIDEO_ENCODER)
+        self._container = None
+        self._audio = None
+        self._video = None
+        self._apts = 0
+        self._frames_sent = 0
+        self._pending = np.zeros((0, CHANNELS), dtype=np.float32)
+        self.bytes_sent = 0
+
+    # ------------------------------------------------------------------ url --
+    def url(self):
+        """Where this goes. A saved server plus the key, or a whole URL.
+
+        The key is kept apart from the URL everywhere else in the app, because
+        it is a credential and the URL is not. They only meet here.
+        """
+        base = (self.settings.get("host") or "").strip()
+        key = (self.settings.get("password") or "").strip()
+        if not base:
+            raise SinkError("there is no server address for this station")
+        if not key:
+            raise SinkError("there is no stream key for this station")
+        return base.rstrip("/") + "/" + key
+
+    # -------------------------------------------------------------- opening --
+    def connect(self):
+        url = self.url()
+        parsed = urllib.parse.urlparse(self.settings.get("host", ""))
+        if parsed.hostname:
+            _resolve(parsed.hostname, parsed.port)
+        try:
+            container = av.open(url, mode="w", format="flv",
+                                options={"rtmp_live": "live"},
+                                timeout=C.STREAM_TIMEOUT)
+        except Exception as exc:
+            raise SinkError(_explain_rtmp(exc, self.settings)) from exc
+        try:
+            video = container.add_stream(self.encoder_name, rate=self.fps)
+            video.width = self.width
+            video.height = self.height
+            video.pix_fmt = "yuv420p"
+            video.bit_rate = self.video_bitrate * 1000
+            video.time_base = fractions.Fraction(1, 1000)
+            video.options = _video_options(self.encoder_name, self.fps)
+            audio = container.add_stream("aac", rate=self.samplerate)
+            audio.bit_rate = self.bitrate * 1000
+            audio.layout = "stereo"
+            audio.time_base = fractions.Fraction(1, self.samplerate)
+        except Exception as exc:
+            try:
+                container.close()
+            except Exception:
+                pass
+            raise EncoderError("the video encoder would not start: %s"
+                               % exc) from exc
+
+        # **av.open does NOT connect.** Measured 7 September 2026: opening an
+        # RTMP URL for writing succeeds against a server that is not running,
+        # because FFmpeg does not touch the network until the header is
+        # written. Without this line a dead server, a wrong address or a
+        # refused key all got as far as ON AIR and only then dropped, so the
+        # app told a presenter they were live when nothing was listening.
+        # start_encoding() writes the header, which is what makes the
+        # handshake happen, so the failure lands here where the retry loop
+        # expects it and the state is honest.
+        try:
+            container.start_encoding()
+        except Exception as exc:
+            try:
+                container.close()
+            except Exception:
+                pass
+            raise SinkError(_explain_rtmp(exc, self.settings)) from exc
+
+        self._container = container
+        self._audio = audio
+        self._video = video
+        self.frame_size = int(audio.codec_context.frame_size or 1024)
+        return self
+
+    # -------------------------------------------------------------- feeding --
+    def feed(self, block):
+        """Audio in. Video is pulled to match, so this drives both."""
+        if self._container is None:
+            return
+        if len(self._pending):
+            block = np.concatenate((self._pending, block))
+        n = self.frame_size
+        whole = (len(block) // n) * n
+        for start in range(0, whole, n):
+            self._encode_audio(block[start:start + n])
+        self._pending = block[whole:].copy()
+        self._pump_video()
+
+    def _encode_audio(self, chunk):
+        planar = np.ascontiguousarray(chunk.T.astype(np.float32))
+        frame = av.AudioFrame.from_ndarray(planar, format="fltp",
+                                           layout="stereo")
+        frame.rate = self.samplerate
+        frame.pts = self._apts
+        frame.time_base = fractions.Fraction(1, self.samplerate)
+        self._apts += len(chunk)
+        for packet in self._audio.encode(frame):
+            self._mux(packet)
+
+    @property
+    def audio_seconds(self):
+        """Where the master clock has got to."""
+        return self._apts / float(self.samplerate or 1)
+
+    def _pump_video(self):
+        """Send whatever frames the audio clock has now paid for."""
+        if self._video is None:
+            return
+        due = int(self.audio_seconds * self.fps)
+        # A cap, so a long stall does not then try to send a thousand frames
+        # in one go and block the thread that is also carrying the audio.
+        due = min(due, self._frames_sent + self.fps)
+        while self._frames_sent < due:
+            picture = self._picture()
+            if picture is None:
+                return
+            frame = av.VideoFrame.from_ndarray(picture, format="rgb24")
+            frame = frame.reformat(format="yuv420p")
+            frame.pts = int(round(self._frames_sent * 1000.0 / self.fps))
+            frame.time_base = fractions.Fraction(1, 1000)
+            self._frames_sent += 1
+            for packet in self._video.encode(frame):
+                self._mux(packet)
+
+    def _picture(self):
+        """The next picture, or black when there is no source yet."""
+        source = self.video_source
+        if source is None:
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        try:
+            return source.frame(self.width, self.height)
+        except Exception:
+            # A picture source that throws must not take the stream down. The
+            # show carries on with the last thing that worked, or with black.
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+    def _mux(self, packet):
+        # PyAV owns the socket here, so there is no write to count. The size
+        # of what is handed to the muxer is close enough, and what it is for
+        # is proving the stream is alive rather than billing anybody.
+        self.bytes_sent += packet.size or 0
+        try:
+            self._container.mux(packet)
+        except Exception as exc:
+            raise SinkError("the connection to the server dropped: %s"
+                            % exc) from exc
+
+    # ------------------------------------------------------------- the rest --
+    def send_metadata(self, title):
+        """RTMP carries no title the way Icecast does.
+
+        YouTube and Facebook take the title from the broadcast set up on their
+        own site, not from the stream, so there is nothing to send and saying
+        so here is better than a silent no-op somebody later calls a bug.
+        """
+        return False
+
+    def describe(self):
+        return "%dk video, %dk audio to %s" % (
+            self.video_bitrate, self.bitrate,
+            _host_of(self.settings.get("host", "")))
+
+    def close(self):
+        container, self._container = self._container, None
+        if container is None:
+            return
+        try:
+            if self._video is not None:
+                for packet in self._video.encode(None):
+                    container.mux(packet)
+            if self._audio is not None:
+                for packet in self._audio.encode(None):
+                    container.mux(packet)
+        except Exception:
+            pass
+        try:
+            container.close()
+        except Exception:
+            pass
+        self._audio = None
+        self._video = None
+
+
+def _host_of(url):
+    """Just the host, for saying out loud. A URL with a key in it is not."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.hostname or url
+    except Exception:
+        return url
+
+
+def _resolve(host, port):
+    """Look the server up before FFmpeg does, so a typo says it is a typo.
+
+    This exists because of what FFmpeg gives back otherwise. Measured on
+    7 September 2026 against a real RTMP client:
+
+        a port nothing listens on   [Errno 138] Error number -138 occurred
+        a host that does not exist  [Errno 5] I/O error
+        an address off the network  [Errno 138] Error number -138 occurred
+
+    "Error number -138 occurred" is not something to say to a presenter, and
+    `Errno 5` is worse than useless because it is ALSO what the platform
+    returns for a stream key it will not take. Two completely different
+    problems, one meaningless message, and the fix for each is different.
+
+    Resolving here separates them: a name that will not resolve is reported as
+    a name that will not resolve, and after this an I/O error really is the
+    server refusing us, which is nearly always the key.
+    """
+    try:
+        socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        raise SinkError(
+            "could not find %s. Check the server address" % host) from None
+
+
+def _explain_rtmp(exc, settings):
+    """Turn FFmpeg's RTMP errors into something worth hearing."""
+    text = str(exc)
+    host = _host_of(settings.get("host", ""))
+    lowered = text.lower()
+    if "timed out" in lowered or "timeout" in lowered:
+        return "%s did not answer" % host
+    if "-138" in text or "Errno 138" in text or "refused" in lowered:
+        return ("could not reach %s. Check the address and the port, and that "
+                "nothing is blocking it" % host)
+    if "Errno 5" in text or "I/O error" in lowered or "Immediate exit" in text:
+        # DNS was checked before this, so a refusal here is the far end saying
+        # no, and the key is what it says no to.
+        return ("%s would not take the stream key. Check it has been copied "
+                "in full and has not expired" % host)
+    if "Errno 13" in text or "denied" in lowered:
+        return "%s refused the connection" % host
+    # Anything unmatched still names the host and drops the errno, because a
+    # number nobody can act on is not worth the words it takes to say.
+    return "could not connect to %s" % host
+
+
+#: Which destination a saved server uses. Anything not named here is an
+#: Icecast family server, which keeps `SERVERS` the registry it always was and
+#: means a test can still put its own sink in there.
+DESTINATIONS = {
+    "youtube": RtmpDestination,
+    "facebook": RtmpDestination,
+    "rtmp": RtmpDestination,
+}
+
+#: What the RTMP ones are called on screen. `SERVERS` cannot hold these: it
+#: maps a name to a SINK CLASS, and an RTMP destination has no sink because
+#: FFmpeg owns the socket.
+RTMP_LABELS = {
+    "youtube": "YouTube Live",
+    "facebook": "Facebook Live",
+    "rtmp": "Custom RTMP server",
+}
+
+
+def server_label(key):
+    """What one server is called, whichever kind it is.
+
+    The Streaming tab needs a label for every entry in STREAM_SERVER_ORDER,
+    and those now come from two registries. Asking here rather than indexing
+    SERVERS directly is what stops a new destination raising KeyError in the
+    Preferences box, which is exactly how this broke the first time.
+    """
+    if key in SERVERS:
+        return SERVERS[key][0]
+    return RTMP_LABELS.get(key, key)
+
+
+def is_rtmp(key):
+    """Whether this server wants a stream key and a picture."""
+    return key in DESTINATIONS
+
+
+def destination_for(settings, bus_samplerate, video_source=None):
+    """The right destination for what the user picked."""
+    kind = settings.get("server", "icecast")
+    factory = DESTINATIONS.get(kind)
+    if factory is None:
+        return IcecastDestination(settings, bus_samplerate)
+    return factory(settings, bus_samplerate, video_source=video_source)
+
+
+# ---------------------------------------------------------------------------
 # The thread that joins the ring to the socket
 # ---------------------------------------------------------------------------
 
@@ -728,8 +1243,7 @@ class Streamer:
 
         self._thread = None
         self._stop = threading.Event()
-        self._sink = None
-        self._encoder = None
+        self._destination = None
         self._resampler = None
         self._lock = threading.Lock()
         self._title = ""
@@ -738,7 +1252,10 @@ class Streamer:
         #: Numbers worth telling the user about, all read without a lock
         #: because they are only ever written here and only ever read for
         #: display.
-        self.bytes_sent = 0
+        #: Bytes from destinations that have already closed. The live one is
+        #: added in the property below, because a counter that only updates
+        #: when the stream ENDS reads as a dead stream for the whole show.
+        self._bytes_closed = 0
         self.started_at = 0.0
         self.attempts = 0
         self.reconnects = 0
@@ -778,6 +1295,12 @@ class Streamer:
         return self._thread is not None and self._thread.is_alive()
 
     @property
+    def bytes_sent(self):
+        """How much has gone out, including the connection running now."""
+        live = getattr(self._destination, "bytes_sent", 0) or 0
+        return self._bytes_closed + live
+
+    @property
     def on_air_for(self):
         """Seconds on air, or 0. What a presenter actually wants to know."""
         if self.state != ON_AIR or not self.started_at:
@@ -793,14 +1316,14 @@ class Streamer:
     def _push_title(self):
         with self._lock:
             title = self._title
-        if title == self._sent_title or self._sink is None:
+        if title == self._sent_title or self._destination is None:
             return
         # Marked as sent whether or not it worked. Retrying a title every pass
         # would be a request a second at the far end for as long as a server
         # is unhappy, and the next track will put it right anyway.
         self._sent_title = title
         try:
-            self._sink.send_metadata(title)
+            self._destination.send_metadata(title)
         except Exception:
             pass
 
@@ -817,78 +1340,34 @@ class Streamer:
 
     # ---------------------------------------------------------------- work --
     def _build(self):
-        """Make the socket and the encoder. Raises with a sayable reason."""
-        kind = self.settings.get("server", "icecast")
-        label, factory = SERVERS.get(kind, SERVERS["icecast"])
-        fmt = self.settings.get("format", "mp3")
-        spec = FORMATS.get(fmt) or FORMATS["mp3"]
-        bitrate = int(self.settings.get("bitrate", 128))
+        """Make the destination. Raises with a sayable reason."""
+        destination = destination_for(self.settings, self.bus.samplerate)
+        destination.connect()
+        self._destination = destination
+        self._resampler = _Resampler(self.bus.samplerate,
+                                     destination.samplerate)
+        return destination
 
-        # Built first, because the sink has to be told the rate the encoder
-        # settled on. Everything after this point is inside a try, because a
-        # server that is down or a password that is wrong raises out of
-        # connect() and an encoder that is never assigned is never closed:
-        # a FFmpeg codec context and its buffers, leaked once per attempt,
-        # and the reconnect loop attempts every few seconds all night.
-        encoder = Encoder(self._on_bytes, fmt=fmt,
-                          samplerate=self.bus.samplerate, bitrate=bitrate)
-        try:
-            return self._connect(encoder, factory, spec, bitrate)
-        except Exception:
-            try:
-                encoder.close()
-            except Exception:
-                pass
-            raise
+    # `_encoder` and `_sink` were attributes before destinations existed, and
+    # the tests and the UI still read them. They are answers about the live
+    # destination now rather than state of their own, so there is only one
+    # place a connection is remembered.
+    @property
+    def _encoder(self):
+        return getattr(self._destination, "encoder", None)
 
-    def _connect(self, encoder, factory, spec, bitrate):
-        """The half that can fail. Split out so the encoder can be closed."""
-        sink = factory(
-            host=self.settings.get("host", ""),
-            port=int(self.settings.get("port", 8000)),
-            mount=self.settings.get("mount", "/live"),
-            user=self.settings.get("user", "source"),
-            password=self.settings.get("password", ""),
-            content_type=spec["content_type"],
-            name=self.settings.get("name", ""),
-            description=self.settings.get("description", ""),
-            genre=self.settings.get("genre", ""),
-            url=self.settings.get("url", ""),
-            bitrate=bitrate,
-            samplerate=encoder.samplerate,
-            public=bool(self.settings.get("public", False)),
-        )
-        sink.connect()
-        self._sink = sink
-        self._encoder = encoder
-        self._resampler = _Resampler(self.bus.samplerate, encoder.samplerate)
-        return sink
-
-    def _on_bytes(self, data):
-        """Called by the encoder, on this thread. Straight out of the door."""
-        sink = self._sink
-        if sink is None:
-            return
-        sink.write(data)
-        self.bytes_sent += len(data)
+    @property
+    def _sink(self):
+        return getattr(self._destination, "sink", None)
 
     def _teardown(self):
-        encoder, self._encoder = self._encoder, None
-        sink, self._sink = self._sink, None
-        # The encoder is closed first so its last packets have somewhere to
-        # go, and the sink is dropped first inside _on_bytes if it has gone.
-        if encoder is not None:
-            self._sink = sink
+        destination, self._destination = self._destination, None
+        if destination is not None:
             try:
-                encoder.close()
+                destination.close()
             except Exception:
                 pass
-            self._sink = None
-        if sink is not None:
-            try:
-                sink.close()
-            except Exception:
-                pass
+            self._bytes_closed += getattr(destination, "bytes_sent", 0) or 0
         self._sent_title = None
 
     def _run(self):
@@ -950,6 +1429,8 @@ class Streamer:
         return not any(word in self.error for word in bad)
 
     def _describe(self):
+        if self._destination is not None:
+            return self._destination.describe()
         return "%d k %s to %s" % (int(self.settings.get("bitrate", 128)),
                                   FORMATS.get(self.settings.get("format", "mp3"),
                                               FORMATS["mp3"])["label"],
@@ -965,10 +1446,10 @@ class Streamer:
         """
         try:
             left = self.bus.available()
-            if left and self._encoder is not None:
+            if left and self._destination is not None:
                 block = self._resampler.feed(self.bus.read(left))
                 if len(block):
-                    self._encoder.feed(block)
+                    self._destination.feed(block)
         except Exception:
             pass          # never let tidying up raise on the way out
 
@@ -1018,7 +1499,7 @@ class Streamer:
             block = self.bus.read(chunk)
             block = self._resampler.feed(block)
             if len(block):
-                self._encoder.feed(block)
+                self._destination.feed(block)
             self._push_title()
 
 
