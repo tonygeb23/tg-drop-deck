@@ -5,8 +5,32 @@ Written 7 September 2026, before any of it is built. Companion to
 Icecast encoder that now ships. That document parked RTMP as "not urgent".
 This one takes it off the shelf.
 
-Nothing here is implemented. Everything in section 1 was measured on Tony's
-machine on 7 September 2026, not assumed.
+Everything in section 1 was measured on Tony's machine on 7 September 2026,
+not assumed.
+
+## Where this has got to
+
+Steps 1 to 4 and 7 to 8 of section 7 are built and tested offline. Nothing has
+left the machine and none of it is reachable from the UI yet.
+
+| Built | What it is |
+|---|---|
+| `streamout.Destination` | Icecast and RTMP behind one door. The 124 existing streaming checks pass unchanged |
+| `streamout.RtmpDestination` | YouTube, Facebook, Twitch, any RTMP. Audio is the master clock |
+| `picture.py` | The card, image files, and the fallback that keeps a show up |
+| `camera.py` | Enumeration, capture on its own thread, and errors worth hearing |
+| `framing.py` | What the camera can see, said out loud without becoming a commentary |
+| `secrets.py` | Stream keys in Windows Credential Manager, out of the board file |
+| `tools/mock_rtmp.py` | A real RTMP server, so a test never needs the internet |
+
+**Still to do:** the UI and the settings, then a real broadcast to YouTube and
+to Facebook. Nothing about steps 5 and 6 is written yet, and they are the first
+point anything leaves the machine.
+
+Measured end to end on the mock server: a 4 second publish gives back 119 of
+120 video frames, the tone that was sent, and 38 ms of drift. With the real
+camera as the source, 239 frames came back with the room's own luminance on
+them.
 
 **Windows first.** The concept gets proved and nailed down on Windows, tested
 offline before anything is installed, pushed or deployed. The Mac copy is not
@@ -206,22 +230,31 @@ primary interface here and the announcements are the backstop**, because a
 presenter setting up a shot wants to ask repeatedly for ten seconds and then
 never again.
 
-### The detector
+### The detector, now built and measured
 
 OpenCV 5.0 is installed on this machine but **has removed `CascadeClassifier`**,
 so the old Haar route is gone. What is left is `FaceDetectorYN`, which is
 better anyway: a small neural detector that handles angles and glasses, where
 Haar wanted a square-on face in good light.
 
-It needs `face_detection_yunet_2023mar.onnx`, about 337 KB, from the OpenCV
-Zoo. **That file has to be downloaded and bundled**, and it is the one new asset
-this feature needs. It sits beside the exe with the demo pack rather than
-inside the bundle, for the same reason.
+It uses `face_detection_yunet_2023mar.onnx`, 227 KB, from the OpenCV Zoo and
+**MIT licensed**, which after section 4 is a relief. Provenance and the reason
+for this version rather than the newest are in
+[assets/models/README.md](../assets/models/README.md).
 
-Cost is not a concern. Detection runs on a 320x180 grey copy two or three times
-a second, not on every frame. Converting to grey is 5.7 ms and the resize is
-0.2 ms; YuNet at that size is single digit milliseconds. Call it 20 ms three
-times a second, which is six per cent of one core.
+**Measured against Tony's own camera, twice, on 7 September 2026:** a face
+found in 36 of 36 checks and then 17 of 17, at **3.0 to 4.8 ms** average and
+18.7 ms at worst. Three checks a second is around six per cent of one core.
+
+**The thresholds were wrong in the first draft of this document and are now
+measured.** Tony at ordinary desk distance reads as a face 0.12 of the frame
+wide, centred at 0.55 across and 0.46 down, in a room at 118 of 255. The draft
+called anything under 0.15 "far away", which would have told him he was too
+far from a camera he was sitting normally in front of. The numbers live in
+`constants.py` with that warning next to them.
+
+**The anti-repetition design works and there is a number for it.** At the most
+verbose level, six seconds and seventeen looks produced **one** spoken line.
 
 **OpenCV is a new dependency and it is not small**, roughly 40 to 90 MB
 installed depending on the wheel. The download is already 60 MB for the

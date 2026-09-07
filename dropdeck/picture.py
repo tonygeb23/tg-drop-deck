@@ -401,9 +401,42 @@ class FallbackSource(PictureSource):
             return "%s, showing a card instead" % self.primary.describe()
         return self.primary.describe()
 
+    def set_title(self, title):
+        for source in (self.primary, self.backup):
+            setter = getattr(source, "set_title", None)
+            if setter is not None:
+                setter(title)
+
     def close(self):
         for source in (self.primary, self.backup):
             try:
                 source.close()
             except Exception:
                 pass
+
+
+def build(settings, on_fallback=None):
+    """The picture source one station's settings ask for.
+
+    A camera and a picture file both get the card behind them, because a
+    camera that is unplugged or a file that has been moved must not be the end
+    of a broadcast. The card alone needs no such thing: it cannot fail.
+    """
+    card = CardSource(name=settings.get("name") or settings.get("stream_name")
+                      or "TG Drop Deck",
+                      title=settings.get("title", ""),
+                      clock=bool(settings.get("picture_clock", False)))
+    kind = settings.get("picture", C.PICTURE_CARD)
+    if kind == C.PICTURE_IMAGE:
+        primary = ImageSource(settings.get("picture_file", ""))
+    elif kind == C.PICTURE_CAMERA:
+        # Imported here rather than at the top: picture.py is what camera.py
+        # imports, and the other way round as well would be a cycle.
+        from .camera import CameraSource
+        primary = CameraSource(settings.get("camera", ""),
+                               settings.get("video_width"),
+                               settings.get("video_height"),
+                               settings.get("video_fps"))
+    else:
+        return card
+    return FallbackSource(primary, card, on_fallback)

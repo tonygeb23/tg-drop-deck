@@ -939,8 +939,10 @@ class RtmpDestination(Destination):
         if parsed.hostname:
             _resolve(parsed.hostname, parsed.port)
         try:
+            # No rtmp_live here: it is an INPUT option, for playing a stream
+            # rather than publishing one, and FFmpeg says "Some options were
+            # not used" if it is passed on the way out.
             container = av.open(url, mode="w", format="flv",
-                                options={"rtmp_live": "live"},
                                 timeout=C.STREAM_TIMEOUT)
         except Exception as exc:
             raise SinkError(_explain_rtmp(exc, self.settings)) from exc
@@ -1233,9 +1235,13 @@ class Streamer:
     """
 
     def __init__(self, bus, settings, on_state=None, on_title=None,
-                 on_trouble=None):
+                 on_trouble=None, video_source=None):
         self.bus = bus
         self.settings = dict(settings)
+        #: What goes on the screen, for a destination that needs a picture.
+        #: Built by the caller, because the card wants the station name and
+        #: a camera wants a device, and neither is this class's business.
+        self.video_source = video_source
         self.on_state = on_state or (lambda state, detail: None)
         self.state = OFF
         self.detail = ""
@@ -1309,9 +1315,20 @@ class Streamer:
 
     # -------------------------------------------------------------- titles --
     def set_title(self, title):
-        """What is playing. Sent to the server when it changes, not before."""
+        """What is playing. Sent to the server when it changes, not before.
+
+        It also goes to the picture. On Icecast the server shows the title to
+        listeners; on RTMP there is nowhere to send one, so the card IS where
+        somebody watching finds out what is on. Same call, both covered.
+        """
         with self._lock:
             self._title = title or ""
+        setter = getattr(self.video_source, "set_title", None)
+        if setter is not None:
+            try:
+                setter(title or "")
+            except Exception:
+                pass
 
     def _push_title(self):
         with self._lock:
@@ -1341,7 +1358,8 @@ class Streamer:
     # ---------------------------------------------------------------- work --
     def _build(self):
         """Make the destination. Raises with a sayable reason."""
-        destination = destination_for(self.settings, self.bus.samplerate)
+        destination = destination_for(self.settings, self.bus.samplerate,
+                                      video_source=self.video_source)
         destination.connect()
         self._destination = destination
         self._resampler = _Resampler(self.bus.samplerate,

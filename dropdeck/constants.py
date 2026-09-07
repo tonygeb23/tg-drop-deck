@@ -815,3 +815,68 @@ PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA)
 CARD_BACKGROUND = (14, 18, 28)
 CARD_FOREGROUND = (240, 242, 248)
 CARD_ACCENT = (110, 170, 255)
+
+#: How long to wait for a camera's first frame. Measured 7 September 2026 on a
+#: real webcam: 0.58 seconds from open to first frame. Five is generous and
+#: still short enough that a presenter is not left wondering.
+CAMERA_OPEN_TIMEOUT = 5.0
+CAMERA_STOP_TIMEOUT = 3.0
+
+#: Past this, the last frame is a photograph rather than a camera feed, and
+#: anything that reports on the shot should say it does not know.
+CAMERA_STALE_SECONDS = 2.0
+
+#: FFmpeg's own capture buffer. A camera that delivers faster than it is
+#: drained fills this and then logs about dropping frames.
+CAMERA_BUFFER = "64M"
+
+
+# ---------------------------------------------------------------------------
+# Knowing what the camera can see, without being able to look at it
+# ---------------------------------------------------------------------------
+
+FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
+
+#: What the detector is fed. Small on purpose: at this size it costs 3 ms, and
+#: a face big enough to matter is still tens of pixels across. The height is
+#: worked out from the camera's own shape, so a 4:3 camera is not squashed.
+FACE_INPUT_WIDTH = 320
+FACE_INPUT_HEIGHT = 180
+
+#: Below this, YuNet's answer is not worth acting on.
+FACE_CONFIDENCE = 0.6
+
+#: Three times a second. Fast enough that walking out of shot is noticed
+#: almost at once, slow enough to be six per cent of one core.
+FACE_CHECK_SECONDS = 0.35
+
+#: THESE WERE MEASURED, NOT CHOSEN, and the first draft of them was wrong.
+#: On a real 720p webcam at ordinary desk distance a face is about 0.12 of
+#: the frame width, and a guessed threshold of 0.15 called that "far away".
+#: Anything changed here should be checked against a real camera at a real
+#: sitting distance, not reasoned about.
+#:
+#: Horizontal and vertical are the centre of the face as a fraction of the
+#: frame. The bands are wide because "centred" means "nobody needs to do
+#: anything", not "exactly in the middle".
+FACE_LEFT_EDGE = 0.35
+FACE_RIGHT_EDGE = 0.65
+FACE_TOP_EDGE = 0.28
+FACE_BOTTOM_EDGE = 0.70
+
+#: Face width as a fraction of frame width.
+FACE_FAR_BELOW = 0.07
+FACE_CLOSE_ABOVE = 0.30
+
+#: How much further a reading has to travel to change back than it did to
+#: change. Without this a face resting on a boundary flips the answer several
+#: times a second, and the floor below then hides real changes behind wobble.
+FACE_HYSTERESIS = 0.04
+FACE_SIZE_HYSTERESIS = 0.02
+
+#: Mean brightness, 0 to 255. Measured in a normally lit room: 118.
+FACE_DARK_BELOW = 60
+
+#: The least time between two things being said about the shot. A show is
+#: three hours long and this is speech on top of a screen reader, on air.
+FACE_SAY_FLOOR = 4.0

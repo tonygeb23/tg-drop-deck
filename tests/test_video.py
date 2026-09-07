@@ -452,6 +452,144 @@ check("and it stops cleanly", not dead.running)
 
 
 # ---------------------------------------------------------------------------
+print("\nPicking a picture source")
+# ---------------------------------------------------------------------------
+
+plain = picture.build({"picture": C.PICTURE_CARD, "name": "My Station"})
+check("a card is just a card, with nothing behind it",
+      isinstance(plain, picture.CardSource), type(plain).__name__)
+check("and it takes the station name", plain.name == "My Station")
+
+with_art = picture.build({"picture": C.PICTURE_IMAGE,
+                          "picture_file": art_path, "name": "S"})
+check("a picture file gets the card behind it",
+      isinstance(with_art, picture.FallbackSource), type(with_art).__name__)
+check("and still reports itself as a picture",
+      with_art.kind == C.PICTURE_IMAGE, with_art.kind)
+
+cam = picture.build({"picture": C.PICTURE_CAMERA, "camera": "Nothing At All",
+                     "name": "S", "video_width": 640, "video_height": 360})
+check("a camera gets the card behind it too",
+      isinstance(cam, picture.FallbackSource))
+cam.start()
+fell = cam.frame(640, 360)
+check("a camera that does not exist still gives a picture",
+      fell.shape == (360, 640, 3), fell.shape)
+check("and that picture is the card", ink(fell) > 0)
+cam.close()
+
+titled = picture.build({"picture": C.PICTURE_IMAGE, "picture_file": art_path,
+                        "name": "S"})
+titled.set_title("A Song")
+check("a title reaches the card behind a failed source",
+      titled.backup.title == "A Song", titled.backup.title)
+
+unknown = picture.build({"picture": "something new"})
+check("a picture kind nobody has heard of falls back to a card",
+      isinstance(unknown, picture.CardSource))
+
+
+# ---------------------------------------------------------------------------
+print("\nThe title reaches the picture, not just the server")
+# ---------------------------------------------------------------------------
+
+live_card = picture.CardSource(name="Station")
+bus = AirBus(RATE)
+teller = Streamer(bus, {"server": "rtmp", "host": "rtmp://127.0.0.1:9",
+                        "password": "k"}, video_source=live_card)
+teller.set_title("Kate Bush - Cloudbusting")
+check("what is playing goes to the card, because RTMP carries no title",
+      live_card.title == "Kate Bush - Cloudbusting", live_card.title)
+check("and an RTMP destination says plainly that it cannot send one",
+      streamout.RtmpDestination({"host": "rtmps://x", "password": "k"},
+                                RATE).send_metadata("Anything") is False)
+
+teller.video_source = object()          # something with no set_title
+try:
+    teller.set_title("Still fine")
+    check("a picture source with no title setter is not a crash", True)
+except Exception as exc:
+    check("a picture source with no title setter is not a crash", False, exc)
+
+
+# ---------------------------------------------------------------------------
+print("\nWhere a stream key is kept, which is not the board file")
+# ---------------------------------------------------------------------------
+
+from dropdeck import secrets
+
+check("the board file's station fields are still the old ones",
+      "stream_password" in __import__("dropdeck.board", fromlist=["board"]
+                                      ).STATION_FIELDS)
+check("a key is never shown in full", "abcdefghijkl" not in
+      secrets.redact("abcdefghijkl"), secrets.redact("abcdefghijkl"))
+check("but enough of it to recognise",
+      secrets.redact("abcdefghijkl").endswith("ijkl"),
+      secrets.redact("abcdefghijkl"))
+check("and no key at all says so", secrets.redact("") == "not set")
+check("a very short key is not half shown", secrets.redact("ab") == "set")
+
+if secrets.available():
+    station = "zz drop deck test station"
+    key = "live-abcd-1234-wxyz"
+    check("a key can be kept outside the board file",
+          secrets.store(station, key))
+    check("and read back exactly", secrets.fetch(station) == key)
+    check("a key with unicode in it survives",
+          secrets.store(station, "key-éü") and
+          secrets.fetch(station) == "key-éü")
+    check("forgetting one really removes it",
+          secrets.forget(station) and secrets.fetch(station) == "")
+    check("forgetting one twice is not a failure", secrets.forget(station))
+    check("and an unknown station reads as empty rather than raising",
+          secrets.fetch("zz no such station here") == "")
+else:
+    print("  skipped: no credential store on this machine")
+
+
+# ---------------------------------------------------------------------------
+print("\nThe camera, without needing one")
+# ---------------------------------------------------------------------------
+
+from dropdeck import camera
+
+check("a camera in use is explained, not reported as an errno",
+      "another program" in camera.explain(OSError("[Errno 5] I/O error"),
+                                          "HP HD Camera").lower(),
+      camera.explain(OSError("[Errno 5] I/O error"), "HP HD Camera"))
+check("a camera Windows refuses points at Privacy settings",
+      "privacy" in camera.explain(OSError("Permission denied"), "C").lower())
+check("a camera that has gone says it may be unplugged",
+      "unplugged" in camera.explain(OSError("Could not find video device"),
+                                    "C").lower())
+check("and the camera is named, so the user knows which one",
+      "HP HD Camera" in camera.explain(OSError("x"), "HP HD Camera"))
+check("no errno ever reaches the user",
+      "Errno" not in camera.explain(OSError("[Errno 5] I/O error"), "C"))
+
+check("sizes are said as people say them",
+      camera.describe_size(1280, 720) == "720p", camera.describe_size(1280, 720))
+check("including the rate when there is one",
+      "30 frames" in camera.describe_size(1280, 720, 30))
+check("and an odd size is still said, not hidden",
+      camera.describe_size(1234, 567) == "1234 by 567")
+
+found = camera.cameras()
+check("enumerating cameras returns a list, even with none attached",
+      isinstance(found, list), found)
+if found:
+    check("the fragmented device list is parsed into real names",
+          all(isinstance(n, str) and n and '"' not in n for n in found), found)
+    sizes = camera.capabilities(found[0])
+    check("and a camera reports what sizes it can do",
+          isinstance(sizes, list) and (not sizes or len(sizes[0]) == 3), sizes[:2])
+    check("biggest first, so the default is the best it can do",
+          len(sizes) < 2 or sizes[0][0] * sizes[0][1] >= sizes[1][0] * sizes[1][1])
+else:
+    print("  (no camera attached, so the parsing checks are skipped)")
+
+
+# ---------------------------------------------------------------------------
 print("\nFFmpeg's errors, turned into something a presenter can act on")
 # ---------------------------------------------------------------------------
 
