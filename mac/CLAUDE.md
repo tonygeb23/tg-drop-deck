@@ -381,20 +381,18 @@ Development certificate belongs to a different team, GFK2728D9X, so the first
 build signed with Developer ID changed the app's designated requirement once:
 macOS asked for the microphone again, and will not again after that.
 
-**Notarization is the one step left**, and it needs a notarytool keychain
-profile called `TGStudios`, which only Tony can make because Apple wants an
-app-specific password from his account: `mac/notarize-login.sh` does the whole
-thing in one paste. Until then `spctl --assess` says "Unnotarized Developer
-ID", a copy downloaded in a browser needs Open Anyway once, and the manual and
-the product page say so. Updates installed from inside the app never needed
-notarization, because nothing the app downloads itself is quarantined. Once the
-profile exists, `release_mac.py build` notarizes and staples on its own, and
-the sentence about Open Anyway comes out of the manual and the product page.
+**Notarized since 6 September 2026.** The notarytool keychain profile
+`TGStudios` exists on this Mac (made with `mac/notarize-login.sh` and an
+app-specific password of Tony's), so `release_mac.py build` submits every
+build to Apple, waits, staples the ticket into the bundle and asks Gatekeeper
+to assess it before anything is zipped. The first submission took about forty
+minutes; later ones are usually minutes. A downloaded copy now opens like any
+other app, and the manual and the product page say so. Updates installed from
+inside the app never needed notarization, because nothing the app downloads
+itself is quarantined.
 
 ## Still to do
 
-- **Notarisation**, above: the notarytool profile, then republish, then take
-  the Open Anyway sentence out of the manual and the product page.
 - **Hosting Audio Units in the voice chain**, the Mac's answer to the Windows
   VST3 hosting. The entitlement for it is already in place
   (`disable-library-validation`), the parameter list the chain uses is the
