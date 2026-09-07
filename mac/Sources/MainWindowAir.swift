@@ -10,6 +10,24 @@ import AppKit
 
 extension MainWindow {
 
+    /// "and it is not going out", when that is true and somebody is in a
+    /// position to care.
+    ///
+    /// The microphone reaching the air is the one thing about a show you cannot
+    /// hear for yourself: you monitor your own voice either way, so a stream
+    /// and a recording without you in it sound exactly like ones with you in it
+    /// from where you are sitting. Nothing said so until 3.3.2, and the first
+    /// person to hit it had a stream going out with no presenter on it.
+    var micOffAirNote: String? {
+        guard !board.stream.sendMic else { return nil }
+        let live = streamer.isOn, taping = recorder.isRecording
+        guard live || taping else { return nil }
+        let what = live && taping ? "the stream or the recording"
+                 : live ? "the stream" : "the recording"
+        return "Your microphone is NOT going to \(what). "
+             + "Preferences, Streaming, put the microphone on the air"
+    }
+
     // ---------------------------------------------------------- microphone ---
 
     /// Command M. The only thing in this app that ever opens a microphone.
@@ -39,7 +57,9 @@ extension MainWindow {
         }
         board.micDeviceUID = mic.deviceUID
         board.micDeviceName = mic.deviceName
-        speaker.announceState("Microphone on, \(mic.deviceName ?? "default input"). Music ducked")
+        var line = "Microphone on, \(mic.deviceName ?? "default input"). Music ducked"
+        if let warning = micOffAirNote { line += ". \(warning)" }
+        speaker.announceState(line)
         updateStatusLine()
         touch()
     }
@@ -75,7 +95,9 @@ extension MainWindow {
         }
         // The taps only feed the mixers once something is listening.
         group.syncTaps()
-        speaker.announceState("Recording to \((path as NSString).lastPathComponent)")
+        var line = "Recording to \((path as NSString).lastPathComponent)"
+        if mic.isOpen, let warning = micOffAirNote { line += ". \(warning)" }
+        speaker.announceState(line)
         updateStatusLine()
     }
 
@@ -106,7 +128,10 @@ extension MainWindow {
             self.updateStatusLine()
             self.updateAirMenu()
             switch state {
-            case .live: self.speaker.announceState("On air")
+            case .live:
+                var line = "On air"
+                if self.mic.isOpen, let warning = self.micOffAirNote { line += ". \(warning)" }
+                self.speaker.announceState(line)
             case .failed: self.speaker.announceState("Could not go on air. \(detail)")
             case .retrying: self.speaker.announceState("Off air, trying again. \(detail)")
             default: break

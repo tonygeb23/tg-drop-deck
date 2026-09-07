@@ -969,7 +969,14 @@ final class Streamer {
         var parts = [s.spoken]
         if s == .live {
             parts.append("for \(formatDuration(elapsed))")
-            parts.append("\(settings.bitrate) kbps AAC")
+            parts.append("\(settings.bitrate) kbps "
+                         + (C.streamFormatLabels[settings.format]?
+                             .components(separatedBy: ",").first ?? settings.format.uppercased()))
+            // The one thing about a live stream you cannot hear for yourself,
+            // because you are still monitoring your own voice either way.
+            if !settings.sendMic {
+                parts.append("WITHOUT your microphone, which Preferences, Streaming turns on")
+            }
             parts.append("to \(settings.host)")
             if let bus, bus.dropped > 0 {
                 parts.append("\(bus.dropped) blocks lost, so listeners have heard gaps")

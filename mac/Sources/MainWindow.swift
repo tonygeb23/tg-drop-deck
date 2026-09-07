@@ -306,7 +306,13 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
             "Playlist \(percent(board.playlistVolume)) (F7, F8)",
             board.ducking ? "Ducking on" : "Ducking off",
         ]
-        parts.append(mic?.isOpen == true ? "Mic on" : "Mic off")
+        // "Mic on" with the microphone kept out of the programme is a true
+        // statement that misleads, because you can hear yourself either way.
+        if mic?.isOpen == true {
+            parts.append(board.stream.sendMic ? "Mic on" : "Mic on, NOT on air")
+        } else {
+            parts.append("Mic off")
+        }
         parts.append(streamer.state == .off ? "Off air" : streamer.state.spoken.uppercased())
         if recorder.isRecording { parts.append("RECORDING") }
         // Muted and soloed sources are the two states you can hear the effect

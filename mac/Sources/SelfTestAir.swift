@@ -17,6 +17,7 @@ extension SelfTest {
         testDSPChain()
         testCeiling()
         testEncoder()
+        testMicOnAir()
         testRecorder()
         testHotkeys()
         testAirBoard()
@@ -342,6 +343,35 @@ extension SelfTest {
         let kbps = Double(produced) * 8.0 / seconds / 1000.0
         check("a second of noise really comes out near the bit rate asked for",
               kbps > 90 && kbps < 170, String(format: "%.0f kbps for 128 asked", kbps))
+        out.append("")
+    }
+
+    /// The switch that keeps your voice out of the programme, and the warning
+    /// that now exists because nothing said a word about it.
+    fileprivate func testMicOnAir() {
+        out.append("The microphone reaching the air")
+
+        let board = Board()
+        check("a new board puts the microphone on the air", board.stream.sendMic)
+        check("and so does a board file that never mentioned it",
+              Board.from(dict: [:], relativeTo: nil).stream.sendMic)
+        var off = board.toDict()
+        off["stream_mic"] = false
+        check("a board that says otherwise is believed",
+              !Board.from(dict: off, relativeTo: nil).stream.sendMic)
+
+        // It gates the PROGRAMME sum, which the recorder reads as well as the
+        // stream, so the label on the Streaming tab was only half the story.
+        let group = SourceGroup()
+        let mic = MicInput(duckBus: DuckBus())
+        group.mic = mic
+        mic.onAir = false
+        var block = [Float](repeating: 0, count: 512)
+        block.withUnsafeMutableBufferPointer { p in
+            group.read(frames: 256, into: p.baseAddress!)
+        }
+        check("a microphone that is not on air adds nothing to the programme",
+              block.allSatisfy { $0 == 0 })
         out.append("")
     }
 

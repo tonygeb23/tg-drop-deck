@@ -220,8 +220,18 @@ extension MainWindow {
             + "people listen on is a different one."))
         let publicBox = check("List this station publicly", board.stream.isPublic)
         streamBox.addArrangedSubview(publicBox)
-        let micAirBox = check("Send the microphone as well", board.stream.sendMic)
+        // NOT "send the microphone", which is what this said until 3.3.2 and
+        // which is only half of what it does. This switch gates the microphone
+        // into the PROGRAMME sum, and the recorder reads that sum too, so with
+        // it off your voice is missing from recordings as well and nothing
+        // anywhere said so. The first person to hit it thought turning the
+        // microphone on was enough on its own, which is a fair thing to think.
+        let micAirBox = check("Put the microphone on the air", board.stream.sendMic)
         streamBox.addArrangedSubview(micAirBox)
+        streamBox.addArrangedSubview(note(
+            "On by default. This covers recordings as well as the stream: with it off you "
+            + "still hear yourself and your listeners do not, and neither does the file. "
+            + "Turn it off only when something else is putting your voice on the air."))
         let titlesBox = check("Send what is playing", board.stream.sendTitles)
         streamBox.addArrangedSubview(titlesBox)
 
