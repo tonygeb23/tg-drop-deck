@@ -867,11 +867,66 @@ RTMP_KEYFRAME_SECONDS = 2
 #: look at here; the p95 is the one that shows it.
 RTMP_CATCHUP_FRAMES = 2
 
-#: Windows' own H.264 encoder, which hands the work to hardware where there is
-#: any. libx264 is the fallback for a machine where Media Foundation will not
-#: open. Measured 7 September 2026: 720p30 at 11 times real time on either.
-RTMP_VIDEO_ENCODER = "h264_mf"
-RTMP_VIDEO_ENCODER_FALLBACK = "libx264"
+#: libx264, and NOT Windows' own Media Foundation encoder, which was the
+#: default until this was measured properly on 7 September 2026. Two findings,
+#: either of which would settle it:
+#:
+#: LATENCY. h264_mf holds SIXTEEN frames before it emits the first packet,
+#: which is 533 ms of delay added to every broadcast. libx264 holds none and
+#: h264_amf holds one. There is no way to turn it off: low_latency and every
+#: other option this build accepts changed nothing.
+#:
+#: TRUE CBR. A still card encodes to almost nothing, and both platforms
+#: publish bitrate floors: Facebook's is 400 kbps even at 360p. Asked for
+#: 2500 kbps on a static card, h264_mf delivered 30 kbps and libx264 with
+#: nal-hrd=cbr delivered 2467. Media Foundation ignores minrate and maxrate
+#: entirely, so it cannot meet a floor at all.
+#:
+#: h264_mf stays as the last resort, because it exists on every Windows
+#: machine and a stream with half a second of delay beats no stream.
+RTMP_VIDEO_ENCODER = "libx264"
+
+#: What to try if libx264 will not open, in order. The hardware encoders all
+#: honour a bitrate: h264_amf measured 101 per cent of target with no options
+#: at all.
+#:
+#: **h264_mf IS DELIBERATELY NOT IN THIS LIST**, and it used to be the
+#: default. Measured 7 September 2026 on 720p moving content with a 2500 kbps
+#: target, it sent 23,412 kbps: nine times over, with individual frames near
+#: 920 KB. It ignores rate_control, maxrate and bufsize, and refuses a profile
+#: option outright, so it emits CONSTRAINED BASELINE where both platforms ask
+#: for Main or High. It also holds sixteen frames, adding 533 ms of delay.
+#:
+#: A fallback that saturates the presenter's uplink and is then refused for
+#: its profile is worse than no stream: at least no stream says so. If
+#: nothing here opens, the app says it plainly instead.
+RTMP_VIDEO_ENCODERS = ("libx264", "h264_amf", "h264_nvenc", "h264_qsv")
+
+#: How much the rate may swing, as a fraction of a second. One second let a
+#: cut from card to camera dip to 1016 kbps and peak at 4210, either side of
+#: what Facebook publishes for 720p30. Half a second holds it tighter.
+RTMP_VBV_SECONDS = 0.5
+
+#: What each platform publishes for video bitrate, in kbps, by resolution.
+#: Used to tell somebody their settings are outside the range BEFORE they go
+#: live rather than after. Facebook gives real lower bounds; YouTube gives one
+#: recommended figure for H.264 and no bounds at all.
+FACEBOOK_BITRATES = {
+    (1920, 1080, 60): (4500, 9000),
+    (1920, 1080, 30): (3000, 6000),
+    (1280, 720, 60): (2250, 6000),
+    (1280, 720, 30): (1500, 4000),
+    (854, 480, 30): (600, 2000),
+    (640, 360, 30): (400, 1000),
+}
+YOUTUBE_RECOMMENDED = {
+    (1280, 720, 30): 4000, (1280, 720, 60): 6000,
+    (1920, 1080, 30): 10000, (1920, 1080, 60): 12000,
+}
+
+#: Facebook ends a broadcast at eight hours. Worth saying rather than letting
+#: somebody find out at the end of a long show.
+FACEBOOK_MAX_HOURS = 8
 
 #: What the picture can be. A camera is only one of them, and it is not the
 #: default: most of this app's users are running a radio show and have no
@@ -912,6 +967,11 @@ CAMERA_STALE_SECONDS = 2.0
 #: FFmpeg's own capture buffer. A camera that delivers faster than it is
 #: drained fills this and then logs about dropping frames.
 CAMERA_BUFFER = "64M"
+
+#: How often a picture source that has fallen back to the card tries its real
+#: source again. Often enough that a camera coming back is noticed within a
+#: song, rare enough that a dead one is not hammered.
+PICTURE_RETRY_SECONDS = 5.0
 
 
 # ---------------------------------------------------------------------------

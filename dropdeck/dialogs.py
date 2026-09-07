@@ -1569,6 +1569,7 @@ class SettingsDialog(wx.Dialog):
         """
         kind = self._current_platform()
         self.video_key_page.Enable(kind in C.RTMP_KEY_PAGE)
+        self._say_bitrate_advice(kind)
         warning = getattr(self, "live_warning", None)
         if warning is not None:
             if C.RTMP_GOES_LIVE_AT_ONCE.get(kind):
@@ -1617,6 +1618,28 @@ class SettingsDialog(wx.Dialog):
         else:
             self.video_host.SetValue("")
         self.video_host.Enable(kind not in C.RTMP_FIXED_ADDRESS)
+
+    def _say_bitrate_advice(self, kind=None):
+        """Warn about a bitrate the platform will not like, before air.
+
+        Facebook publishes real bounds and says missing them can end a
+        broadcast. Finding that out mid show, unable to see the dashboard, is
+        the situation this exists to prevent.
+        """
+        advice = getattr(self, "bitrate_advice", None)
+        if advice is None:
+            return
+        try:
+            settings = self.picture_settings
+        except Exception:
+            return
+        text = streamout.bitrate_advice(
+            kind or self._current_platform(),
+            settings["video_width"], settings["video_height"],
+            settings["video_fps"], settings["video_bitrate"])
+        advice.SetLabel(text)
+        advice.Wrap(560)
+        advice.GetParent().Layout()
 
     def _on_open_key_page(self, _event):
         kind = self._current_platform()
@@ -1946,6 +1969,10 @@ class SettingsDialog(wx.Dialog):
         self.live_warning.Wrap(560)
         sizer.Add(self.live_warning, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        self.bitrate_advice = wx.StaticText(panel, label="")
+        self.bitrate_advice.Wrap(560)
+        sizer.Add(self.bitrate_advice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         grid = wx.FlexGridSizer(2, 8, 12)
         grid.AddGrowableCol(1, 1)
 
@@ -2110,6 +2137,10 @@ class SettingsDialog(wx.Dialog):
         self._fill_video_size()
         self._refresh_cameras()
         self._on_picture_kind(None)
+        self.video_size.Bind(wx.EVT_CHOICE,
+                             lambda _e: self._say_bitrate_advice())
+        self.video_bitrate.Bind(wx.EVT_CHOICE,
+                                lambda _e: self._say_bitrate_advice())
         self._apply_platform()
 
     def _fill_picture_fields(self):

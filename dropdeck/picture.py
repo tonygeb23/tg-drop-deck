@@ -357,6 +357,7 @@ class FallbackSource(PictureSource):
         self.on_fallback = on_fallback or (lambda reason: None)
         self.fallen_back = False
         self.reason = ""
+        self._tried_at = 0.0
 
     @property
     def kind(self):
@@ -371,18 +372,42 @@ class FallbackSource(PictureSource):
         return self
 
     def frame(self, width, height):
-        if not self.fallen_back:
-            try:
-                picture = self.primary.frame(width, height)
-                if picture is not None:
-                    if self.fallen_back:
-                        self.fallen_back = False
-                    return picture
-                self._fall_back(getattr(self.primary, "error", "")
-                                or "the picture stopped")
-            except Exception as exc:
-                self._fall_back(str(exc))
+        """The primary if it can answer, otherwise the backup.
+
+        It RETRIES. The first version gave up for good on the first failure,
+        and its recovery branch sat inside `if not self.fallen_back` where it
+        could never run. One glitched frame, or OBS holding the camera for a
+        moment, meant the card for the rest of a three hour show even after
+        the camera was fine again. Retrying costs one call every few seconds
+        and gets the presenter their camera back.
+        """
+        now = time.monotonic()
+        if self.fallen_back and (now - self._tried_at) >= C.PICTURE_RETRY_SECONDS:
+            self._tried_at = now
+            picture = self._ask(width, height)
+            if picture is not None:
+                self.fallen_back = False
+                self.reason = ""
+                try:
+                    self.on_fallback("The camera is back")
+                except Exception:
+                    pass
+                return picture
+        elif not self.fallen_back:
+            picture = self._ask(width, height)
+            if picture is not None:
+                return picture
+            self._fall_back(getattr(self.primary, "error", "")
+                            or "the picture stopped")
         return self.backup.frame(width, height)
+
+    def _ask(self, width, height):
+        try:
+            return self.primary.frame(width, height)
+        except Exception as exc:
+            if not self.fallen_back:
+                self.reason = str(exc)
+            return None
 
     def _fall_back(self, reason):
         if self.fallen_back:

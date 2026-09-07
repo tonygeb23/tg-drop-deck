@@ -838,7 +838,7 @@ class IcecastDestination(Destination):
                 pass
 
 
-def _video_options(encoder, fps):
+def _video_options(encoder, fps, bitrate=0):
     """Encoder options that give the keyframe interval the platforms want.
 
     A keyframe every two seconds is what YouTube asks for and what Facebook
@@ -871,6 +871,28 @@ def _video_options(encoder, fps):
             "keyint_min": str(interval),
             "sc_threshold": "0",
         })
+        if bitrate:
+            # TRUE CBR, WITH FILLER, and this is not a nicety.
+            #
+            # A still card compresses to almost nothing: asked for 2500 kbps
+            # it really sent 62. Both platforms publish bitrate floors and
+            # Facebook's is 400 kbps even at 360p, so a radio show sending a
+            # station card sat an order of magnitude underneath it. YouTube
+            # raises "bitrate lower than recommended" for the same reason and
+            # asks for CBR anyway.
+            #
+            # minrate and maxrate alone do NOT do it: measured, they left the
+            # card at 62 kbps. nal-hrd=cbr with filler is what actually pads
+            # the stream to the rate that was asked for, and it took it to
+            # 2467 of 2500. It is also what OBS does for CBR.
+            rate = "%dk" % int(bitrate)
+            # A half second buffer rather than a whole one. Measured with a
+            # one second VBV, a cut from the card to the camera dipped to
+            # 1016 kbps and peaked at 4210, either side of the 1500 to 4000
+            # Facebook publishes for 720p30. Halving it holds the swing in.
+            options.update({"minrate": rate, "maxrate": rate,
+                            "bufsize": "%dk" % int(bitrate * C.RTMP_VBV_SECONDS),
+                            "x264-params": "nal-hrd=cbr:filler=1"})
     return options
 
 
@@ -973,13 +995,7 @@ class RtmpDestination(Destination):
         except Exception as exc:
             raise SinkError(_explain_rtmp(exc, self.settings)) from exc
         try:
-            video = container.add_stream(self.encoder_name, rate=self.fps)
-            video.width = self.width
-            video.height = self.height
-            video.pix_fmt = "yuv420p"
-            video.bit_rate = self.video_bitrate * 1000
-            video.time_base = fractions.Fraction(1, 1000)
-            video.options = _video_options(self.encoder_name, self.fps)
+            video = self._add_video(container)
             audio = container.add_stream("aac", rate=self.samplerate)
             audio.bit_rate = self.bitrate * 1000
             audio.layout = "stereo"
@@ -1017,6 +1033,36 @@ class RtmpDestination(Destination):
         self._video = video
         self.frame_size = int(audio.codec_context.frame_size or 1024)
         return self
+
+    def _add_video(self, container):
+        """The video stream, falling back if the chosen encoder will not open.
+
+        The fallback existed as a constant and was never used, so a machine
+        where libx264 would not open had no video at all rather than the
+        slower encoder Windows always has.
+        """
+        tried = []
+        last = None
+        for name in (self.encoder_name,) + tuple(C.RTMP_VIDEO_ENCODERS):
+            if not name or name in tried:
+                continue
+            tried.append(name)
+            try:
+                video = container.add_stream(name, rate=self.fps)
+                video.width = self.width
+                video.height = self.height
+                video.pix_fmt = "yuv420p"
+                video.bit_rate = self.video_bitrate * 1000
+                video.time_base = fractions.Fraction(1, 1000)
+                video.options = _video_options(name, self.fps,
+                                               self.video_bitrate)
+                self.encoder_name = name
+                return video
+            except Exception as exc:
+                last = exc
+        raise EncoderError(
+            "no video encoder on this machine would start, so the picture "
+            "cannot be sent: %s" % last)
 
     # -------------------------------------------------------------- feeding --
     def feed(self, block):
@@ -1141,6 +1187,41 @@ class RtmpDestination(Destination):
             pass
         self._audio = None
         self._video = None
+
+
+def bitrate_advice(server, width, height, fps, video_kbps, audio_kbps=128):
+    """What is wrong with these settings, in the platform's own numbers.
+
+    Said BEFORE going live rather than discovered after. Facebook publishes
+    real lower and upper bounds per resolution and says plainly that missing
+    them can end a broadcast; YouTube publishes one recommended figure for
+    H.264 and no bounds at all, so it gets a gentler wording.
+    """
+    key = (int(width), int(height), int(fps))
+    notes = []
+    if server == "facebook":
+        span = C.FACEBOOK_BITRATES.get(key)
+        if span:
+            low, high = span
+            if video_kbps < low:
+                notes.append(
+                    "Facebook asks for at least %d kbps at this size and you "
+                    "have %d. Below their range a broadcast can be ended."
+                    % (low, video_kbps))
+            elif video_kbps > high:
+                notes.append(
+                    "Facebook asks for no more than %d kbps at this size and "
+                    "you have %d." % (high, video_kbps))
+        if audio_kbps > 256:
+            notes.append("Facebook will not take audio above 256 kbps.")
+    elif server == "youtube":
+        want = C.YOUTUBE_RECOMMENDED.get(key)
+        if want and video_kbps < want / 2:
+            notes.append(
+                "YouTube recommends about %d kbps at this size and you have "
+                "%d, so it may call the stream low quality. It should still "
+                "go out." % (want, video_kbps))
+    return " ".join(notes)
 
 
 def _host_of(url):

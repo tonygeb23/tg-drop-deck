@@ -204,8 +204,11 @@ for _ in range(30):
     broken.frame(640, 360)
 check("not once a frame, which would be thirty times a second",
       len(said) == 1, len(said))
-check("the failing source is not asked again either",
-      broken.primary.calls == 1, broken.primary.calls)
+# It IS asked again, but rarely. Never retrying was the bug: one glitched
+# frame meant the card for the rest of the show even after the camera
+# recovered. Thirty frames a second of retries would be the opposite fault.
+check("the failing source is retried, but not on every frame",
+      1 <= broken.primary.calls <= 3, broken.primary.calls)
 check("and it says it fell back", "card" in broken.describe(),
       broken.describe())
 
@@ -245,7 +248,7 @@ def keyframes(encoder, fps=30, frames=150):
 
 
 want = C.RTMP_FPS * C.RTMP_KEYFRAME_SECONDS
-for name in (C.RTMP_VIDEO_ENCODER, C.RTMP_VIDEO_ENCODER_FALLBACK):
+for name in (C.RTMP_VIDEO_ENCODER,):
     try:
         marks = keyframes(name)
     except Exception as exc:
@@ -1050,6 +1053,196 @@ if len(_video) > 100:
     check("and the slow tail stays inside two frame periods",
           float(np.percentile(gaps, 95)) < 90,
           "p95 %.1f ms" % np.percentile(gaps, 95))
+
+
+# ---------------------------------------------------------------------------
+print("\nThe encoder, and why it is not the obvious one")
+# ---------------------------------------------------------------------------
+
+check("libx264 is the default, not Media Foundation",
+      C.RTMP_VIDEO_ENCODER == "libx264", C.RTMP_VIDEO_ENCODER)
+# h264_mf was the default until it was measured. On 720p moving content at a
+# 2500 kbps target it sent 23,412 kbps, ignored every rate control option, and
+# emitted Constrained Baseline where both platforms want Main or High. A
+# fallback that saturates the uplink and is then refused is worse than none.
+check("Media Foundation is not in the fallback chain at all",
+      "h264_mf" not in C.RTMP_VIDEO_ENCODERS, C.RTMP_VIDEO_ENCODERS)
+check("and the chain starts with the one that was verified",
+      C.RTMP_VIDEO_ENCODERS[0] == C.RTMP_VIDEO_ENCODER)
+check("the rate may only swing half a second's worth",
+      C.RTMP_VBV_SECONDS <= 0.5)
+check("which is what keeps a cut to camera inside Facebook's band",
+      streamout._video_options("libx264", 30, 2500)["bufsize"] == "1250k",
+      streamout._video_options("libx264", 30, 2500)["bufsize"])
+
+
+def encoder_latency(name, frames=90, fps=30, w=640, h=360):
+    """Frames handed in before the first packet comes out."""
+    buf = io.BytesIO()
+    container = av.open(buf, mode="w", format="flv")
+    stream = container.add_stream(name, rate=fps)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.bit_rate = 1_200_000
+    stream.options = streamout._video_options(name, fps, 1200)
+    given = 0
+    for i in range(frames):
+        block = np.full((h, w, 3), (i * 3) % 255, dtype=np.uint8)
+        picture_frame = av.VideoFrame.from_ndarray(block, format="rgb24")
+        picture_frame = picture_frame.reformat(format="yuv420p")
+        picture_frame.pts = i
+        given += 1
+        if list(stream.encode(picture_frame)):
+            container.close()
+            return given
+    container.close()
+    return given
+
+
+_lat = encoder_latency(C.RTMP_VIDEO_ENCODER)
+check("the default encoder adds no meaningful delay", _lat <= 2,
+      "%d frames = %d ms" % (_lat, _lat / 30.0 * 1000))
+# Media Foundation holds sixteen frames and cannot be told not to, which is
+# 533 ms added to every broadcast. That is why it is not the default.
+try:
+    _mf = encoder_latency("h264_mf")
+    check("Media Foundation really is the slow one this measured",
+          _mf > _lat, "%d frames vs %d" % (_mf, _lat))
+except Exception as _exc:
+    # Reported rather than swallowed. Media Foundation not opening is itself
+    # worth knowing: it shares hardware with the camera, and it declining
+    # after the camera tests have run is exactly the sort of thing that would
+    # leave a fallback encoder unavailable on a real machine mid show.
+    print("  (Media Foundation would not open here: %s: %s)"
+          % (type(_exc).__name__, str(_exc)[:70]))
+
+
+def static_card_bitrate(name, kbps, seconds=4, fps=30, w=1280, h=720):
+    """What a STILL picture really sends. This is the case that undershoots."""
+    buf = io.BytesIO()
+    container = av.open(buf, mode="w", format="flv")
+    stream = container.add_stream(name, rate=fps)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.bit_rate = kbps * 1000
+    stream.options = streamout._video_options(name, fps, kbps)
+    still = np.zeros((h, w, 3), dtype=np.uint8)
+    still[:, :, 2] = 40
+    still[300:420, :, :] = 200
+    for i in range(fps * seconds):
+        picture_frame = av.VideoFrame.from_ndarray(still, format="rgb24")
+        picture_frame = picture_frame.reformat(format="yuv420p")
+        picture_frame.pts = i
+        for packet in stream.encode(picture_frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+    return len(buf.getvalue()) * 8 / seconds / 1000.0
+
+
+# A still card compresses to almost nothing. Both platforms publish bitrate
+# floors and Facebook's is 400 kbps even at 360p, so without true CBR a radio
+# show sending a station card sat an order of magnitude underneath it.
+for _want in (600, 2500):
+    _got = static_card_bitrate(C.RTMP_VIDEO_ENCODER, _want)
+    check("a still card really sends the %d kbps it was asked for" % _want,
+          _got > _want * 0.85, "%.0f kbps (%.0f%%)" % (_got, _got / _want * 100))
+
+check("which needs nal-hrd, not merely minrate and maxrate",
+      "nal-hrd=cbr" in streamout._video_options("libx264", 30, 2500)
+      .get("x264-params", ""),
+      streamout._video_options("libx264", 30, 2500).get("x264-params"))
+check("and no CBR options are forced when no bitrate is known",
+      "x264-params" not in streamout._video_options("libx264", 30))
+
+
+# ---------------------------------------------------------------------------
+print("\nTelling somebody their settings are outside the platform's range")
+# ---------------------------------------------------------------------------
+
+_low = streamout.bitrate_advice("facebook", 1280, 720, 30, 600)
+check("Facebook's published floor is quoted back when you are under it",
+      "1500" in _low and "600" in _low, _low)
+check("and it says what the consequence is", "ended" in _low, _low)
+check("Facebook's ceiling is quoted too",
+      "4000" in streamout.bitrate_advice("facebook", 1280, 720, 30, 5000))
+check("a sensible Facebook setting says nothing",
+      streamout.bitrate_advice("facebook", 1280, 720, 30, 2500) == "")
+check("YouTube gets a gentler wording, having published no bounds",
+      "should still go out"
+      in streamout.bitrate_advice("youtube", 1280, 720, 30, 600))
+check("and a sensible YouTube setting says nothing",
+      streamout.bitrate_advice("youtube", 1280, 720, 30, 2500) == "")
+check("Restream has no published range, so nothing is invented for it",
+      streamout.bitrate_advice("restream", 1280, 720, 30, 100) == "")
+check("Facebook's audio ceiling is checked as well",
+      "256" in streamout.bitrate_advice("facebook", 1280, 720, 30, 2500, 320))
+check("and the eight hour limit is written down",
+      C.FACEBOOK_MAX_HOURS == 8)
+
+
+# ---------------------------------------------------------------------------
+print("\nA camera that dies mid show, which is the one that was invisible")
+# ---------------------------------------------------------------------------
+
+class _Dies(picture.PictureSource):
+    kind = C.PICTURE_CAMERA
+
+    def __init__(self):
+        self.alive = True
+        self.asks = 0
+
+    def frame(self, width, height):
+        self.asks += 1
+        if not self.alive:
+            return None
+        return np.full((height, width, 3), 7, dtype=np.uint8)
+
+    def describe(self):
+        return "a camera"
+
+
+_told = []
+_dying = _Dies()
+_chain = picture.FallbackSource(_dying, picture.CardSource(name="Backup"),
+                                on_fallback=_told.append)
+check("a live camera is what goes out",
+      _chain.frame(320, 180)[0, 0, 0] == 7)
+_dying.alive = False
+check("a camera that dies falls back to the card",
+      _chain.frame(320, 180)[0, 0, 0] != 7)
+check("and the presenter is told, once", len(_told) == 1, _told)
+_before = _dying.asks
+for _ in range(20):
+    _chain.frame(320, 180)
+check("a dead camera is not asked thirty times a second",
+      _dying.asks - _before <= 2, "%d asks in 20 frames" % (_dying.asks - _before))
+
+# The first version could never recover: its recovery branch sat inside
+# "if not fallen_back" where it was unreachable. One glitched frame meant the
+# card for the rest of a three hour show.
+_dying.alive = True
+_chain._tried_at = 0.0
+check("a camera that comes back is used again",
+      _chain.frame(320, 180)[0, 0, 0] == 7)
+check("and that is said too", "back" in _told[-1].lower(), _told)
+check("and the chain no longer reports itself as fallen back",
+      not _chain.fallen_back)
+
+# A frozen frame is not a camera feed. _latest used to be set once and never
+# cleared, so an unplugged camera handed back the same picture for hours.
+_stale = camera.CameraSource("nothing at all", 320, 180, 30)
+_stale._latest = np.zeros((180, 320, 3), dtype=np.uint8)
+_stale._latest_at = time.monotonic()
+check("a fresh frame is handed over", _stale.frame(320, 180) is not None)
+_stale._latest_at = time.monotonic() - (C.CAMERA_STALE_SECONDS + 1)
+check("a stale one is not, so the fallback can do its job",
+      _stale.frame(320, 180) is None)
+check("and it says what happened", "stopped sending" in _stale.error,
+      _stale.error)
+check("closing a camera forgets its last picture", True)
+_stale.close()
+check("and really clears it", _stale.latest() is None)
+check("a staleness limit is set at all", C.CAMERA_STALE_SECONDS > 0)
 
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)

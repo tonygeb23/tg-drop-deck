@@ -242,6 +242,12 @@ class CameraSource(PictureSource):
                 self.error = explain(exc, self.device)
         finally:
             self._ready.set()
+            # The reader has stopped, so the last frame is a photograph now
+            # and must not be passed off as a camera feed.
+            with self._lock:
+                self._latest = None
+                self._scaled = None
+                self._scaled_key = None
             try:
                 container.close()
             except Exception:
@@ -273,6 +279,17 @@ class CameraSource(PictureSource):
             source = self._latest
             if source is None:
                 return None
+            # STALE IS THE SAME AS GONE. _latest used to be set once and never
+            # cleared, so a camera unplugged twenty minutes into a show kept
+            # handing back the same frozen picture for the rest of it: the
+            # fallback never fired, nobody was told, and the framing kept
+            # reporting a frozen shot as though it were live. Answering None
+            # is what lets FallbackSource do its job.
+            if (time.monotonic() - self._latest_at) > C.CAMERA_STALE_SECONDS:
+                if not self.error:
+                    self.error = ("%s stopped sending pictures"
+                                  % (self.device or "the camera"))
+                return None
             key = (width, height, id(source))
             if key == self._scaled_key and self._scaled is not None:
                 return self._scaled
@@ -292,8 +309,28 @@ class CameraSource(PictureSource):
                              describe_size(self.width, self.height))
 
     def close(self):
+        """Give the device back, and do not merely ask nicely.
+
+        Closing the container is what actually releases a camera. Setting the
+        stop flag only works if the reader is between frames; on a camera that
+        has stopped delivering, decode() blocks and the thread never reaches
+        its own cleanup. The device then stayed open for the life of the
+        process, the light stayed on, and the NEXT attempt to go live was
+        refused with "another program is probably using it". The other program
+        was this one.
+        """
         self._stop.set()
+        container, self._container = self._container, None
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass          # closing under a blocked read is allowed to fail
         thread = self._thread
         self._thread = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=C.CAMERA_STOP_TIMEOUT)
+        with self._lock:
+            self._latest = None
+            self._scaled = None
+            self._scaled_key = None
