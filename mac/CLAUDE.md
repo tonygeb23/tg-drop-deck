@@ -372,25 +372,29 @@ feed with `--check-updates`. Version numbers stay in lockstep with Windows.
 ## Signing
 
 `build.sh` signs with the first identity it finds, preferring Developer ID and
-falling back to Apple Development, and only then to ad hoc. This Mac has an
-Apple Development certificate, so the app has a stable Team ID based designated
-requirement: macOS keys the microphone and system audio permissions to that,
-and the grant survives an update. That is the reason the update path works
-without asking again.
+falling back to Apple Development, and only then to ad hoc. Since 6 September
+2026 this Mac has a **Developer ID Application** certificate for Tony's paid
+team, R85F5PGU87, valid to September 2031, made from a signing request whose
+private key is `~/.tgstudios/developer-id-application.key` (the certificate is
+beside it, and both are the backup Apple asks you to keep). The earlier Apple
+Development certificate belongs to a different team, GFK2728D9X, so the first
+build signed with Developer ID changed the app's designated requirement once:
+macOS asked for the microphone again, and will not again after that.
 
-What is still open is the download path. An Apple Development signature is not
-notarised, so a copy downloaded in a browser is quarantined and, since macOS
-15, has to be allowed once through System Settings, Privacy and Security, Open
-Anyway. The manual says so. A Developer ID certificate and notarisation would
-remove that step, and it is the one thing left that a blind user downloading
-the app for the first time has to be told about.
+**Notarization is the one step left**, and it needs a notarytool keychain
+profile called `TGStudios`, which only Tony can make because Apple wants an
+app-specific password from his account: `mac/notarize-login.sh` does the whole
+thing in one paste. Until then `spctl --assess` says "Unnotarized Developer
+ID", a copy downloaded in a browser needs Open Anyway once, and the manual and
+the product page say so. Updates installed from inside the app never needed
+notarization, because nothing the app downloads itself is quarantined. Once the
+profile exists, `release_mac.py build` notarizes and staples on its own, and
+the sentence about Open Anyway comes out of the manual and the product page.
 
 ## Still to do
 
-- **Notarisation**, above. A Developer ID Application certificate was
-  requested on 6 September 2026 with the CSR in `~/.tgstudios/`; once it is
-  in the login keychain `build.sh` signs with it automatically, and the
-  notarytool profile is the one step left.
+- **Notarisation**, above: the notarytool profile, then republish, then take
+  the Open Anyway sentence out of the manual and the product page.
 - **Hosting Audio Units in the voice chain**, the Mac's answer to the Windows
   VST3 hosting. The entitlement for it is already in place
   (`disable-library-validation`), the parameter list the chain uses is the
