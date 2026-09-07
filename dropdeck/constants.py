@@ -789,11 +789,20 @@ LIVE_TO_LABELS = {
 RTMP_INGEST = {
     "youtube": "rtmps://a.rtmps.youtube.com/live2",
     "facebook": "rtmps://live-api-s.facebook.com:443/rtmp",
-    # Restream takes one stream and sends it on to everywhere you have
-    # switched on there. Verified 7 September 2026: live.restream.io answers
-    # on 1935 and on 443, and 443 completes TLS 1.3.
-    "restream": "rtmps://live.restream.io:443/live",
+    # Restream is a STARTING POINT here, not the answer, which is why its
+    # address stays editable while the other two do not. Restream tells you
+    # to create an RTMP stream in your account and then copy the URL and key
+    # IT gives you, and that URL can differ by account and by region. So this
+    # is the widely published default, and the page says to paste theirs over
+    # it if it differs.
+    "restream": "rtmp://live.restream.io/live",
 }
+
+#: The platforms whose address is fixed and must not be typed by hand. There
+#: is exactly one ingest for each and getting it wrong is not a thing a user
+#: should be able to do. Restream is deliberately NOT in here: it hands out
+#: the URL along with the key, and it is theirs to change.
+RTMP_FIXED_ADDRESS = ("youtube", "facebook")
 
 #: Where a user goes to fetch their key. Opened for them, because hunting for
 #: it in a video web app is the worst part of setting this up with a screen

@@ -1582,23 +1582,41 @@ class SettingsDialog(wx.Dialog):
                     "until you press Go Live Now in Live Producer.")
             elif kind == "restream":
                 warning.SetLabel(
-                    "Restream passes this on to whichever channels you have "
-                    "switched on there. Turn them all off and nothing leaves "
-                    "Restream, which makes this the safe way to test.")
+                    "Create the RTMP stream on the Restream website first, "
+                    "then copy BOTH the address and the key it gives you: "
+                    "the address here is only the usual one and yours may "
+                    "differ. Restream passes the stream on to whichever "
+                    "channels you have switched on there, so with them all "
+                    "off nothing leaves Restream.")
             else:
                 warning.SetLabel(
                     "What happens when you connect is up to whoever runs "
                     "the server.")
             warning.Wrap(560)
             warning.GetParent().Layout()
+        # Each platform's address is remembered separately for as long as the
+        # window is open. Without this, pasting the URL Restream gave you and
+        # then looking at the YouTube entry threw your URL away, because
+        # coming back found YouTube's address in the box and replaced it with
+        # Restream's default. Typed work is not something a dropdown gets to
+        # discard.
+        previous = getattr(self, "_last_platform", None)
+        if previous is not None and previous != kind:
+            self._hosts[previous] = self.video_host.GetValue().strip()
+        self._last_platform = kind
+
+        remembered = self._hosts.get(kind, "")
         ingest = C.RTMP_INGEST.get(kind)
-        current = self.video_host.GetValue().strip()
-        if ingest:
-            if current != ingest:
-                self.video_host.SetValue(ingest)
-        elif current in C.RTMP_INGEST.values():
+        if kind in C.RTMP_FIXED_ADDRESS:
+            # Exactly one ingest, and it is not the user's to get wrong.
+            self.video_host.SetValue(ingest)
+        elif remembered:
+            self.video_host.SetValue(remembered)
+        elif ingest:
+            self.video_host.SetValue(ingest)
+        else:
             self.video_host.SetValue("")
-        self.video_host.Enable(kind not in C.RTMP_INGEST)
+        self.video_host.Enable(kind not in C.RTMP_FIXED_ADDRESS)
 
     def _on_open_key_page(self, _event):
         kind = self._current_platform()
@@ -1958,9 +1976,11 @@ class SettingsDialog(wx.Dialog):
             "A&ddress",
             lambda: wx.TextCtrl(panel, value=self.board.video_host),
             "Address",
-            "The RTMP address to send to. YouTube and Facebook set their own "
-            "and it cannot be edited, because there is only one and it is "
-            "not yours to get wrong.")
+            "The RTMP address to send to. YouTube and Facebook set their "
+            "own and it cannot be edited, because there is only one each and "
+            "it is not yours to get wrong. For Restream or your own server, "
+            "paste the address they give you, and prefer an rtmps one if "
+            "they offer it: a plain rtmp address sends your key unencrypted.")
 
         self.video_key = field(
             "Stream &key",
@@ -1970,6 +1990,12 @@ class SettingsDialog(wx.Dialog):
             "The key from YouTube or Facebook. It is kept in Windows "
             "Credential Manager rather than in your board file, because "
             "anybody who has it can broadcast to your channel.")
+
+        #: One remembered address per platform, for this window's lifetime.
+        self._hosts = {}
+        if self.board.video_server in C.VIDEO_SERVER_ORDER:
+            self._hosts[self.board.video_server] = self.board.video_host or ""
+        self._last_platform = None
 
         self._picture_kinds = list(C.PICTURE_SOURCES)
         self.picture_kind = field(

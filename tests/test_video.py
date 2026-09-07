@@ -270,9 +270,12 @@ print("\nThe ingest addresses")
 
 check("YouTube and Facebook are both offered",
       "youtube" in C.VIDEO_SERVER_ORDER and "facebook" in C.VIDEO_SERVER_ORDER)
-check("both go out encrypted, which Facebook insists on",
-      all(url.startswith("rtmps://") for url in C.RTMP_INGEST.values()),
-      C.RTMP_INGEST)
+# The two fixed ones are encrypted and must stay so: Facebook has refused
+# plain RTMP since 2018 and YouTube asks for RTMPS. Restream's is only a
+# suggestion and is whatever their dashboard hands the user.
+check("the fixed platforms go out encrypted, which Facebook insists on",
+      all(C.RTMP_INGEST[k].startswith("rtmps://")
+          for k in C.RTMP_FIXED_ADDRESS), C.RTMP_INGEST)
 check("Facebook is on port 443, to get through firewalls",
       ":443" in C.RTMP_INGEST["facebook"])
 check("every RTMP server has a name for the Preferences box",
@@ -693,6 +696,20 @@ try:
     check("and it comes back through video_settings",
           _dialog.video_settings["key"] == "secret-key-value")
 
+    # A URL pasted from Restream must survive looking at another platform.
+    pick_platform("restream")
+    _dialog.video_host.SetValue("rtmp://live-lon.restream.io/live")
+    pick_platform("youtube")
+    check("a fixed platform still shows its own address",
+          _dialog.video_host.GetValue() == C.RTMP_INGEST["youtube"])
+    pick_platform("restream")
+    check("and an address typed for another platform is not thrown away",
+          _dialog.video_host.GetValue() == "rtmp://live-lon.restream.io/live",
+          _dialog.video_host.GetValue())
+    check("Restream's address is editable, because Restream hands it out",
+          _dialog.video_host.IsEnabled())
+
+
     check("Ctrl+B goes to the radio station until told otherwise",
           not _dialog.video_settings["live"])
     _dialog.live_to_video.SetValue(True)
@@ -941,9 +958,14 @@ check("Restream is offered as a platform of its own",
       "restream" in C.VIDEO_SERVER_ORDER)
 check("and it is named, not left as a custom server",
       streamout.server_label("restream") == "Restream")
-check("with its own encrypted ingest",
-      C.RTMP_INGEST["restream"].startswith("rtmps://live.restream.io"),
-      C.RTMP_INGEST["restream"])
+check("with an ingest suggested for it",
+      "restream.io" in C.RTMP_INGEST["restream"], C.RTMP_INGEST["restream"])
+# Restream hands out the URL WITH the key and it can differ by account and
+# region, so unlike YouTube and Facebook its address stays the user's to edit.
+check("whose address is the user's to change, unlike the fixed two",
+      "restream" not in C.RTMP_FIXED_ADDRESS
+      and "youtube" in C.RTMP_FIXED_ADDRESS
+      and "facebook" in C.RTMP_FIXED_ADDRESS)
 check("it builds an RTMP destination like the others",
       isinstance(streamout.destination_for(
           {"server": "restream", "host": C.RTMP_INGEST["restream"],
