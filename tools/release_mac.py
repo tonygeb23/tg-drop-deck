@@ -183,8 +183,10 @@ def notarize(app):
     notarize and credentials to do it with. Skipped, loudly, otherwise: a zip
     of an unnotarized app is still a valid release, it just needs Open Anyway
     the first time, and the manual says so."""
-    signed = subprocess.run(["codesign", "-dv", app], capture_output=True, text=True).stderr
-    if "Developer ID Application" not in signed:
+    # Two v's: codesign only prints the Authority lines at that verbosity, and
+    # with one it said every Developer ID build was unsigned.
+    signed = subprocess.run(["codesign", "-dvv", app], capture_output=True, text=True).stderr
+    if "Authority=Developer ID Application" not in signed:
         print("Not notarizing: the bundle is not Developer ID signed, and Apple notarizes "
               "nothing else. build.sh uses Developer ID the moment the certificate is installed.")
         return False
