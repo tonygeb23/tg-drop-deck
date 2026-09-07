@@ -22,10 +22,18 @@ left the machine and none of it is reachable from the UI yet.
 | `framing.py` | What the camera can see, said out loud without becoming a commentary |
 | `secrets.py` | Stream keys in Windows Credential Manager, out of the board file |
 | `tools/mock_rtmp.py` | A real RTMP server, so a test never needs the internet |
+| The UI | A Picture page in Preferences, the stream key on the Streaming page, and `Ctrl+Shift+F` |
 
-**Still to do:** the UI and the settings, then a real broadcast to YouTube and
-to Facebook. Nothing about steps 5 and 6 is written yet, and they are the first
-point anything leaves the machine.
+The Streaming page follows the server you pick: choose YouTube and the mount
+point, port, user name and password go unavailable, the stream key and Get my
+stream key come alive, and the address fills itself in and locks, because there
+is only one and it is not the user's to get wrong. **Nothing is hidden, only
+disabled.** A screen reader says "unavailable", which is the truth, where
+hiding half a page moves everything under somebody's fingers and drops focus.
+
+**Still to do:** a real broadcast to YouTube and to Facebook, which is steps 5
+and 6 and the first point anything leaves the machine. Then the user guide,
+which is a standing order and does not yet mention any of this.
 
 Measured end to end on the mock server: a 4 second publish gives back 119 of
 120 video frames, the tone that was sent, and 38 ms of drift. With the real

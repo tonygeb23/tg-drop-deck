@@ -809,6 +809,17 @@ PICTURE_IMAGE = "image"
 PICTURE_CAMERA = "camera"
 PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA)
 
+#: What each is called on screen. Said as what it does, not as what it is.
+PICTURE_LABELS = {
+    PICTURE_CARD: "A card with my station name on it",
+    PICTURE_IMAGE: "A picture of my own",
+    PICTURE_CAMERA: "A camera",
+}
+
+#: What the Picture page offers. A card needs almost none of this and a
+#: camera at 720p wants 2500 or more.
+RTMP_VIDEO_BITRATES = (500, 1000, 1500, 2500, 4000, 6000)
+
 #: What the card is drawn in. Dark with a light face, because a stream sits in
 #: a dark player on most sites, and high contrast because somebody sighted is
 #: reading it on a phone.

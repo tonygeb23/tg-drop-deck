@@ -41,6 +41,12 @@ DIST = os.path.join(BUILD_ROOT, "dist")
 FINAL = os.path.join(HERE, "dist")
 BUNDLE = os.path.join(DIST, C.APP_NAME)
 ICON = os.path.join(HERE, "assets", "dropdeck.ico")
+
+#: The face detection model, and where it has to land inside the bundle.
+#: PyInstaller wants "source<os.pathsep>destination", and the destination is
+#: the folder framing.model_path builds from sys._MEIPASS.
+MODEL_DIR = os.path.join(HERE, "assets", "models")
+MODEL_DATA = os.path.join(MODEL_DIR, C.FACE_MODEL_FILE) + os.pathsep     + os.path.join("assets", "models")
 INSTALLER_OUT = os.path.join(BUILD_ROOT, "installer")
 
 ISCC_CANDIDATES = [
@@ -137,6 +143,15 @@ def build_executable():
         # no compressor, no gate and no plugins, and the microphone
         # goes out raw with nothing to say why.
         "--collect-all", "pedalboard",
+        # OpenCV, for telling a presenter what the camera can see. Native
+        # code beside the package, the same as the rest of these. Without it
+        # the framing announcements turn themselves off and say why, so a
+        # build that misses this LOOKS fine and quietly loses a feature.
+        "--collect-all", "cv2",
+        # The face detection model, at the path framing.model_path expects.
+        # It is inside the bundle rather than beside it, unlike the demo
+        # pack: nobody has any reason to replace it.
+        "--add-data", MODEL_DATA,
         # Only the tools need these. Leaving them out saves about 60 MB.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",

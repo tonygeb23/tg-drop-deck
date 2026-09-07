@@ -25,7 +25,25 @@ STATION_FIELDS = (
     "stream_mount", "stream_user", "stream_password", "stream_format",
     "stream_bitrate", "stream_description", "stream_genre", "stream_url",
     "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
+    # The picture belongs to the station, not to the app: a YouTube station
+    # needs one and the Icecast station on the same board does not.
+    "picture", "picture_file", "picture_clock", "camera",
+    "video_width", "video_height", "video_fps", "video_bitrate",
 )
+
+
+def _video_number(value, fallback, low, high):
+    """A number out of a board file, clamped, or the default.
+
+    Same shape as _stream_port and _stream_bitrate above it. A picture size of
+    nought or a frame rate of a million is a crash at the moment somebody
+    goes live, which is the worst moment this app has.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(low, min(high, number))
 
 
 def _stations(value):
@@ -230,6 +248,24 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+
+        #: What goes on the screen when the destination insists on a picture.
+        #: YouTube refuses an audio only ingest, so a radio show still has to
+        #: send SOMETHING, and a card is what that something is by default.
+        #: A camera is offered and is not the default: most people using this
+        #: are running a radio show and have no reason to be on camera.
+        self.picture = C.PICTURE_CARD
+        self.picture_file = ""
+        self.picture_clock = False
+        self.camera = ""
+        self.video_width = C.RTMP_WIDTH
+        self.video_height = C.RTMP_HEIGHT
+        self.video_fps = C.RTMP_FPS
+        self.video_bitrate = C.RTMP_VIDEO_BITRATE
+        #: How much the app says about what the camera can see. Problems only
+        #: by default: quiet while the shot is good. See framing.py for why
+        #: this is three levels rather than a switch.
+        self.framing_level = "problems"
         #: Which half of a stereo input carries the voice. A hardware
         #: mixer feeding a line input puts it on one side, and taking the
         #: wrong one is silence.
@@ -507,6 +543,15 @@ class Board:
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
             "stream_stats_url": self.stream_stats_url,
+            "picture": self.picture,
+            "picture_file": self.picture_file,
+            "picture_clock": bool(self.picture_clock),
+            "camera": self.camera,
+            "video_width": int(self.video_width),
+            "video_height": int(self.video_height),
+            "video_fps": int(self.video_fps),
+            "video_bitrate": int(self.video_bitrate),
+            "framing_level": self.framing_level,
             "record_format": self.record_format,
             "record_bitrate": int(self.record_bitrate),
             "record_folder": self.record_folder,
@@ -596,6 +641,24 @@ class Board:
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""
         board.stream_stats_url = data.get("stream_stats_url") or ""
+        # A board file is not a trusted document, so every one of these falls
+        # back rather than becoming a setting that explodes at air time.
+        picture = data.get("picture")
+        board.picture = picture if picture in C.PICTURE_SOURCES else C.PICTURE_CARD
+        board.picture_file = data.get("picture_file") or ""
+        board.picture_clock = bool(data.get("picture_clock", False))
+        board.camera = data.get("camera") or ""
+        board.video_width = _video_number(data.get("video_width"),
+                                          C.RTMP_WIDTH, 160, 3840)
+        board.video_height = _video_number(data.get("video_height"),
+                                           C.RTMP_HEIGHT, 120, 2160)
+        board.video_fps = _video_number(data.get("video_fps"), C.RTMP_FPS,
+                                        1, 60)
+        board.video_bitrate = _video_number(data.get("video_bitrate"),
+                                            C.RTMP_VIDEO_BITRATE, 200, 20000)
+        level = data.get("framing_level")
+        board.framing_level = level if level in ("off", "problems",
+                                                 "everything") else "problems"
         fmt = data.get("record_format")
         board.record_format = fmt if fmt in C.RECORD_FORMAT_KEYS else "mp3"
         board.record_bitrate = _stream_bitrate(data.get("record_bitrate", 192))

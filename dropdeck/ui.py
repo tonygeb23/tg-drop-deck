@@ -21,6 +21,9 @@ from . import appicon
 from . import constants as C
 from . import dsp
 from . import feedback
+from . import framing
+from . import picture
+from . import secrets
 from . import sources
 from . import streamout
 from . import vst
@@ -52,6 +55,9 @@ ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
 #: Who is listening. Ctrl+Shift+A for audience, next to the pair above.
 ID_STREAM_STATS = wx.ID_HIGHEST + 404
+#: What the camera can see. Ctrl+Shift+F, next to the pair above, and a NEW
+#: key: nothing on the frozen digit map moved for it.
+ID_SHOT = wx.ID_HIGHEST + 411
 #: Recording, which is its own thing and not a kind of streaming: you record
 #: a show whether or not anybody is listening to it live.
 ID_RECORD = wx.ID_HIGHEST + 405
@@ -1088,6 +1094,12 @@ class DropDeckFrame(wx.Frame):
         air.Append(ID_STREAM_STATS, "Who is &listening...\tCtrl+Shift+A",
                    "How many people are on the stream, and what the server "
                    "thinks is playing")
+        # Alt+M for caMera. Not Alt+S: Station already has it on this menu,
+        # and two items sharing a mnemonic means the first one wins and the
+        # second is unreachable by keyboard. tests/test_menus.py caught it.
+        air.Append(ID_SHOT, "What the ca&mera can see\tCtrl+Shift+F",
+                   "Whether you are in shot, centred and lit. It answers "
+                   "whether or not you are on air")
         air.AppendSeparator()
         self.record_item = air.Append(
             ID_RECORD, "Start &recording\tCtrl+R",
@@ -1197,6 +1209,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.say_stream_status(),
                   id=ID_STREAM_STATUS)
         self.Bind(wx.EVT_MENU, self._on_stream_stats, id=ID_STREAM_STATS)
+        self.Bind(wx.EVT_MENU, self.describe_shot, id=ID_SHOT)
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_recording(), id=ID_RECORD)
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
@@ -1296,6 +1309,11 @@ class DropDeckFrame(wx.Frame):
                                 ID_STREAM_STATUS),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"),
                                 ID_STREAM_STATS),
+            # Ctrl+Shift+F answers "what can the camera see". F for framing,
+            # and it is the key somebody uses over and over while setting a
+            # shot up and then never again.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("F"),
+                                ID_SHOT),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("R"), ID_RECORD),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, wx.WXK_SPACE, ID_STOP_LATEST),
             # Alt+Shift+S manages sources, whatever kind they are: a sound
@@ -3750,14 +3768,28 @@ class DropDeckFrame(wx.Frame):
             self._on_settings(page=SettingsDialog.PAGE_STREAM)
             return False
 
+        settings = self._stream_settings()
+        # Refused HERE rather than at the far end. A missing key comes back
+        # from YouTube as a bare I/O error several seconds into going live,
+        # which is the worst moment and the least useful message.
+        if streamout.is_rtmp(settings["server"]) and not settings["password"]:
+            self.announce("There is no stream key for this station. Put one "
+                          "in on the Streaming page")
+            self._on_settings(page=SettingsDialog.PAGE_STREAM)
+            return False
+
         self.air_bus = streamout.AirBus(self.mixer.samplerate)
         self._sync_air_taps()
 
+        self.video_source = self._build_picture(settings)
         self.streamer = streamout.Streamer(
-            self.air_bus, self._stream_settings(),
+            self.air_bus, settings,
             on_state=self._on_stream_state,
-            on_trouble=self._on_stream_trouble)
+            on_trouble=self._on_stream_trouble,
+            video_source=self.video_source)
+        self.streamer.set_title(self._now_playing_title())
         self.streamer.start()
+        self._start_framing()
         self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
         return True
 
@@ -3894,6 +3926,15 @@ class DropDeckFrame(wx.Frame):
         streamer, self.streamer = getattr(self, "streamer", None), None
         if streamer is not None:
             streamer.stop()
+        self._stop_framing()
+        source, self.video_source = getattr(self, "video_source", None), None
+        if source is not None:
+            # A camera left open after a show is a camera no other program can
+            # use, and a light left on in the room.
+            try:
+                source.close()
+            except Exception:
+                pass
         self.air_bus = None
         # Recording may still be going, and it wants the same mix. One place
         # decides who is listening to the mixers, so coming off air cannot
@@ -3905,6 +3946,136 @@ class DropDeckFrame(wx.Frame):
         if not quiet:
             self.announce("Off air")
         self._update_status()
+
+    # ------------------------------------------------------------ picture --
+    def _build_picture(self, settings):
+        """What goes on the screen for a destination that insists on one.
+
+        Built only when the destination needs it. An Icecast station opening a
+        camera would be a light on in the room for no reason at all.
+        """
+        if not streamout.is_rtmp(settings.get("server", "")):
+            return None
+        source = picture.build(settings, on_fallback=self._picture_failed)
+        try:
+            source.start()
+        except Exception as exc:
+            self.announce(str(exc))
+        return source
+
+    def _picture_failed(self, reason):
+        """Said once, from whatever thread noticed, never once a frame."""
+        wx.CallAfter(self.announce,
+                     "%s. The stream is showing a card instead." % reason)
+
+    # ------------------------------------------------------------ framing --
+    def _start_framing(self):
+        """Watch the shot while on air, on a thread of its own.
+
+        Not on the UI thread and not on the streaming thread. The streaming
+        thread is carrying the audio, and five milliseconds of face detection
+        has no business anywhere near it.
+        """
+        self._stop_framing()
+        source = getattr(self, "video_source", None)
+        if source is None or getattr(source, "kind", "") != C.PICTURE_CAMERA:
+            return
+        level = self.board.framing_level
+        if level not in framing.FRAMING_LEVELS:
+            level = framing.FRAMING_PROBLEMS
+        self.framer = framing.Framer(level=level, on_say=self._say_framing)
+        if self.framer.error:
+            # Worth saying ONCE, because somebody who turned this on and hears
+            # nothing would reasonably think it was working.
+            self.announce(self.framer.error)
+            return
+        self._framing_stop = threading.Event()
+        self._framing_thread = threading.Thread(
+            target=self._framing_loop, daemon=True, name="dropdeck-framing")
+        self._framing_thread.start()
+
+    def _framing_loop(self):
+        stop = self._framing_stop
+        while not stop.is_set():
+            source = getattr(self, "video_source", None)
+            framer = getattr(self, "framer", None)
+            if source is None or framer is None:
+                return
+            try:
+                if framer.due():
+                    latest = getattr(source.primary, "latest", None)
+                    framer.look(latest() if latest is not None else None)
+            except Exception:
+                pass          # never let looking at a picture end a broadcast
+            if stop.wait(C.FACE_CHECK_SECONDS / 2.0):
+                return
+
+    def _stop_framing(self):
+        stop = getattr(self, "_framing_stop", None)
+        if stop is not None:
+            stop.set()
+        thread = getattr(self, "_framing_thread", None)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        self._framing_thread = None
+        self.framer = None
+
+    def _say_framing(self, text):
+        wx.CallAfter(self.announce, text)
+
+    def describe_shot(self, _event=None):
+        """Ctrl+Shift+F. What the camera can see, on demand.
+
+        Answers at every setting INCLUDING off, and whether or not you are on
+        air, because a key that does nothing is broken rather than quiet. This
+        is the one people will actually use: setting a shot up means asking
+        over and over for ten seconds and then never again.
+        """
+        framer = getattr(self, "framer", None)
+        source = getattr(self, "video_source", None)
+        if framer is not None and source is not None:
+            self.announce_answer(framer.describe())
+            return
+        if self.board.picture != C.PICTURE_CAMERA:
+            self.announce_answer(
+                "The stream is not showing a camera. Picture settings are in "
+                "Preferences")
+            return
+        if not self.board.camera:
+            self.announce_answer("No camera has been chosen yet")
+            return
+        # Off air, so nothing is open. Look once rather than refusing.
+        self.announce_answer("Looking through the camera...")
+        threading.Thread(target=self._look_once, daemon=True,
+                         name="dropdeck-look").start()
+
+    def _look_once(self):
+        """Open the camera, look, close it. Off the UI thread, always."""
+        from . import camera as cameras
+        source = None
+        try:
+            source = cameras.CameraSource(self.board.camera,
+                                          self.board.video_width,
+                                          self.board.video_height,
+                                          self.board.video_fps)
+            source.start()
+            if not source.wait_ready(C.CAMERA_OPEN_TIMEOUT):
+                wx.CallAfter(self.announce_answer,
+                             source.error or "The camera gave no picture")
+                return
+            watcher = framing.Framer(level=framing.FRAMING_OFF)
+            reading = watcher.measure(source.latest())
+            wx.CallAfter(self.announce_answer,
+                         watcher.error or reading.sentence())
+        except Exception as exc:
+            wx.CallAfter(self.announce_answer, cameras.explain(
+                exc, self.board.camera))
+        finally:
+            if source is not None:
+                try:
+                    source.close()
+                except Exception:
+                    pass
 
     def _rebuild_station_menu(self):
         """The saved stations, with a dot beside the one that is loaded."""
@@ -3962,17 +4133,35 @@ class DropDeckFrame(wx.Frame):
             dialog.ShowModal()
 
     def _stream_settings(self):
-        """What the board holds, in the shape the streamer wants."""
+        """What the board holds, in the shape the streamer wants.
+
+        The stream key is the one thing NOT read from the board. It lives in
+        Windows Credential Manager under the station's name, and it is fetched
+        here so nothing else in the app has to know that. A board saved before
+        keys moved still works: whatever is in stream_password is used when
+        the credential store has nothing.
+        """
         board = self.board
+        password = board.stream_password
+        if streamout.is_rtmp(board.stream_server):
+            password = secrets.fetch(board.stream_name or "") or password
         return {"server": board.stream_server, "host": board.stream_host,
                 "port": board.stream_port, "mount": board.stream_mount,
-                "user": board.stream_user, "password": board.stream_password,
+                "user": board.stream_user, "password": password,
                 "format": board.stream_format, "bitrate": board.stream_bitrate,
                 "name": board.stream_name,
                 "description": board.stream_description,
                 "genre": board.stream_genre, "url": board.stream_url,
                 "stats_url": board.stream_stats_url,
-                "public": board.stream_public}
+                "public": board.stream_public,
+                "picture": board.picture,
+                "picture_file": board.picture_file,
+                "picture_clock": board.picture_clock,
+                "camera": board.camera,
+                "video_width": board.video_width,
+                "video_height": board.video_height,
+                "video_fps": board.video_fps,
+                "video_bitrate": board.video_bitrate}
 
     def _on_stream_trouble(self, message):
         """The connection is not keeping up. Said, not written.
@@ -4039,13 +4228,16 @@ class DropDeckFrame(wx.Frame):
             parts.append("reconnected %d times" % streamer.reconnects)
         return ", ".join(parts)
 
+    def _now_playing_title(self):
+        track = self.player.current if self.player.playing else None
+        return track.display_name if track is not None else ""
+
     def _push_stream_title(self):
         """Tell the server what is playing, if it is wanted and has changed."""
         streamer = getattr(self, "streamer", None)
         if streamer is None or not self.board.stream_titles:
             return
-        track = self.player.current if self.player.playing else None
-        streamer.set_title(track.display_name if track is not None else "")
+        streamer.set_title(self._now_playing_title())
 
     def _on_settings(self, _event=None, page=None):
         """Preferences. One window, five tabs, two keys into it.
@@ -4099,6 +4291,25 @@ class DropDeckFrame(wx.Frame):
             self.board.stream_bitrate = stream["bitrate"]
             self.board.stream_name = stream["name"]
             self.board.stream_public = stream["public"]
+            # The stream key goes to the credential store, never to the board.
+            # Only when it CANNOT be stored does it fall back to the board
+            # file, and the dialog has already said so out loud by then.
+            key = stream.get("key", "")
+            if streamout.is_rtmp(stream["server"]):
+                if key and secrets.store(stream["name"] or "", key):
+                    self.board.stream_password = ""
+                else:
+                    self.board.stream_password = key
+            picture_settings = dialog.picture_settings
+            self.board.picture = picture_settings["picture"]
+            self.board.picture_file = picture_settings["picture_file"]
+            self.board.picture_clock = picture_settings["picture_clock"]
+            self.board.camera = picture_settings["camera"]
+            self.board.video_width = picture_settings["video_width"]
+            self.board.video_height = picture_settings["video_height"]
+            self.board.video_fps = picture_settings["video_fps"]
+            self.board.video_bitrate = picture_settings["video_bitrate"]
+            self.board.framing_level = picture_settings["framing_level"]
             self.board.stream_mic = dialog.stream_mic.GetValue()
             self.board.stream_titles = dialog.stream_titles.GetValue()
             self.board.playlist_monitor_only = (

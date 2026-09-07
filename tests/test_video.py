@@ -590,6 +590,156 @@ else:
 
 
 # ---------------------------------------------------------------------------
+print("\nThe Preferences box, driven for real")
+# ---------------------------------------------------------------------------
+
+import wx
+
+from dropdeck.board import Board
+from dropdeck.dialogs import SettingsDialog
+from dropdeck.mixer import Mixer
+
+_app = wx.App()
+_frame = wx.Frame(None)
+_board = Board()
+_dialog = SettingsDialog(_frame, _board, Mixer(open_stream=False),
+                         page=SettingsDialog.PAGE_PICTURE)
+
+
+def pick_server(kind):
+    _dialog.stream_server.SetSelection(C.STREAM_SERVER_ORDER.index(kind))
+    _dialog._apply_server_kind()
+
+
+try:
+    check("there is a Picture page", hasattr(_dialog, "picture_kind"))
+    check("it offers a card, a picture and a camera",
+          len(_dialog.picture_kind.GetStrings()) == 3,
+          _dialog.picture_kind.GetStrings())
+    check("and a card is the default, not a camera",
+          _dialog.picture_settings["picture"] == C.PICTURE_CARD)
+    check("the boxes a card does not need are disabled, not hidden",
+          not _dialog.picture_file.IsEnabled()
+          and not _dialog.camera_choice.IsEnabled())
+    check("and a clock is offered, because a card can have one",
+          _dialog.picture_clock.IsEnabled())
+
+    _dialog.picture_kind.SetSelection(
+        _dialog._picture_kinds.index(C.PICTURE_CAMERA))
+    _dialog._on_picture_kind(None)
+    check("picking a camera enables the camera box",
+          _dialog.camera_choice.IsEnabled())
+    check("and the framing setting, which only a camera uses",
+          _dialog.framing_level.IsEnabled())
+    check("framing offers three levels, not a switch",
+          len(_dialog.framing_level.GetStrings()) == 3)
+    check("and problems only is the default",
+          _dialog.picture_settings["framing_level"] == "problems")
+
+    check("every server in the list has a label, none raising",
+          len(_dialog.stream_server.GetStrings()) == len(C.STREAM_SERVER_ORDER),
+          _dialog.stream_server.GetStrings())
+
+    pick_server("icecast")
+    check("Icecast wants a password and not a stream key",
+          _dialog.stream_password.IsEnabled() and not _dialog.stream_key.IsEnabled())
+    check("and its mount point and port are usable",
+          _dialog.stream_mount.IsEnabled() and _dialog.stream_port.IsEnabled())
+
+    pick_server("youtube")
+    check("YouTube wants a stream key and not a password",
+          _dialog.stream_key.IsEnabled() and not _dialog.stream_password.IsEnabled())
+    check("its mount point and port are put out of the way",
+          not _dialog.stream_mount.IsEnabled() and not _dialog.stream_port.IsEnabled())
+    check("the address is filled in, because there is only one",
+          _dialog.stream_host.GetValue() == C.RTMP_INGEST["youtube"],
+          _dialog.stream_host.GetValue())
+    check("and it cannot be edited into something wrong",
+          not _dialog.stream_host.IsEnabled())
+    check("there is a button to go and fetch the key",
+          _dialog.stream_key_page.IsEnabled())
+
+    pick_server("facebook")
+    check("Facebook gets its own address",
+          _dialog.stream_host.GetValue() == C.RTMP_INGEST["facebook"],
+          _dialog.stream_host.GetValue())
+
+    _dialog.stream_host.SetValue("rtmp://my.own.server/live")
+    pick_server("youtube")
+    check("switching to YouTube REPLACES an address it cannot use",
+          _dialog.stream_host.GetValue() == C.RTMP_INGEST["youtube"],
+          _dialog.stream_host.GetValue())
+
+    pick_server("rtmp")
+    check("and a custom server does not inherit a platform's address",
+          _dialog.stream_host.GetValue() == "", _dialog.stream_host.GetValue())
+    check("a custom server has no key page to open",
+          not _dialog.stream_key_page.IsEnabled())
+    check("but its address is the user's to type",
+          _dialog.stream_host.IsEnabled())
+
+    _dialog.stream_key.SetValue("secret-key-value")
+    check("the key is a password box, so it is not on screen in full",
+          _dialog.stream_key.GetWindowStyle() & wx.TE_PASSWORD)
+    check("and it comes back through stream_settings",
+          _dialog.stream_settings["key"] == "secret-key-value")
+finally:
+    _dialog.Destroy()
+    _frame.Destroy()
+
+
+# ---------------------------------------------------------------------------
+print("\nThe app itself, built for real")
+# ---------------------------------------------------------------------------
+
+from dropdeck import ui
+
+_live = ui.DropDeckFrame()
+try:
+    bar = _live.GetMenuBar()
+    shot = None
+    for i in range(bar.GetMenuCount()):
+        for item in bar.GetMenu(i).GetMenuItems():
+            if item.GetId() == ui.ID_SHOT:
+                shot = (bar.GetMenuLabelText(i), item.GetItemLabel())
+    # A key with no menu item behind it is a key nobody finds. This one was
+    # exactly that for a while: the accelerator was wired and the Append
+    # silently did not apply, so the feature worked and was invisible.
+    check("what the camera can see is ON the menu, not only on a key",
+          shot is not None, shot)
+    if shot:
+        check("on the On air menu, with the other broadcast answers",
+              shot[0] == "On air", shot[0])
+        check("and it names its key", "Ctrl+Shift+F" in shot[1], shot[1])
+
+    check("the frame can answer about the shot", hasattr(_live, "describe_shot"))
+    check("and answering off air does not raise",
+          _live.describe_shot() is None)
+
+    _live.board.picture = C.PICTURE_CAMERA
+    _live.board.camera = ""
+    check("with a camera chosen but none picked, it still answers",
+          _live.describe_shot() is None)
+
+    # Going live with no key must be refused HERE, not several seconds later
+    # by YouTube with an I/O error.
+    _live.board.stream_server = "youtube"
+    _live.board.stream_host = C.RTMP_INGEST["youtube"]
+    _live.board.stream_password = ""
+    _live.board.stream_name = "zz station with no key at all"
+    opened = []
+    _live._on_settings = lambda *a, **k: opened.append(k.get("page"))
+    check("going live with no stream key is refused before it connects",
+          _live.start_stream() is False)
+    check("and Preferences is opened at the page that fixes it",
+          opened == [SettingsDialog.PAGE_STREAM], opened)
+    check("nothing was left running", not _live.streaming())
+finally:
+    _live.stop_background_work()
+    _live.Destroy()
+
+
+# ---------------------------------------------------------------------------
 print("\nFFmpeg's errors, turned into something a presenter can act on")
 # ---------------------------------------------------------------------------
 
