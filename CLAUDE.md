@@ -159,6 +159,25 @@ And specific to this one:
   really tested by pressing it. `tools/check_video_key.py` does that, and it
   runs a KNOWN GOOD key first as a control, so "the simulator could not
   deliver it" is never mistaken for "the app ignored it".
+- **Where Ctrl+B sends the show is a menu, not a checkbox.** `board.live_to`
+  picks between the radio station and the video platform, and until 3.4.2 its
+  only control was one box on the **Video** streaming page reading "Go live
+  here when I press Ctrl+B". So the answer to "where does my show go" lived on
+  the page for one of the two answers, and a board with both set up gave no
+  sign a choice existed. It is **On air, Streaming location** now, one radio
+  group, one dot. The checkbox stays and the two move together, because a
+  control someone has already learned does not get taken away.
+  **A separator starts a NEW radio group in wx**, so the saved setups cannot
+  live in that menu after one: they kept a tick of their own and the menu
+  showed two dots at once. They are a submenu, which is also honest, because
+  loading a setup overwrites both Preferences pages rather than choosing
+  between them.
+  **And the menu says the station's NAME.** `server_label` returns "Icecast,
+  or Liquidsoap harbor", which is right in the Preferences dropdown where
+  somebody is working out which entry covers their server, and nine words to
+  say "Blindside Radio" on the way to air. `preflight.where_it_goes` leads
+  with the user's own name and falls back to the software only when there is
+  none. Tony asked for this in those words.
 - **Ctrl+B asks; a pad never does.** `board.ask_before_live` puts a summary
   in front of going live, and that is not a breach of the rule below it: a
   pad is muscle memory in the middle of a show and going live is a decision

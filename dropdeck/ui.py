@@ -64,6 +64,13 @@ ID_SHOT = wx.ID_HIGHEST + 411
 #: Setting streaming up, in the app. No accelerator: it is a thing you read
 #: once while setting up, not a thing you reach for mid show.
 ID_STREAM_HELP = wx.ID_HIGHEST + 412
+#: The two places a show can go: the radio station on the Audio streaming
+#: page, and the platform on the Video streaming page. One id each, because
+#: they are a choice rather than a list, and they sit with the saved locations
+#: under On air, Streaming location.
+ID_LIVE_TO_AUDIO = wx.ID_HIGHEST + 414
+ID_LIVE_TO_VIDEO = wx.ID_HIGHEST + 415
+
 #: What the stream is showing, and what to show instead. Alt+Shift+V, beside
 #: Alt+Shift+S for audio sources: same gesture, the other half of the show.
 #: A NEW key, and it goes nowhere near the frozen digit map, which uses only
@@ -1153,8 +1160,11 @@ class DropDeckFrame(wx.Frame):
         air.AppendSeparator()
         # Switching station without going through Preferences, because on a
         # show you want it on a menu, not four keystrokes into a dialog.
+        # "Station" said what the entries were and not what the menu is FOR.
+        # This is the menu that answers "where does Ctrl+B send the show", so
+        # it is named after the question.
         self.station_menu = wx.Menu()
-        air.AppendSubMenu(self.station_menu, "&Station")
+        air.AppendSubMenu(self.station_menu, "Streaming &location")
         self._rebuild_station_menu()
         air.Append(ID_STREAM_SETUP, "Set &up streaming...",
                    "The address, the mount point and the password for your "
@@ -1253,6 +1263,8 @@ class DropDeckFrame(wx.Frame):
                   id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_video_sources, id=ID_VIDEO_SOURCES)
+        self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_AUDIO)
+        self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_VIDEO)
         self.Bind(wx.EVT_MENU, self._on_source_control, id=ID_SOURCE_CONTROL)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
@@ -4143,25 +4155,106 @@ class DropDeckFrame(wx.Frame):
         with StreamHelpDialog(self, platform or self.board.video_server) as box:
             box.ShowModal()
 
+    def live_to_labels(self):
+        """The two destinations, as the menu says them out loud.
+
+        Each one names the KIND first and the setting second, because the
+        kind is the decision and the address is the confirmation. An empty
+        one still appears: a choice you cannot see is the whole complaint,
+        and "not set up yet" is a more useful answer than an absent line.
+        """
+        station = (self.board.stream_name or self.board.stream_host
+                   or "not set up yet")
+        if self.board.stream_host and self.board.stream_name:
+            station = "%s, %s" % (self.board.stream_name, self.board.stream_host)
+        platform = (streamout.server_label(self.board.video_server)
+                    if self.board.video_host else "not set up yet")
+        return (station, platform)
+
     def _rebuild_station_menu(self):
-        """The saved stations, with a dot beside the one that is loaded."""
+        """Where Ctrl+B sends the show, with a dot beside the one it uses.
+
+        Every entry answers the same question, which is why they are one
+        radio group rather than two ideas in one menu: the two destinations
+        are what is typed into the two Preferences pages, and a saved
+        location is a whole configuration including which of the two it is.
+        Picking any of them is picking where the show goes.
+        """
         menu = getattr(self, "station_menu", None)
         if menu is None:
             return
         for item in list(menu.GetMenuItems()):
             menu.Delete(item)
+        video = self.board.live_to == C.LIVE_TO_VIDEO
+        audio_label, video_label = self.live_to_labels()
+        # Alt+D and Alt+P rather than the obvious R and V: tests/test_menus.py
+        # treats a whole top level menu and its submenus as ONE mnemonic
+        # namespace, and On air already spends R on Start recording and V on
+        # Video source. Windows would let a submenu have its own, but a
+        # screen reader user arrowing a menu tree hears them all the same.
+        # The mnemonic sits in the fixed part of the label, never in the
+        # station name, which is the user's text.
+        first = menu.AppendRadioItem(
+            ID_LIVE_TO_AUDIO, "My ra&dio station: " + _escaped(audio_label),
+            "Send the show to your radio server: Icecast, Liquidsoap or "
+            "SHOUTcast. Set it up on the Audio streaming page")
+        second = menu.AppendRadioItem(
+            ID_LIVE_TO_VIDEO, "My video &platform: " + _escaped(video_label),
+            "Send the show to YouTube, Facebook, Restream or any RTMP "
+            "server, with a picture. Set it up on the Video streaming page")
+        # Checked AFTER both exist. Appending a radio item checks the first
+        # of a run by default, so checking as you go leaves both ticked.
+        (second if video else first).Check(True)
+
         names = self.board.station_names()[:MAX_STATIONS]
-        if not names:
-            # A dead "None saved yet" line would be a menu item that does
-            # nothing, which the menu audit rightly refuses. Offer the thing
-            # somebody with no stations actually wants instead.
-            menu.Append(ID_STREAM_SETUP, "&Set one up...",
-                        "The address, mount point and password for a server")
+        menu.AppendSeparator()
+        if names:
+            # A submenu, not more entries here, and that is not tidiness.
+            # wx begins a NEW radio group after a separator, so a saved run
+            # in this menu keeps a tick of its own and two dots show at once.
+            # They are also a different question: these overwrite BOTH
+            # Preferences pages, where the two above only choose between them.
+            saved = wx.Menu()
+            for offset, name in enumerate(names):
+                item = saved.AppendRadioItem(
+                    ID_STATION_BASE + offset, _escaped(name),
+                    "Load this saved setup, and send the show wherever it "
+                    "was saved to go")
+                if name == self.board.stream_name:
+                    item.Check(True)
+            menu.AppendSubMenu(saved, "Load a saved set&up")
+        menu.Append(ID_STREAM_SETUP, "&Set these up...",
+                    "The address, mount point and password for a server, or "
+                    "the platform and stream key for video")
+
+    def _on_live_to(self, event):
+        """Point Ctrl+B at the radio station or at the video platform."""
+        want = (C.LIVE_TO_VIDEO if event.GetId() == ID_LIVE_TO_VIDEO
+                else C.LIVE_TO_AUDIO)
+        if want == self.board.live_to:
             return
-        for offset, name in enumerate(names):
-            item = menu.AppendRadioItem(ID_STATION_BASE + offset, name)
-            if name == self.board.stream_name:
-                item.Check(True)
+        if self.streaming():
+            # The same rule as changing station: swapping the destination
+            # under a live stream is not a thing to do quietly.
+            self.announce("Come off air first, Ctrl+B, then change where it "
+                          "goes")
+            self._rebuild_station_menu()
+            return
+        self.board.live_to = want
+        self._touch()
+        report = self.preflight()
+        if report is not None and report.blocked:
+            self.announce("Ctrl+B now goes to your %s. %s"
+                          % ("video platform" if want == C.LIVE_TO_VIDEO
+                             else "radio station", report.stops[0].text))
+        else:
+            self.announce("Ctrl+B now goes to %s"
+                          % (report.summary() if report is not None
+                             else "your " + ("video platform"
+                                             if want == C.LIVE_TO_VIDEO
+                                             else "radio station")))
+        self._rebuild_station_menu()
+        self._update_status()
 
     def _on_pick_station(self, event):
         """Load a saved station. Not while it is broadcasting, though."""
@@ -4180,8 +4273,15 @@ class DropDeckFrame(wx.Frame):
             return
         if self.board.load_station(name):
             self._touch()
-            self.announce("Station %s, %s" % (name, self.board.stream_host))
+            # Where it goes, not just what was loaded. A saved setup carries
+            # its own destination, so loading one can move the show from the
+            # radio station to the video platform without anything saying so.
+            report = self.preflight()
+            self.announce("%s. Ctrl+B goes to %s"
+                          % (name, report.summary() if report is not None
+                             else self.board.stream_host))
         self._rebuild_station_menu()
+        self._update_status()
 
     def _on_stream_stats(self, _event=None):
         """Who is listening. Opens whether or not you are on air.

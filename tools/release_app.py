@@ -43,6 +43,7 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.4.2": ("On air, Streaming location now shows both places your show can go, with a dot beside the one Ctrl+B will use, so you can see which it is and change it. It also says the name you gave your station rather than the name of the software running on it."),
     "3.4.1": ("Ctrl+B now says where the show is going, what it is sending and "
               "whether your microphone is on the air, and waits for Enter. "
               "Alt+Shift+V changes the picture while you are on air, and it "

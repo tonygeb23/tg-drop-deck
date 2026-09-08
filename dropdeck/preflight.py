@@ -109,6 +109,34 @@ class Preflight:
         return said
 
 
+def where_it_goes(settings, video):
+    """The destination, said the way its owner would say it.
+
+    The station's own NAME first when it has one, because that is what the
+    user called it and it is shorter and clearer than the software running
+    on it. `server_label` says "Icecast, or Liquidsoap harbor", which is
+    exactly right in the Preferences dropdown, where somebody is working out
+    which entry covers their server, and exactly wrong on the way to air.
+
+    The software name is the fallback rather than the lead, so a server with
+    no name still says something useful.
+    """
+    host = settings.get("host", "")
+    name = (settings.get("name") or "").strip()
+    if video:
+        # An RTMP address has the stream key in it, so it goes through
+        # host_label. YouTube and Facebook have one address each and it is
+        # not the user's to choose, so naming the platform is enough.
+        platform = streamout.server_label(settings.get("server", "")) or ""
+        if name:
+            return "%s, on %s" % (name, platform) if platform else name
+        return "%s, %s" % (platform, streamout.host_label(host))
+    where = "%s%s" % (host, settings.get("mount", "") or "")
+    if name:
+        return "%s, %s" % (name, where)
+    return "%s, %s" % (streamout.server_label(settings.get("server", "")), where)
+
+
 def _picture_words(settings):
     """What will be on the screen, said as the audience would see it."""
     kind = settings.get("picture", C.PICTURE_CARD)
@@ -171,17 +199,13 @@ def check(settings, board, audio_running=True, mic_open=False,
     page = C.FIX_VIDEO if video else C.FIX_AUDIO
 
     # ---------------------------------------------------------- where it goes
-    label = streamout.server_label(server) or server
     if not host:
         lines.append(("Going to", "nowhere: no %s is set up yet"
                       % ("video platform" if video else "server")))
         notes.append(Note(STOP, "There is no %s set up yet"
                           % ("video platform" if video else "server"), page))
-    elif video:
-        lines.append(("Going to", "%s, %s" % (label, streamout.host_label(host))))
     else:
-        lines.append(("Going to", "%s, %s%s"
-                      % (label, host, settings.get("mount", "") or "")))
+        lines.append(("Going to", where_it_goes(settings, video)))
 
     # ------------------------------------------------------------ the sound
     spec = streamout.FORMATS.get(settings.get("format", "mp3"))

@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.4.2, 8 September 2026
+
+**You can see where Ctrl+B is going to send the show, and change it.**
+
+**On air, Streaming location** lists both places with a dot beside the one
+`Ctrl+B` will use:
+
+- **My radio station**, with its name and address
+- **My video platform**, with the platform name
+
+Pick one and it says where `Ctrl+B` now goes. That is the whole feature, and
+it should have been there when video arrived.
+
+Until now the choice was a single box on the Video streaming page of
+Preferences, reading "Go live here when I press Ctrl+B". So the answer to
+"where does my show go" lived on the page for one of the two answers, and a
+board with a radio station and a YouTube channel both set up gave no sign
+anywhere that there was a choice to make. The box is still there and still
+works; the two move together.
+
+**And it stopped saying "Icecast, or Liquidsoap harbor" every time.**
+
+That string exists so the Server list in Preferences can tell you which entry
+covers your server, which is the right thing to say there. On the way to air
+it was nine words to say "Blindside Radio". It uses the name you gave your
+station now, and only falls back to the software when you have not named it.
+
+**Saved setups moved into Load a saved setup**, inside the same menu. They
+are a different question from the two above: a saved setup carries both
+Preferences pages and where it goes, so loading one can move the show from
+your radio station to your video platform. It says so when it does, which it
+did not before.
+
+**A setup saved before 3.4.0 no longer blanks your destination.** Those were
+saved before there were two places to send a show, so they carry no answer to
+the question, and loading one was copying that nothing over the top of your
+choice. Now it keeps what you picked.
+
+Nothing about the soundboard, the running order, the keyboard or what goes out
+has changed. The digit map is untouched.
+
 ## 3.4.1, 8 September 2026
 
 **Ctrl+B tells you what it is about to do, and waits.**

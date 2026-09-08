@@ -2119,7 +2119,9 @@ class SettingsDialog(wx.Dialog):
         self.live_to_video.SetValue(self.board.live_to == C.LIVE_TO_VIDEO)
         self.live_to_video.SetToolTip(
             "Ctrl+B sends the show to one place at a time. Turn this on to "
-            "send it here instead of to your radio station.")
+            "send it here instead of to your radio station. The same choice "
+            "is on the On air menu under Streaming location, where you can "
+            "see which one is ticked without opening this window.")
         sizer.Add(self.live_to_video, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.picture_clock = wx.CheckBox(

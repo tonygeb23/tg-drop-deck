@@ -491,10 +491,22 @@ class Board:
         for station in self.stream_stations:
             if station.get("stream_name") == name:
                 for field in STATION_FIELDS:
-                    if field in station:
-                        setattr(self, field, station[field])
+                    if field not in station:
+                        continue
+                    value = station[field]
+                    # A None means the field did not exist when this was
+                    # saved, not that it should be set to nothing. Stations
+                    # saved before live_to was added carry live_to: null, and
+                    # copying that across left the board with a destination
+                    # that was neither of the two, which then silently
+                    # behaved as audio whatever the user had chosen.
+                    if value is None:
+                        continue
+                    setattr(self, field, value)
                 self.stream_port = _stream_port(self.stream_port)
                 self.stream_bitrate = _stream_bitrate(self.stream_bitrate)
+                if self.live_to not in C.LIVE_TO:
+                    self.live_to = C.LIVE_TO_AUDIO
                 return True
         return False
 
