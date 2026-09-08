@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.4.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -736,6 +736,12 @@ STREAM_BEHIND_FOR = 5.0
 STREAM_BEHIND_AGAIN = 60.0
 
 #: Reconnect backoff, in seconds. Starts quick because most drops are brief.
+#: How long the pump may go round without finishing before the watchdog calls
+#: it stuck. Generously more than any real block takes, because a false alarm
+#: drops a working stream. See Streamer._watch for why this exists at all.
+STREAM_STALL_SECONDS = 12.0
+STREAM_WATCHDOG_POLL = 1.0
+
 STREAM_RETRY_FIRST = 2.0
 STREAM_RETRY_MAX = 30.0
 

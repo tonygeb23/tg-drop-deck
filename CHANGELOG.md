@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.4.0, 7 September 2026
+
+**Drop Deck goes out on YouTube, Facebook and Restream.**
+
+Pick a platform on the new Video streaming page, paste your stream key,
+press Ctrl+B. Your radio station is still on its own page and Ctrl+B goes to
+whichever one you tick.
+
+**Something has to be on the screen**, because YouTube will not take sound on
+its own. A card with your station name and whatever is playing is the default
+and costs about 64 kbps. Your own artwork and a camera are the other two.
+
+**Ctrl+Shift+F says what the camera can see.** In shot or not, centred, close
+enough, lit. You cannot look at a preview window, so the app tells you instead.
+It says changes rather than states, so it is not a running commentary: at the
+most talkative setting, six seconds in front of a camera produced one sentence.
+Off, problems only, or everything, and the key answers at all three.
+
+**Your stream key does not go in the board file.** It goes in Windows
+Credential Manager. Anybody holding a YouTube key can broadcast to your
+channel, and a board file is plain JSON that people send each other.
+
+**Setting up streaming is in the app**, on Help, and on a button beside the
+platform picker. Step by step for each of the four, the same text as the
+manual.
+
+Two things worth knowing before your first broadcast, because they are
+opposite:
+
+- **YouTube puts you live the moment you connect.** It makes the watch page,
+  tells your subscribers and saves the video. Set it to Private first.
+- **Facebook shows you a preview** and posts nothing until you press Go Live
+  Now.
+
+Restream is the one to practise on. Turn every channel off there and the
+stream reaches Restream and goes nowhere.
+
+**Also fixed while building this:** the picture used to stutter, because
+frames left in bunches of eight with a fifth of a second of nothing between
+them. And if your connection died without saying so, the app went on
+reporting ON AIR with nothing leaving the machine. It notices now, says so,
+and reconnects.
+
+Nothing about the soundboard, the running order or your radio station
+streaming has changed.
+
 ## 3.3.2 for Mac, 7 September 2026
 
 **The app now tells you when your microphone is not reaching the air.**

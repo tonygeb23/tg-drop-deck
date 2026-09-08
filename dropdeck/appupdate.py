@@ -44,7 +44,22 @@ PUBLIC_KEY_B64 = "kJOlcZKYCyYBk/1JrmyfxFSX5Vf6JiM7oXf+0PEDZ04="
 
 MANIFEST_URL = "https://tgstudios.app/updates/drop-deck-app.json"
 TIMEOUT = 30
-MAX_BYTES = 120 * 1024 * 1024      # an installer is ~20 MB; this is slack, not a target
+#: An absolute ceiling for a download whose size the manifest does not
+#: declare. It is a backstop, NOT the real limit: the real limit is the size
+#: the signed manifest names, worked out per download below.
+#:
+#: It used to be 120 MB with a comment saying "an installer is ~20 MB". Then
+#: the app grew FFmpeg and OpenCV, the portable zip reached 135 MB, and every
+#: portable copy would have refused its own update with "the download was
+#: larger than expected". The release tool caught it, which is the only reason
+#: this is not a silent outage. A number that has to be revised every time the
+#: app grows is a number that will be forgotten, so it is derived now.
+MAX_BYTES = 512 * 1024 * 1024
+#: How much more than the declared size is tolerated before a download is
+#: called wrong. Small: the hash check below is the real proof, and this only
+#: stops a runaway read.
+DOWNLOAD_SLACK = 1024 * 1024
+
 STAMP_FILE = "last_app_check.json"
 DEFAULT_INTERVAL_HOURS = 24
 
@@ -144,8 +159,17 @@ def download(info, progress=None, portable=False):
                       "folder. Nothing has been changed here.")
     url = which["url"] if which else info["url"]
     wanted = (which["sha256"] if which else info.get("sha256", "")) or ""
+    # The limit comes from the SIGNED manifest, so it can never be wrong for
+    # the file it is about to fetch, and a tampered size is a tampered
+    # manifest, which is refused before this point.
+    declared = 0
     try:
-        blob = _fetch(url)
+        declared = int((which or info).get("size") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    limit = (declared + DOWNLOAD_SLACK) if declared > 0 else MAX_BYTES
+    try:
+        blob = _fetch(url, limit=limit)
     except Exception as exc:
         return None, "Download failed. %s" % exc
 

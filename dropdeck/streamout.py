@@ -1464,6 +1464,19 @@ class Streamer:
         self.backlog = 0.0
         self._worried_at = 0.0
         self._said_dropping = False
+        #: When the pump last got all the way round. A WATCHDOG reads this,
+        #: because the pump cannot report on itself while it is stuck.
+        #:
+        #: PyAV installs FFmpeg's interrupt callback on INPUT containers only,
+        #: so the timeout passed to av.open does nothing on the way out and
+        #: mux() can block until Windows gives up on the socket, which is
+        #: minutes, or for ever on a zero window. Wi-Fi going away without a
+        #: clean disconnect is exactly that. Without this the app went on
+        #: saying ON AIR with nothing leaving the machine, which is the worst
+        #: thing it can do to somebody who cannot see a dashboard.
+        self._beat = 0.0
+        self._watchdog = None
+        self._stalled = False
 
     # ------------------------------------------------------------- lifetime --
     def start(self):
@@ -1607,6 +1620,7 @@ class Streamer:
             self.started_at = time.monotonic()
             self.bus.reset()
             self._set_state(ON_AIR, self._describe())
+            self._start_watchdog()
             try:
                 self._pump()
             except (SinkError, EncoderError) as exc:
@@ -1700,6 +1714,41 @@ class Streamer:
             self.on_trouble("The stream is losing audio. Listeners are "
                             "hearing gaps")
 
+    def _start_watchdog(self):
+        """Watch the pump from outside, because it cannot watch itself."""
+        self._beat = time.monotonic()
+        self._stalled = False
+        if self._watchdog is not None and self._watchdog.is_alive():
+            return
+        self._watchdog = threading.Thread(target=self._watch, daemon=True,
+                                          name="dropdeck-stream-watchdog")
+        self._watchdog.start()
+
+    def _watch(self):
+        while not self._stop.is_set():
+            if self._stop.wait(C.STREAM_WATCHDOG_POLL):
+                return
+            if self.state != ON_AIR:
+                continue
+            since = time.monotonic() - (self._beat or time.monotonic())
+            if since > C.STREAM_STALL_SECONDS and not self._stalled:
+                self._stalled = True
+                # Said, and then the connection is dropped so the ordinary
+                # reconnect can rebuild it. Waiting for a socket that is
+                # never going to answer is not a plan.
+                self.on_trouble(
+                    "The stream has stopped going out and the app is not "
+                    "getting through. Trying to reconnect")
+                self._set_state(RECONNECTING,
+                                "the connection stopped responding")
+                destination = self._destination
+                if destination is not None:
+                    # Closing under the blocked write is what unblocks it.
+                    try:
+                        destination.close()
+                    except Exception:
+                        pass
+
     def _pump(self):
         """Take what the sound card has made and send it, until told to stop."""
         seconds = getattr(self._destination, "chunk_seconds",
@@ -1717,12 +1766,14 @@ class Streamer:
                     raise SinkError("the audio stopped arriving")
                 continue
             idle = 0.0
+            self._beat = time.monotonic()
             self._watch_backlog()
             block = self.bus.read(chunk)
             block = self._resampler.feed(block)
             if len(block):
                 self._destination.feed(block)
             self._push_title()
+            self._beat = time.monotonic()
 
 
 class _Resampler:

@@ -162,6 +162,36 @@ def build_executable():
     run(command)
 
 
+#: OpenCV ships its own copy of FFmpeg for cv2.VideoCapture. This app never
+#: opens a video with OpenCV: PyAV is the decoder, for files and for the
+#: camera, and framing.py asks OpenCV for exactly four things, none of which
+#: touch video I/O. So these are fifty six megabytes of a SECOND FFmpeg that
+#: nothing calls.
+#:
+#: It is worth the trouble because of the size the download had reached.
+#: Portable copies check their update against a size limit that shipped in
+#: the version they are RUNNING, and 3.3.x carries a 120 MB one. A zip above
+#: that could not update itself, and the fix cannot reach somebody who has
+#: not had it yet.
+UNUSED_IN_BUNDLE = ("opencv_videoio_ffmpeg",)
+
+
+def strip_unused():
+    """Remove things collected by --collect-all that nothing here calls."""
+    removed = 0
+    root = os.path.join(BUNDLE, "_internal")
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if any(name.startswith(prefix) for prefix in UNUSED_IN_BUNDLE):
+                path = os.path.join(folder, name)
+                size = os.path.getsize(path)
+                os.remove(path)
+                removed += size
+                print(f"  dropped {name} ({size / 1048576:.1f} MB)")
+    if removed:
+        print(f"  {removed / 1048576:.1f} MB of unused FFmpeg removed")
+
+
 def copy_payload():
     """Everything that sits beside the executable."""
     for folder in ("demo",):
@@ -202,6 +232,7 @@ def main():
     print("Drawing the icon")
     make_icon()
     build_executable()
+    strip_unused()
     print("Copying the demo pack and the guide")
     copy_payload()
     print("Zipping")

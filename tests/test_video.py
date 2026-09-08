@@ -14,6 +14,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import time
 
 import numpy as np
@@ -1243,6 +1244,69 @@ check("closing a camera forgets its last picture", True)
 _stale.close()
 check("and really clears it", _stale.latest() is None)
 check("a staleness limit is set at all", C.CAMERA_STALE_SECONDS > 0)
+
+
+# ---------------------------------------------------------------------------
+print("\nA connection that wedges, which used to say ON AIR for ever")
+# ---------------------------------------------------------------------------
+
+# PyAV installs FFmpeg's interrupt callback on INPUT containers only, so the
+# timeout passed to av.open does nothing on the way out: mux() can block until
+# Windows gives up on the socket, which is minutes, or for ever on a zero
+# window. Wi-Fi going away without a clean disconnect is exactly that. The
+# pump cannot report on itself while it is stuck, so a watchdog does it.
+
+class _Wedges(streamout.Destination):
+    wants_video = False
+    chunk_seconds = 0.05
+
+    def __init__(self, *args, **kwargs):
+        self.samplerate = RATE
+        self.bytes_sent = 0
+        self.fed = 0
+        self.released = threading.Event()
+
+    def connect(self):
+        return self
+
+    def feed(self, block):
+        self.fed += 1
+        if self.fed > 4:
+            self.released.wait(120)
+
+    def describe(self):
+        return "a wedged destination"
+
+    def close(self):
+        self.released.set()
+
+
+streamout.DESTINATIONS["zzwedge"] = lambda s, r, video_source=None: _Wedges()
+try:
+    _said = []
+    _states = []
+    _bus = AirBus(RATE)
+    _wedged = Streamer(_bus, {"server": "zzwedge"}, on_trouble=_said.append,
+                       on_state=lambda s, d: _states.append(s))
+    _wedged.start()
+    _deadline = time.time() + C.STREAM_STALL_SECONDS + 6
+    _pushed = 0
+    while time.time() < _deadline:
+        _bus.write("main", tone(2048, start=_pushed))
+        _pushed += 2048
+        time.sleep(0.046)
+    check("a wedged connection still reaches on air first",
+          streamout.ON_AIR in _states, _states)
+    check("and then the watchdog notices it has stopped going out",
+          streamout.RECONNECTING in _states, _states)
+    check("the presenter is told, in words that say what to expect",
+          any("not getting through" in line for line in _said), _said)
+    _wedged.stop()
+finally:
+    del streamout.DESTINATIONS["zzwedge"]
+
+check("the stall limit is generous enough not to drop a working stream",
+      C.STREAM_STALL_SECONDS >= 10, C.STREAM_STALL_SECONDS)
 
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)
