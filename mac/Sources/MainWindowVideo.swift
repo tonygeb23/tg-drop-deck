@@ -128,12 +128,18 @@ extension MainWindow {
             board: board, speaker: speaker, live: videoStreamer.isOn,
             apply: { [weak self] kind in
                 guard let self else { return "" }
+                let was = self.board.picture
                 self.board.picture = kind
                 self.board.dirty = true
-                if self.videoStreamer.isOn {
-                    self.videoStreamer.setPicture(self.pictureSettings())
+                guard self.videoStreamer.isOn else { return "" }
+                let trouble = self.videoStreamer.setPicture(self.pictureSettings())
+                if !trouble.isEmpty {
+                    // The picture stays where it was, because a chosen source
+                    // that did not open is not the one going out.
+                    self.board.picture = was
+                    _ = self.videoStreamer.setPicture(self.pictureSettings())
                 }
-                return ""
+                return trouble
             },
             applyCorner: { [weak self] _ in
                 guard let self, self.videoStreamer.isOn,

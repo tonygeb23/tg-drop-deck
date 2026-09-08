@@ -134,14 +134,25 @@ final class VideoStreamer {
     /// The new source is built and STARTED here and picked up by the pump on
     /// its next turn, so nothing that blocks happens on the thread carrying
     /// the audio.
-    func setPicture(_ picture: PictureSettings) {
+    /// Returns what went wrong, or "" when it did not. The caller says so:
+    /// a switcher that reports success whatever happened is a switcher that
+    /// leaves somebody broadcasting a card and believing otherwise.
+    @discardableResult
+    func setPicture(_ picture: PictureSettings) -> String {
         let made = Picture.build(picture, onFallback: { [weak self] text in
             self?.say(text)
         })
         made.start()
-        _ = made.waitReady(timeout: C.cameraOpenTimeout)
+        let ready = made.waitReady(timeout: C.cameraOpenTimeout)
         made.setTitle(currentTitle)
         lock.lock(); wantedSource = made; lock.unlock()
+        if ready { return "" }
+        // A card cannot fail and never reports one, so an error here is the
+        // real source saying it could not open.
+        let trouble = made.error
+        return trouble.isEmpty
+            ? "\((C.pictureLabels[picture.picture] ?? picture.picture).lowercased()) "
+              + "did not start" : trouble
     }
 
     func setOverlay(_ settings: OverlaySettings) {
