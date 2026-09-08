@@ -109,7 +109,12 @@ check("a malformed version does not raise",
 
 
 def fake_fetch(payload):
-    def fetch(url, limit=None):
+    # **kw, and it is not decoration. _fetch grew a `progress` argument in
+    # 3.5.1 and this stand-in with a fixed signature failed to be called,
+    # which surfaces as "Download failed" and reads exactly like a broken
+    # updater rather than a broken double. Same lesson as the DESTINATIONS
+    # factory in CLAUDE.md, in a new place.
+    def fetch(url, limit=None, **kw):
         return payload
     return fetch
 

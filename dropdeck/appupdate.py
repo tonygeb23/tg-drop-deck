@@ -44,6 +44,10 @@ PUBLIC_KEY_B64 = "kJOlcZKYCyYBk/1JrmyfxFSX5Vf6JiM7oXf+0PEDZ04="
 
 MANIFEST_URL = "https://tgstudios.app/updates/drop-deck-app.json"
 TIMEOUT = 30
+#: Read in blocks this big. Small enough that the bar moves often on a slow
+#: line, big enough not to make a system call per kilobyte.
+CHUNK = 256 * 1024
+
 #: An absolute ceiling for a download whose size the manifest does not
 #: declare. It is a backstop, NOT the real limit: the real limit is the size
 #: the signed manifest names, worked out per download below.
@@ -64,6 +68,10 @@ STAMP_FILE = "last_app_check.json"
 DEFAULT_INTERVAL_HOURS = 24
 
 
+class Stopped(Exception):
+    """The user pressed Stop. Raised by a progress callback, honoured here."""
+
+
 def parse_version(text):
     """"0.2.0" -> (0, 2, 0). Unreadable parts sort as 0 rather than raising.
 
@@ -80,15 +88,50 @@ def parse_version(text):
     return tuple(out[:3])
 
 
-def _fetch(url, limit=MAX_BYTES):
-    ctx = ssl.create_default_context()
+def _fetch(url, limit=MAX_BYTES, progress=None):
+    """The bytes at a URL, in blocks, so somebody can be told how it is going.
+
+    **It used to read the whole thing in one call.** `download` has accepted a
+    `progress` callback since it was written and had nothing to feed it, so
+    the update was a busy cursor and a silence lasting however long 86 MB
+    takes. Tony, 8 September 2026, asked for a progress bar, and the reason
+    there was not one is this function.
+
+    `progress` is called as `(done, total)` with `total` 0 when the server
+    will not say. It is called from a worker thread, so anything touching wx
+    has to hop for itself.
+    """
     req = urllib.request.Request(url, headers={
-        "User-Agent": "%s/%s" % (C.APP_NAME.replace(" ", ""), C.APP_VERSION)})
+        "User-Agent": "%s/%s" % (C.APP_NAME.replace(" ", ""),
+                                 C.APP_VERSION)})
+    ctx = ssl.create_default_context()
+    out = bytearray()
     with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
-        data = resp.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError("the download was larger than expected")
-    return data
+        try:
+            total = int(resp.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if total and total > limit:
+            raise ValueError("the download was larger than expected")
+        while True:
+            block = resp.read(CHUNK)
+            if not block:
+                break
+            out += block
+            if len(out) > limit:
+                raise ValueError("the download was larger than expected")
+            if progress is not None:
+                try:
+                    progress(len(out), total)
+                except Stopped:
+                    # The one exception from a progress callback that means
+                    # something. Everything else is ignored just below.
+                    raise
+                except Exception:
+                    # A failing progress bar must never lose an update that
+                    # is otherwise arriving perfectly well.
+                    pass
+    return bytes(out)
 
 
 def _verify(manifest_bytes, signature_b64):
@@ -169,7 +212,9 @@ def download(info, progress=None, portable=False):
         declared = 0
     limit = (declared + DOWNLOAD_SLACK) if declared > 0 else MAX_BYTES
     try:
-        blob = _fetch(url, limit=limit)
+        blob = _fetch(url, limit=limit, progress=progress)
+    except Stopped:
+        return None, "The download was stopped. Nothing was changed."
     except Exception as exc:
         return None, "Download failed. %s" % exc
 
@@ -197,8 +242,16 @@ def run_installer(path):
     makes replacing a running exe work at all.
     """
     try:
-        subprocess.Popen([path, "/SILENT", "/NOCANCEL"], close_fds=True)
-        return True, "Installing. The app will close and reopen."
+        # /restartapp=1 is read by the .iss, which has a [Run] entry guarded
+        # on it. **The plain [Run] entry carries `skipifsilent`**, so with
+        # /SILENT the "Open TG Drop Deck" step was skipped by definition and
+        # the app never came back, exactly as Tony reported on 8 September
+        # 2026. RestartApplications=yes did not cover it either: the Restart
+        # Manager only restarts what it closed itself, and a PyInstaller
+        # build does not register with it.
+        subprocess.Popen([path, "/SILENT", "/NOCANCEL", "/restartapp=1"],
+                         close_fds=True)
+        return True, "Installing. The app will close and reopen by itself."
     except Exception as exc:
         return False, "Could not start the installer. %s" % exc
 

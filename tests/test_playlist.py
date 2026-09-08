@@ -1290,7 +1290,7 @@ prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
 # leave a setting unreachable. Shot check was added on 8 September 2026.
 _TABS = ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
          "Audio streaming", "Video streaming", "Recording", "Speech",
-         "Shot check"]
+         "AI Provider"]
 check("Preferences has ten tabs",
       prefs.tabs.GetPageCount() == len(_TABS), prefs.tabs.GetPageCount())
 check("named for what is on them",

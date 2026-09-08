@@ -1690,22 +1690,47 @@ class DropDeckFrame(wx.Frame):
         # On a worker thread. This is an HTTPS download of a 40 MB installer;
         # inline it froze the window with only a busy cursor for company.
         import threading
-        self.announce_help("Downloading. This may take a moment.")
-        wx.BeginBusyCursor()
+        self.announce_help("Downloading version %s."
+                           % info.get("version", "the update"))
+        # A real bar, and one that speaks. The busy cursor that used to be
+        # here told a sighted user something and a screen reader user
+        # nothing at all, for however long 86 MB takes.
+        box = updatedialog.DownloadProgressDialog(
+            self, self, "version %s" % info.get("version", "the update"))
+        box.Show()
+        self._update_box = box
 
         def work():
             try:
-                got = appupdate.download(info, portable=portable)
+                got = appupdate.download(info, progress=_step,
+                                         portable=portable)
+            except appupdate.Stopped:
+                got = (None, "The download was stopped. Nothing was changed.")
             except Exception as exc:
                 got = (None, "Download failed. %s" % exc)
             wx.CallAfter(self._download_done, got[0], got[1], info,
                          portable)
 
+        def _step(done, total):
+            # Raising out of the progress callback is how the Stop button
+            # reaches a download already in flight. appupdate swallows
+            # exceptions from progress on purpose, so this uses an error it
+            # re-raises for: see the check in _fetch.
+            if box.cancelled:
+                raise appupdate.Stopped()
+            box.step(done, total)
+
         threading.Thread(target=work, daemon=True, name="dropdeck-dl").start()
 
     def _download_done(self, path, message, info=None, portable=False):
         from . import appupdate
-        wx.EndBusyCursor()
+        box = getattr(self, "_update_box", None)
+        if box is not None:
+            try:
+                box.Destroy()
+            except Exception:
+                pass
+            self._update_box = None
         if not path:
             self.announce(message)
             wx.MessageBox(message, "Update failed", wx.OK | wx.ICON_WARNING, self)
@@ -4096,6 +4121,72 @@ class DropDeckFrame(wx.Frame):
             self.announce(str(exc))
         return source
 
+    def preview_picture(self, timeout=None):
+        """One frame of what WOULD go out, whether or not we are live.
+
+        Tony, 8 September 2026: "i should be able to check before going
+        live." He is right, and the first version of the shot check could
+        not: it read `video_source`, which only exists once `Ctrl+B` has
+        been pressed, so the answer to "how does my shot look" was "go on
+        air and find out".
+
+        **Never call this on the UI thread.** Opening a camera is about six
+        tenths of a second and a screen grab blocks on the compositor.
+
+        Returns `(frame, note)`. The note says whether this was the real
+        live picture or one built to look at, because those are different
+        claims and the person reading cannot tell them apart by looking.
+        """
+        live = getattr(self, "video_source", None)
+        width = self.board.video_width
+        height = self.board.video_height
+        if live is not None:
+            picture_ = live.frame(width, height)
+            return self._with_overlay(picture_), "what is going out now"
+        # Not on air. Build the same source the stream would build, look at
+        # one frame, and put it away again. Deliberately NOT gated on the
+        # destination being RTMP the way _build_picture is: somebody set up
+        # to go to their radio station may still want to see the picture
+        # before they switch over.
+        source = None
+        try:
+            # The PICTURE settings, not the destination's. See
+            # _picture_settings for why that distinction is load bearing.
+            source = picture.build(self._picture_settings(),
+                                   on_fallback=lambda _reason: None)
+            source.start()
+            waiter = getattr(source, "wait_ready", None)
+            if waiter is not None:
+                waiter(timeout)
+            picture_ = source.frame(width, height)
+            return self._with_overlay(picture_), "what would go out"
+        except Exception as exc:
+            return None, str(exc)
+        finally:
+            # Always. A camera left open by a preview is a light on in the
+            # room and a device another program cannot have.
+            if source is not None:
+                try:
+                    source.close()
+                except Exception:
+                    pass
+
+    def _with_overlay(self, picture_):
+        """The frame with the words on it, the way a viewer would see it.
+
+        The overlay is drawn by the DESTINATION, not by the source, so a
+        frame taken straight from `video_source` has none of it. The shot
+        check offers to tell you whether the lower third sits across your
+        face, and it cannot do that from a picture the lower third is not in.
+        """
+        if picture_ is None:
+            return None
+        try:
+            marks = self.build_overlay(self._picture_settings())
+            return marks.draw_on(picture_) if marks is not None else picture_
+        except Exception:
+            return picture_
+
     def _picture_failed(self, reason):
         """Said once, from whatever thread noticed, never once a frame."""
         wx.CallAfter(self.announce,
@@ -4376,6 +4467,32 @@ class DropDeckFrame(wx.Frame):
         with StreamStatsDialog(self, self._stream_settings(),
                                on_air=self.streaming()) as dialog:
             dialog.ShowModal()
+
+    def _picture_settings(self):
+        """Everything about the PICTURE, whatever Ctrl+B is pointed at.
+
+        `_stream_settings` answers for the destination, so when `live_to` is
+        the radio station it returns the audio dict, which has no `picture`
+        key at all. Anything that wants the picture and asks that question
+        gets `None` and `picture.build` quietly hands back a card.
+
+        That is exactly what the shot check did on 8 September 2026: Tony set
+        a picture source, pressed Alt+Shift+D, and would have been told about
+        a card he had not chosen. A silent wrong answer, not an error.
+        """
+        board = self.board
+        return {"name": board.stream_name,
+                "picture": board.picture,
+                "picture_file": board.picture_file,
+                "picture_clock": board.picture_clock,
+                "camera": board.camera,
+                "screen": board.screen,
+                "colour_background": board.colour_background,
+                "colour_text": board.colour_text,
+                "colour_accent": board.colour_accent,
+                "video_width": board.video_width,
+                "video_height": board.video_height,
+                "video_fps": board.video_fps}
 
     def _stream_settings(self):
         """What the board holds, in the shape the streamer wants.

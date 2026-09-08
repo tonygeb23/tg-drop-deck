@@ -43,6 +43,7 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.5.1": ("You can check your shot BEFORE going live now, which is when it is any use, and it looks at the picture you actually chose rather than quietly describing a card. The update has a progress bar that speaks, and the app really does reopen after updating itself, which it has been promising and not doing."),
     "3.5.0": ("Things can go on top of the picture: Alt+Shift+T puts your station name, what is playing or a clock in four named places, and Alt+Shift+C sets your own colours, every one of which tells you how well it will read. Alt+Shift+D asks Claude, ChatGPT or Gemini, on your own key, to look at the picture going out and say what is wrong with it. This also fixes a colour fault that was going out on every stream, so your video will simply look right."),
     "3.4.3": ("Source control now works the way Windows works. Muted and Solo are check boxes, ticked when a source is muted or soloed, and Rename and Remove are buttons. F2 renames and Delete removes straight from the list. The old left and right arrow cycling is gone."),
     "3.4.2": ("On air, Streaming location now shows both places your show can go, with a dot beside the one Ctrl+B will use, so you can see which it is and change it. It also says the name you gave your station rather than the name of the software running on it."),
@@ -348,7 +349,12 @@ def rehearse():
     print()
 
     def serve(manifest=None, payload=None):
-        def fetch(url, limit=None):
+        # **kw. _fetch grew a `progress` argument in 3.5.1 for the download
+        # bar, and this stand-in with a fixed signature made the rehearsal
+        # report "the real installer failed its own hash", which reads like
+        # a corrupt build rather than a stale double. Third time this exact
+        # shape has bitten: see CLAUDE.md on DESTINATIONS factories.
+        def fetch(url, limit=None, **kw):
             if url == appupdate.MANIFEST_URL:
                 return json.dumps(manifest or envelope).encode()
             return payload if payload is not None else blob

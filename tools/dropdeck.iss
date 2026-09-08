@@ -77,6 +77,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Open {#AppName}"; Flags: nowait postinstall skipifsilent
+; And the same thing for a SILENT install, which is how the app updates
+; itself. The line above cannot do it: skipifsilent means what it says, so
+; an app that installed its own update never reopened. Guarded on a flag
+; rather than made unconditional, so somebody running the installer silently
+; from a script does not get a window they did not ask for.
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: WantsRestart
 
 [UninstallDelete]
 ; Only the installed program. The user's board, their own sounds and their
@@ -84,3 +90,10 @@ Filename: "{app}\{#AppExeName}"; Description: "Open {#AppName}"; Flags: nowait p
 ; left behind: uninstalling to fix a problem must not destroy a board someone
 ; spent an afternoon building.
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+function WantsRestart: Boolean;
+begin
+  { Set by the app when it installs its own update: /restartapp=1 }
+  Result := ExpandConstant('{param:restartapp|0}') = '1';
+end;

@@ -2069,6 +2069,13 @@ class SettingsDialog(wx.Dialog):
             "Picture file",
             "A PNG or a JPEG. It is fitted inside the frame without being "
             "stretched out of shape.")
+        # A Browse button beside it, the same shape as the recordings folder.
+        # Typing a path from memory is not a reasonable thing to ask of
+        # somebody who cannot see the folder they are typing it out of, and
+        # the file window is the one part of Windows everybody already knows.
+        self.picture_browse = wx.Button(panel, label="&Browse for a picture...")
+        self.picture_browse.Bind(wx.EVT_BUTTON, self._on_picture_browse)
+        sizer.Add(self.picture_browse, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         self._cameras = []
         self.camera_choice = field(
@@ -2262,6 +2269,7 @@ class SettingsDialog(wx.Dialog):
             event.Skip()
         kind = self._picture_kinds[max(0, self.picture_kind.GetSelection())]
         self.picture_file.Enable(kind == C.PICTURE_IMAGE)
+        self.picture_browse.Enable(kind == C.PICTURE_IMAGE)
         # The split wants both a camera and a screen, so it is not the
         # same test as "is this the camera source" any more.
         self.camera_choice.Enable(kind in C.PICTURE_NEEDS_CAMERA)
@@ -2433,6 +2441,18 @@ class SettingsDialog(wx.Dialog):
         self._show_next_recording()
         event.Skip()
 
+    def _on_picture_browse(self, _event=None):
+        """The Windows file window, which everybody's screen reader knows."""
+        current = self.picture_file.GetValue().strip()
+        folder = os.path.dirname(current) if current else ""
+        with wx.FileDialog(
+                self, "Which picture should go out?", defaultDir=folder,
+                wildcard=("Pictures|*.png;*.jpg;*.jpeg;*.bmp;*.gif|"
+                          "All files|*.*"),
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                self.picture_file.SetValue(dialog.GetPath())
+
     def _on_record_folder(self, _event):
         with wx.DirDialog(self, "Where should recordings go?",
                           defaultPath=self.record_folder.GetValue(),
@@ -2476,7 +2496,7 @@ class SettingsDialog(wx.Dialog):
         key alone; clearing it is its own button, so it cannot happen by
         accident while somebody is tabbing through.
         """
-        panel, sizer = self._page("Shot check")
+        panel, sizer = self._page("AI Provider")
 
         self._note(panel, sizer,
                    "Before you go live, Alt+Shift+D asks a model that can\n"
@@ -2514,18 +2534,29 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(row, 0, wx.ALL, 10)
 
         self._label(panel, sizer, "&Model, if you want a particular one")
-        self.vision_model = wx.TextCtrl(panel)
+        # A combo box rather than a plain edit: a list of real names can be
+        # arrowed through and read out, which a blank box cannot, and it is
+        # still typeable because the right answer may not be in the list yet.
+        model_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.vision_model = wx.ComboBox(
+            panel, style=wx.CB_DROPDOWN,
+            choices=list(vision.KNOWN_MODELS.get(self._vision_chosen(), ())))
         self.vision_model.SetName("Model")
         self.vision_model.SetValue(self.board.vision_model or "")
-        sizer.Add(self.vision_model, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        model_row.Add(self.vision_model, 1, wx.EXPAND | wx.RIGHT, 8)
+        self.vision_models_get = wx.Button(panel, label="&Get the list")
+        self.vision_models_get.Bind(wx.EVT_BUTTON, self._on_vision_models)
+        model_row.Add(self.vision_models_get, 0)
+        sizer.Add(model_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         self.vision_model_note = wx.StaticText(panel, label="")
         sizer.Add(self.vision_model_note, 0, wx.ALL, 10)
 
         self._note(panel, sizer,
                    "The key is kept in Windows Credential Manager, not in\n"
                    "your board file, so a board you send to somebody else\n"
-                   "does not carry it. You can see and remove it yourself\n"
-                   "under " + secrets.VISION_PREFIX.strip() + " there.")
+                   "does not carry it. You can see it and remove it there\n"
+                   "yourself, listed as "
+                   + secrets.VISION_PREFIX.strip().rstrip(":") + ".")
         self._refresh_vision()
 
     def _on_vision_provider(self, _event=None):
@@ -2546,8 +2577,41 @@ class SettingsDialog(wx.Dialog):
             % (vision.PROVIDER_NAMES[who], secrets.redact(held)))
         self.vision_forget.Enable(bool(held))
         self.vision_model_note.SetLabel(
-            "Leave empty for %s, which is the quick one."
-            % vision.DEFAULT_MODELS.get(who, "the usual model"))
+            "Leave empty for %s, which is the quick one. Get the list asks "
+            "%s what it really has."
+            % (vision.DEFAULT_MODELS.get(who, "the usual model"),
+               vision.PROVIDER_NAMES[who]))
+        box = getattr(self, "vision_model", None)
+        if box is not None:
+            keeping = box.GetValue()
+            box.Set(list(vision.KNOWN_MODELS.get(who, ())))
+            box.SetValue(keeping)
+
+    def _on_vision_models(self, _event=None):
+        """Ask the service what it really has, rather than trusting a list.
+
+        On the UI thread on purpose: it is one small request, the button is
+        disabled while it runs, and a Preferences page is not carrying audio.
+        """
+        who = self._vision_chosen()
+        key = secrets.fetch(who, secrets.VISION_PREFIX)
+        self.vision_models_get.Enable(False)
+        self.vision_model_note.SetLabel("Asking %s what it has..."
+                                        % vision.PROVIDER_NAMES[who])
+        wx.SafeYield()
+        try:
+            ok, got = vision.list_models(who, key)
+        finally:
+            self.vision_models_get.Enable(True)
+        if not ok:
+            self.vision_model_note.SetLabel(got)
+            return
+        keeping = self.vision_model.GetValue().strip()
+        self.vision_model.Set(got)
+        self.vision_model.SetValue(keeping)
+        self.vision_model_note.SetLabel(
+            "%d models. Arrow through the list, or leave it empty for %s."
+            % (len(got), vision.DEFAULT_MODELS.get(who, "the usual one")))
 
     def _on_vision_forget(self, _event=None):
         who = self._vision_chosen()
@@ -5054,14 +5118,13 @@ class ShotCheckDialog(wx.Dialog):
                 "on top of it. %s is asked." % who)
 
     def _picture(self):
-        source = getattr(self.frame, "video_source", None)
-        if source is None:
-            return None
-        try:
-            return source.frame(self.frame.board.video_width,
-                                self.frame.board.video_height)
-        except Exception:
-            return None
+        """Delegated, so being on air or not is the frame's business.
+
+        This used to read `video_source` directly and answer None when it
+        was not there, which meant the shot could only be checked once the
+        show was already out. Checking after you are live is not checking.
+        """
+        return self.frame.preview_picture()
 
     # -- doing it ----------------------------------------------------------
 
@@ -5074,11 +5137,6 @@ class ShotCheckDialog(wx.Dialog):
             self._show("No key has been set up yet. Open Preferences, Shot "
                        "check, and put in a key for the service you want to "
                        "use.")
-            return
-        picture_ = self._picture()
-        if picture_ is None:
-            self._show("There is no picture to look at yet. Start streaming, "
-                       "or set a picture source first.")
             return
         kind = self._kind()
         if vision.needs_consent(kind):
@@ -5097,9 +5155,24 @@ class ShotCheckDialog(wx.Dialog):
         self._show("Looking at the picture. This usually takes a second or "
                    "two.")
         provider, model = board.vision_provider, board.vision_model
+        frame = self.frame
 
         def work():
+            # The GRAB is on this thread too, not just the asking. Opening a
+            # camera to look at it takes about six tenths of a second and a
+            # screen capture blocks on the compositor, and neither belongs
+            # on the thread carrying the keyboard.
+            picture_, note = frame.preview_picture()
+            if picture_ is None:
+                wx.CallAfter(
+                    self._done, False,
+                    "There is no picture to look at. %s\n\nChoose a picture "
+                    "with Alt+Shift+V, or check the camera is plugged in."
+                    % (note or ""))
+                return
             ok, text = vision.describe(picture_, kind, provider, key, model)
+            if ok:
+                text = "Checked %s.\n\n%s" % (note, text)
             wx.CallAfter(self._done, ok, text)
 
         # Its own thread, always. This is the same rule as the screen grab

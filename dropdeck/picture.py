@@ -439,6 +439,22 @@ class FallbackSource(PictureSource):
         self.backup.start()
         return self
 
+    def wait_ready(self, timeout=None):
+        """Wait for the real source, not the card standing in for it.
+
+        Delegated to the primary, because the backup is a card and a card is
+        ready the moment it exists. Without this a preview of a camera
+        photographs the card: opening a webcam is 0.58 seconds and the first
+        frame() call lands long before that.
+        """
+        waiter = getattr(self.primary, "wait_ready", None)
+        if waiter is None:
+            return True
+        try:
+            return bool(waiter(timeout))
+        except Exception:
+            return False
+
     def frame(self, width, height):
         """The primary if it can answer, otherwise the backup.
 

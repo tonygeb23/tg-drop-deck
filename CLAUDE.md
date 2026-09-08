@@ -329,6 +329,43 @@ And specific to this one:
   new users" on a live key the day this was written. And a thinking model
   spends `maxOutputTokens` on thinking FIRST: without a ceiling one returned
   the eighteen characters "There is no camera" and stopped mid sentence.
+- **`_stream_settings` answers for the DESTINATION, so it is the wrong place
+  to ask about the picture.** When `live_to` is the radio station it returns
+  the audio dict, which has no `picture` key at all, and `picture.build` on a
+  dict with no picture quietly returns a card. The shot check asked it and
+  described a card Tony had not chosen, confidently, with no error anywhere.
+  `_picture_settings` exists for this and everything about the picture must
+  use it. **A missing key that defaults to something plausible is worse than
+  a crash**, because nothing ever reports it.
+- **Anything that shows the picture must work OFF air.** Tony, 8 September
+  2026: "i should be able to check before going live." `preview_picture`
+  builds the source, waits for it, draws the overlay on it and closes it
+  again, and it is not gated on the destination being RTMP the way
+  `_build_picture` is. Two things it must keep doing: **wait**, because a
+  webcam is 0.58 seconds to first frame and `FallbackSource` hands back the
+  card until then, so a preview that does not wait photographs the card; and
+  **close**, because a camera left open by a preview is a light on in the
+  room and a device no other program can have.
+  **The overlay is drawn by the DESTINATION, not the source**, so any frame
+  taken from a source has none of it. A shot check that offers to say whether
+  the lower third covers your face cannot do it from a picture the lower
+  third is not in.
+- **An update that cannot be heard is an update that has hung.**
+  `download` accepted a `progress` callback from the day it was written and
+  `_fetch` read the whole file in one call, so nothing ever called it: the
+  update was a busy cursor and a silence. It reads in blocks now. **The
+  percentage is SPOKEN at ten per cent steps**, because a gauge nobody
+  focuses is silent and a gauge that speaks four times a second never
+  finishes a sentence. A progress callback that raises is ignored, except
+  `appupdate.Stopped`, which is how the Stop button reaches a download
+  already in flight.
+- **`skipifsilent` is why the app never reopened after updating itself.**
+  The `[Run]` entry that opens the app carried it, and the app installs with
+  `/SILENT`, so the step was skipped by definition while the dialog said
+  "the app will close and reopen". `RestartApplications=yes` did not cover
+  it either: the Restart Manager only restarts what it closed itself and a
+  PyInstaller build does not register with it. There is a second `[Run]`
+  entry now, guarded on `WantsRestart`, and the app passes `/restartapp=1`.
 - **Named places, never a canvas.** `overlay.py` offers four fixed spots that
   cannot overlap, and there is no way to put something at an arbitrary
   position. That is not a shortcut, it is the feature: the research in

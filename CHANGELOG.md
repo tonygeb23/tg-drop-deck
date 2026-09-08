@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.5.1, 8 September 2026
+
+**You can check your shot before you go live, which is when checking is any
+use.** `Alt+Shift+D` used to need the stream already running, so the answer to
+"how does my shot look" was "go on air and find out". It now builds the
+picture, looks at it, and puts it away again.
+
+**And it looks at the right picture.** If Ctrl+B was pointed at your radio
+station rather than a video platform, the check quietly described a card
+instead of whatever you had chosen. It never said so. Both are fixed, and what
+it describes now includes your station name and the other words on screen, the
+way a viewer sees them.
+
+**The update has a progress bar, and it talks.** It says the percentage as it
+climbs rather than only drawing a bar nobody can see, and there is a Stop
+button that really stops.
+
+**And the app reopens after an update, which it has been promising and not
+doing.** The installer was told to skip the "open the app" step whenever it
+ran without a wizard, which is exactly how the app installs its own updates.
+
+**The AI page is easier to fill in.** It is called **AI Provider** now. The
+model is a list you can arrow through instead of an empty box, with a **Get
+the list** button that asks your service what it can really see, because model
+names change faster than this app ships. And your own artwork gets a **Browse**
+button rather than a path you were expected to type from memory.
+
 ## 3.5.0, 8 September 2026
 
 **Things can go on top of the picture now, and the app will tell you what is

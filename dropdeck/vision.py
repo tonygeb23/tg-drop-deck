@@ -162,6 +162,68 @@ window, a desktop covered in files.
 If you see something private, say exactly where it is so they can close it."""
 
 
+#: Offered in the model box before anybody asks the service. Short on
+#: purpose: the box is editable and the Get the list button replaces these
+#: with whatever the account can really see, which is the only list that
+#: cannot go stale.
+KNOWN_MODELS = {
+    "anthropic": ("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"),
+    "openai": ("gpt-4o", "gpt-4o-mini", "gpt-4.1"),
+    "google": ("gemini-flash-lite-latest", "gemini-flash-latest",
+               "gemini-pro-latest"),
+}
+
+#: Where each provider will say what it has, and how to dig the names out.
+_MODEL_LISTS = {
+    "anthropic": ("https://api.anthropic.com/v1/models",
+                  lambda got: [m["id"] for m in got.get("data", [])]),
+    "openai": ("https://api.openai.com/v1/models",
+               lambda got: [m["id"] for m in got.get("data", [])]),
+    "google": ("https://generativelanguage.googleapis.com/v1beta/models",
+               lambda got: [m["name"].split("/")[-1]
+                            for m in got.get("models", [])
+                            if "generateContent"
+                            in m.get("supportedGenerationMethods", [])]),
+}
+
+
+def list_models(provider, key, timeout=30.0):
+    """What this account can really use. Returns `(ok, names or message)`.
+
+    Model names change faster than this app ships, which is not a guess:
+    on 8 September 2026 two of the names written here as defaults were
+    already gone on a live key. A list typed into the source is a list that
+    goes wrong quietly, so the app can ask instead.
+    """
+    provider = (provider or "").strip().lower()
+    where = _MODEL_LISTS.get(provider)
+    if where is None:
+        return False, "That is not a service this app knows."
+    if not key:
+        return False, "Put a key in first, then ask for the list."
+    url, dig = where
+    headers = {"accept": "application/json"}
+    if provider == "anthropic":
+        headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+    elif provider == "openai":
+        headers["authorization"] = "Bearer " + key
+    else:
+        headers["x-goog-api-key"] = key
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as answer:
+            got = json.loads(answer.read().decode("utf-8", "replace"))
+    except Exception as error:
+        return False, _trouble(error, provider)
+    try:
+        names = [n for n in dig(got) if n]
+    except Exception:
+        return False, "The list came back in a shape this app did not expect."
+    if not names:
+        return False, "That account has no models that can look at pictures."
+    return True, sorted(set(names))
+
+
 def providers_with_keys():
     """Which of the three have actually been set up on this machine."""
     from . import secrets
