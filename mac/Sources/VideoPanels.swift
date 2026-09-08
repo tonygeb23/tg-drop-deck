@@ -778,6 +778,17 @@ final class ShotCheckPanel: NSObject {
             speaker.announce(said)
             return
         }
+        // **Asked here, on the main thread, before anything else happens.**
+        // It used to be asked from the background queue with a main.sync,
+        // which is a deadlock waiting for a main thread that is inside a modal
+        // loop. It is also the wrong shape: the question is "may I send a
+        // picture of your screen", and the honest moment to ask it is before
+        // the screen is even grabbed.
+        if ShotCheck.needsConsent(kind) && !consent() {
+            show("Nothing was sent.")
+            speaker.announce("Nothing was sent.")
+            return
+        }
         busy = true
         goButton?.isEnabled = false
         show("Looking at the picture. This usually takes a second or two.")
@@ -790,25 +801,16 @@ final class ShotCheckPanel: NSObject {
         let kind = self.kind
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            // The GRAB is on this queue too, not just the asking. Opening a
-            // camera blocks and a screen capture waits on the compositor, and
-            // the main queue is carrying the keyboard.
+            // The GRAB is on this queue, not the main one. Opening a camera
+            // blocks and a screen capture waits on the compositor, and the
+            // main queue is carrying the keyboard.
             let shot = self.grab()
-            var ticket: ShotCheck.Ticket?
-            if let shot, ShotCheck.needsConsent(kind) {
-                let allowed = DispatchQueue.main.sync { self.consent() }
-                guard allowed,
-                      let made = ShotCheck.consent(for: shot, kind: kind,
-                                                   answered: true) else {
-                    DispatchQueue.main.async {
-                        self.busy = false
-                        self.goButton?.isEnabled = true
-                        self.show("Nothing was sent.")
-                        self.speaker.announce("Nothing was sent.")
-                    }
-                    return
-                }
-                ticket = made
+            // The ticket is minted from the bytes that are about to go, so
+            // consent cannot drift onto a different picture between the
+            // question and the send.
+            let ticket = shot.flatMap {
+                ShotCheck.needsConsent(kind)
+                    ? ShotCheck.consent(for: $0, kind: kind, answered: true) : nil
             }
             let got = ShotCheck.describe(shot, kind: kind, provider: provider,
                                          key: key, model: model, consent: ticket)
