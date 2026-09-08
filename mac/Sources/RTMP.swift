@@ -64,6 +64,11 @@ final class RTMPClient {
 
     private let messageStreamID: UInt32 = 1
 
+    /// How much of what the server has said is kept. Generous next to the
+    /// handshake, which is the largest single thing ever read, and small
+    /// enough that it cannot grow over a long broadcast.
+    static let keepBytes = 64 * 1024
+
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "app.tgstudios.dropdeck.rtmp")
     private var outChunkSize = 4096
@@ -376,7 +381,18 @@ final class RTMPClient {
             [weak self] data, _, complete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
-                self.lock.lock(); self.incoming.append(data); self.lock.unlock()
+                self.lock.lock()
+                self.incoming.append(data)
+                // **Trimmed, or a three hour show grows a buffer for three
+                // hours.** The server goes on sending acknowledgements and
+                // ping requests for as long as the stream is up, and nothing
+                // here consumes them: this client only ever LOOKS for a
+                // command name. So the tail is kept, which is where anything
+                // new is, and the rest is dropped.
+                if self.incoming.count > RTMPClient.keepBytes {
+                    self.incoming = self.incoming.suffix(RTMPClient.keepBytes)
+                }
+                self.lock.unlock()
             }
             if complete || error != nil { return }
             self.receiveLoop(connection)
