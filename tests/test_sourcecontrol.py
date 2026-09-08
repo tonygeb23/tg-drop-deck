@@ -176,41 +176,68 @@ class Key:
         self.skipped = True
 
 
+# 3.4.3: mute and solo are check boxes and the two actions are buttons, so
+# there is no mode to remember. Tony asked for the mode on 5 September and
+# asked for it to go on the 8th.
 window.list.Select(1)
 app.Yield()
-check("it starts on Mute", window.ACTIONS[window.action][0] == "mute")
-window._on_key(Key(wx.WXK_RIGHT))
-check("right goes to Solo", window.ACTIONS[window.action][0] == "solo")
-window._on_key(Key(wx.WXK_RIGHT))
-check("then Rename", window.ACTIONS[window.action][0] == "rename")
-window._on_key(Key(wx.WXK_RIGHT))
-check("then Remove", window.ACTIONS[window.action][0] == "delete")
-window._on_key(Key(wx.WXK_RIGHT))
-check("and round to Mute again", window.ACTIONS[window.action][0] == "mute")
-window._on_key(Key(wx.WXK_LEFT))
-check("left goes back the other way",
-      window.ACTIONS[window.action][0] == "delete")
+check("mute is a check box", isinstance(window.muted, wx.CheckBox))
+check("and solo is another one", isinstance(window.soloed, wx.CheckBox))
+check("rename is a button", isinstance(window.rename, wx.Button))
+check("and remove is another one", isinstance(window.remove, wx.Button))
+check("there is no action mode left to get lost in",
+      not hasattr(window, "ACTIONS") and not hasattr(window, "action"))
 
-# Space on Mute mutes, and the audio follows.
-window.action = 0
+
+def tick(box, value):
+    """Set a check box the way a user would, event and all."""
+    box.SetValue(value)
+    handler = window._on_muted if box is window.muted else window._on_soloed
+    handler(None)
+    app.Yield()
+
+
+# THE ONE THAT WOULD BITE. SetValue raises EVT_CHECKBOX in wx, so syncing the
+# boxes to the selected row must not be mistaken for the user ticking them.
+# Without the guard, arrowing down a list would mute everything it touched.
+call.muted = False
+music.muted = False
+window.list.Select(2)
+app.Yield()
 window.list.Select(1)
 app.Yield()
-window._on_key(Key(wx.WXK_SPACE))
-check("Space on Mute mutes that source", call.muted is True)
+check("arrowing between sources does not change any of them",
+      call.muted is False and music.muted is False)
+
+tick(window.muted, True)
+check("ticking Muted mutes that source", call.muted is True)
 check("and it really goes quiet", air_of(call) < 0.001)
 check("the list says so too", window.list.GetItemText(1, 2) == "yes",
       window.list.GetItemText(1, 2))
-window._on_key(Key(wx.WXK_SPACE))
-check("Space again unmutes", call.muted is False and air_of(call) > 0.05)
+tick(window.muted, False)
+check("clearing it unmutes", call.muted is False and air_of(call) > 0.05)
 
-# Solo from the window.
-window.action = 1
-window._on_key(Key(wx.WXK_SPACE))
-check("Space on Solo solos it", call.soloed is True)
+tick(window.soloed, True)
+check("ticking Solo solos it", call.soloed is True)
 check("and the other one goes quiet", air_of(music) < 0.001)
-window._on_key(Key(wx.WXK_SPACE))
-check("Space again clears it", not frame.anything_soloed()
+tick(window.soloed, False)
+check("clearing it puts everything back", not frame.anything_soloed()
       and air_of(music) > 0.05)
+
+# The boxes follow the cursor, which is the whole point of them.
+call.muted = True
+music.muted = False
+window.list.Select(2)
+app.Yield()
+check("moving to an unmuted source shows it unticked",
+      window.muted.GetValue() is False)
+window.list.Select(1)
+app.Yield()
+check("and back to a muted one shows it ticked",
+      window.muted.GetValue() is True)
+call.muted = False
+window.list.Select(1)
+app.Yield()
 
 # The digits jump about the list.
 window._on_key(Key(ord("2")))
@@ -218,24 +245,27 @@ check("pressing 2 goes to source two", window.list.GetFirstSelected() == 2)
 window._on_key(Key(ord("1")))
 check("and 1 back to source one", window.list.GetFirstSelected() == 1)
 
-# The microphone cannot be renamed or removed.
+# F2 and Delete are the same two keys as everywhere else in the app.
 window.list.Select(0)
 app.Yield()
-window.action = 3
-window._on_key(Key(wx.WXK_SPACE))
+window._on_key(Key(wx.WXK_DELETE))
 check("the microphone cannot be removed", len(frame.sources) == 2)
-window.action = 2
-window._on_key(Key(wx.WXK_SPACE))
+window._on_key(Key(wx.WXK_F2))
 check("nor renamed", True)
+check("and the buttons say so by being unavailable, not absent",
+      not window.rename.IsEnabled() and not window.remove.IsEnabled()
+      and window.rename.IsShown())
 
 # But it can be muted, which is what makes solo work both ways.
-window.action = 0
-window.list.Select(0)
-app.Yield()
-window._on_key(Key(wx.WXK_SPACE))
+tick(window.muted, True)
 check("the microphone can be muted from here", frame.mic.muted is True)
-window._on_key(Key(wx.WXK_SPACE))
+tick(window.muted, False)
 check("and unmuted", frame.mic.muted is False)
+
+window.list.Select(1)
+app.Yield()
+check("a real source can be renamed and removed",
+      window.rename.IsEnabled() and window.remove.IsEnabled())
 
 check("Escape closes it", window.GetEscapeId() == wx.ID_CANCEL)
 window.Destroy()

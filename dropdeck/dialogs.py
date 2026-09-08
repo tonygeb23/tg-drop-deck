@@ -3504,15 +3504,29 @@ class FeedbackDialog(wx.Dialog):
 class SourceControlDialog(wx.Dialog):
     """Mute, solo, rename or remove a source, while the show is going out.
 
-    Tony, 5 September 2026: "a running source list that has a mute or solo
-    option next to each one... arrow up and down to read the individual
-    sources that are enabled and left and right arrow to cycle between mute,
-    solo, rename, or delete."
+    Tony asked for this twice, and the second shape is the one that is here.
 
-    So it is two axes. Up and down choose a source; left and right choose what
-    you are about to do to it; Space or Enter does it. Nothing on this window
-    needs Tab, and nothing needs a mouse, which is the point: this is the one
-    that gets used mid link with somebody talking.
+    5 September 2026: "a running source list that has a mute or solo option
+    next to each one... arrow up and down to read the individual sources that
+    are enabled and left and right arrow to cycle between mute, solo, rename,
+    or delete." That shipped, and left and right cycling an action is a MODE:
+    something to remember, and something the window has to keep announcing
+    because nothing on screen says which of the four you are on.
+
+    8 September 2026: "can you turn mute and solo actions into checkboxes,
+    checked for soloed or muted... and the rename and delete functions are
+    buttons." Which is right, and it is right for a reason worth keeping.
+    **Mute and solo are STATES and rename and remove are ACTIONS.** A check
+    box is what a state looks like in Windows: it reads out "checked" or "not
+    checked" when you arrive on it without being asked, and Space toggles it
+    the way Space toggles every check box anywhere. A button is what an
+    action looks like. The mode is gone.
+
+    **Two check boxes below the list, rather than ticks inside it.** A
+    wx.ListCtrl has one check box per ROW, not per column, so it could carry
+    mute or solo but never both. The list goes on saying both as columns,
+    which is what a screen reader reads while arrowing, and the check boxes
+    act on whichever row the cursor is on.
 
     Every source keeps a number, and it is the position in the list rather
     than anything to do with the name. Renaming one does not renumber it, and
@@ -3520,25 +3534,22 @@ class SourceControlDialog(wx.Dialog):
     fader you mean.
     """
 
-    #: What left and right cycle between, in that order.
-    ACTIONS = [
-        ("mute", "Mute"),
-        ("solo", "Solo"),
-        ("rename", "Rename"),
-        ("delete", "Remove"),
-    ]
 
     def __init__(self, parent):
         super().__init__(parent, title="Source control",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.frame = parent
-        self.action = 0
         self.changed = False
+        #: True while the check boxes are being set to match the selected
+        #: row. Without it, SetValue raises EVT_CHECKBOX, the handler applies
+        #: that value straight back to the source, and arrowing down a list
+        #: silently mutes everything it touches.
+        self._syncing = False
 
         outer = wx.BoxSizer(wx.VERTICAL)
         note = wx.StaticText(
-            self, label="Up and down choose a source. Left and right choose "
-                        "what to do to it. Space does it.")
+            self, label="Up and down choose a source. Tab to the boxes and "
+                        "buttons for what to do with it.")
         note.Wrap(self.FromDIP(520))
         outer.Add(note, 0, wx.ALL, 10)
 
@@ -3556,14 +3567,40 @@ class SourceControlDialog(wx.Dialog):
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_row)
         outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
 
-        self.doing = wx.StaticText(self, label="")
-        outer.Add(self.doing, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        # The two states. Their labels never change, because a control's
+        # accessible name must not be rewritten on a VALUE change: it is the
+        # tick that carries the value, and rewriting the name restarts the
+        # announcement mid sentence.
+        states = wx.BoxSizer(wx.HORIZONTAL)
+        self.muted = wx.CheckBox(self, label="&Muted")
+        self.muted.SetToolTip("This source stops going out, and stops being "
+                              "recorded. You go on hearing everything else.")
+        self.muted.Bind(wx.EVT_CHECKBOX, self._on_muted)
+        states.Add(self.muted, 0, wx.RIGHT, 18)
+        self.soloed = wx.CheckBox(self, label="S&olo")
+        self.soloed.SetToolTip("Only the soloed sources go out. Everything "
+                               "else is silent until nothing is soloed.")
+        self.soloed.Bind(wx.EVT_CHECKBOX, self._on_soloed)
+        states.Add(self.soloed, 0)
+        outer.Add(states, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        row = wx.StdDialogButtonSizer()
+        self.doing = wx.StaticText(self, label="")
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # The two actions, beside the Close button rather than inside the
+        # standard sizer: neither is an OK or a Cancel, and Windows moves
+        # anything put in there to where it thinks it belongs.
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.rename = wx.Button(self, label="&Rename...")
+        self.rename.Bind(wx.EVT_BUTTON, lambda _e: self._do_rename())
+        row.Add(self.rename, 0, wx.RIGHT, 8)
+        self.remove = wx.Button(self, label="Remo&ve...")
+        self.remove.Bind(wx.EVT_BUTTON, lambda _e: self._do_remove())
+        row.Add(self.remove, 0)
+        row.AddStretchSpacer()
         close = wx.Button(self, wx.ID_CANCEL, "&Close")
-        row.AddButton(close)
-        row.Realize()
-        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        row.Add(close, 0)
+        outer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
 
         self.SetSizerAndFit(outer)
         self.SetEscapeId(wx.ID_CANCEL)
@@ -3602,21 +3639,103 @@ class SourceControlDialog(wx.Dialog):
         return rows[at] if 0 <= at < len(rows) else None
 
     def _show_action(self, speak=False):
-        """Say what Space would do to the source the cursor is on."""
+        """Point the check boxes and buttons at the row the cursor is on.
+
+        `_syncing` is not optional. SetValue raises EVT_CHECKBOX in wx, so
+        without it every arrow keypress would run the handler and write the
+        newly displayed value straight back onto the source, which on a list
+        of eight would look like arrowing down muted everything it touched.
+        """
         chosen = self._selected()
-        name = self.ACTIONS[self.action][1]
+        self._syncing = True
+        try:
+            if chosen is None:
+                self.doing.SetLabel("")
+                for control in (self.muted, self.soloed, self.rename,
+                                self.remove):
+                    control.Enable(False)
+                return
+            kind, label, holder = chosen
+            self.muted.Enable(True)
+            self.soloed.Enable(True)
+            self.muted.SetValue(bool(holder.muted))
+            self.soloed.SetValue(bool(holder.soloed))
+            # The microphone is not one of the user's sources: it has its own
+            # settings and Ctrl+M. Disabled, not hidden, so the reason can be
+            # read rather than guessed at from an absence.
+            self.rename.Enable(kind != "mic")
+            self.remove.Enable(kind != "mic")
+            self.doing.SetLabel(
+                "%s. The boxes and buttons below act on this one." % label
+                if kind != "mic" else
+                "%s. It cannot be renamed or removed; Ctrl+M turns it off."
+                % label)
+        finally:
+            self._syncing = False
+        if speak and chosen is not None:
+            self._speak(chosen[1])
+
+    # ---------------------------------------------------- the two states --
+    def _on_muted(self, _event=None):
+        if self._syncing:
+            return
+        chosen = self._selected()
         if chosen is None:
-            self.doing.SetLabel("")
+            return
+        _kind, label, holder = chosen
+        holder.muted = bool(self.muted.GetValue())
+        self.frame.apply_source_mixing()
+        self.changed = True
+        self._speak("%s %s" % (label, "muted" if holder.muted else "unmuted"))
+        self.refresh(self.list.GetFirstSelected())
+
+    def _on_soloed(self, _event=None):
+        if self._syncing:
+            return
+        chosen = self._selected()
+        if chosen is None:
+            return
+        _kind, label, holder = chosen
+        holder.soloed = bool(self.soloed.GetValue())
+        self.frame.apply_source_mixing()
+        self.changed = True
+        if holder.soloed:
+            self._speak("%s soloed. Everything else is silent." % label)
+        else:
+            self._speak("%s no longer soloed%s"
+                        % (label, "" if self.frame.anything_soloed()
+                           else ". Everything is back"))
+        self.refresh(self.list.GetFirstSelected())
+
+    # --------------------------------------------------- the two actions --
+    def _do_rename(self):
+        chosen = self._selected()
+        if chosen is None:
+            return
+        kind, _label, holder = chosen
+        if kind == "mic":
+            self._speak("The microphone is always called the microphone")
+            return
+        at = self.list.GetFirstSelected()
+        self._rename(holder)
+        self.refresh(at)
+        self.list.SetFocus()
+
+    def _do_remove(self):
+        chosen = self._selected()
+        if chosen is None:
             return
         kind, label, holder = chosen
-        state = ""
-        if self.ACTIONS[self.action][0] == "mute":
-            state = ", muted" if holder.muted else ", not muted"
-        elif self.ACTIONS[self.action][0] == "solo":
-            state = ", soloed" if holder.soloed else ", not soloed"
-        self.doing.SetLabel("Space will %s %s%s" % (name.lower(), label, state))
-        if speak:
-            self._speak("%s%s" % (name, state))
+        if kind == "mic":
+            self._speak("The microphone cannot be removed. "
+                        "Ctrl+M turns it off.")
+            return
+        at = self.list.GetFirstSelected()
+        self._remove(holder, label)
+        # The row that was removed is gone, so the cursor lands on the one
+        # that took its place rather than off the end of the list.
+        self.refresh(min(at, max(0, self.list.GetItemCount() - 2)))
+        self.list.SetFocus()
 
     # --------------------------------------------------------------- keys --
     def _on_row(self, event):
@@ -3625,13 +3744,14 @@ class SourceControlDialog(wx.Dialog):
 
     def _on_key(self, event):
         code = event.GetKeyCode()
-        if code in (wx.WXK_LEFT, wx.WXK_RIGHT):
-            step = -1 if code == wx.WXK_LEFT else 1
-            self.action = (self.action + step) % len(self.ACTIONS)
-            self._show_action(speak=True)
+        # F2 renames and Delete removes, the same two keys as everywhere else
+        # in this app and in Windows. They are shortcuts to the buttons rather
+        # than a second way of doing it.
+        if code == wx.WXK_F2:
+            self._do_rename()
             return
-        if code in (wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._do()
+        if code in (wx.WXK_DELETE, wx.WXK_NUMPAD_DELETE):
+            self._do_remove()
             return
         # A digit jumps to that source, which is what the numbers are for.
         if ord("1") <= code <= ord("8"):
@@ -3645,42 +3765,6 @@ class SourceControlDialog(wx.Dialog):
             self.list.Focus(0)
             return
         event.Skip()
-
-    def _do(self):
-        chosen = self._selected()
-        if chosen is None:
-            return
-        kind, label, holder = chosen
-        what = self.ACTIONS[self.action][0]
-        at = self.list.GetFirstSelected()
-        if what == "mute":
-            holder.muted = not holder.muted
-            self.frame.apply_source_mixing()
-            self.changed = True
-            self._speak("%s %s" % (label, "muted" if holder.muted else "unmuted"))
-        elif what == "solo":
-            holder.soloed = not holder.soloed
-            self.frame.apply_source_mixing()
-            self.changed = True
-            if holder.soloed:
-                self._speak("%s soloed. Everything else is silent." % label)
-            else:
-                self._speak("%s no longer soloed%s"
-                            % (label, "" if self.frame.anything_soloed()
-                               else ". Everything is back"))
-        elif what == "rename":
-            if kind == "mic":
-                self._speak("The microphone is always called the microphone")
-                return
-            self._rename(holder)
-        elif what == "delete":
-            if kind == "mic":
-                self._speak("The microphone cannot be removed. "
-                            "Ctrl+M turns it off.")
-                return
-            self._remove(holder, label)
-            at = min(at, max(0, self.list.GetItemCount() - 2))
-        self.refresh(at)
 
     def _rename(self, source):
         name = ask_text(self, "What should this source be called?",

@@ -29,7 +29,8 @@ import wx
 from dropdeck import constants as C
 from dropdeck import preflight
 from dropdeck.board import Board
-from dropdeck.dialogs import GoLiveDialog, VideoSourceDialog
+from dropdeck.dialogs import (GoLiveDialog, SourceControlDialog,
+                              VideoSourceDialog)
 from dropdeck.ui import DropDeckFrame
 from shot_settings import capture, OUT
 
@@ -105,6 +106,8 @@ def main():
     report = preflight.check(settings, board)
 
     for title, build, name in (
+            ("Source control",
+             lambda: SourceControlDialog(frame), "source-control.png"),
             ("Go live", lambda: GoLiveDialog(frame, report), "go-live.png"),
             ("Video source",
              lambda: VideoSourceDialog(frame, board, live=True),

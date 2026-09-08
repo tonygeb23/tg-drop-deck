@@ -159,6 +159,20 @@ And specific to this one:
   really tested by pressing it. `tools/check_video_key.py` does that, and it
   runs a KNOWN GOOD key first as a control, so "the simulator could not
   deliver it" is never mistaken for "the app ignored it".
+- **A STATE is a check box and an ACTION is a button.** Source control shipped
+  in 3.4.0 with a mode: left and right cycled Mute, Solo, Rename, Remove and
+  Space did whichever you had landed on. Tony asked for the mode on
+  5 September and asked for it to go on the 8th, and he was right both times.
+  A mode has to be remembered and announced, because nothing on screen says
+  which of the four you are on. A check box says what it is the moment focus
+  lands on it, and Space toggles it the way Space toggles every check box in
+  Windows. **A wx.ListCtrl has one check box per ROW, not per column**, so
+  mute and solo could never both be ticks in the list: they are two check
+  boxes under it and the list keeps saying both as text columns.
+  **`SetValue` raises `EVT_CHECKBOX`**, so syncing the boxes to the selected
+  row must be guarded (`_syncing`) or arrowing down the list writes the
+  displayed value back onto every source it passes, silently muting them.
+  There is a check for exactly that.
 - **Where Ctrl+B sends the show is a menu, not a checkbox.** `board.live_to`
   picks between the radio station and the video platform, and until 3.4.2 its
   only control was one box on the **Video** streaming page reading "Go live

@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.4.3, 8 September 2026
+
+**Source control works the way Windows works.**
+
+`Alt+Ctrl+Shift+S` still opens it and up and down still choose a source.
+What changed is everything after that.
+
+**Muted and Solo are check boxes now.** Ticked means muted, or soloed;
+unticked means it is going out. A check box says what it is the moment you
+land on it, without being asked, and Space toggles it the way Space toggles
+every check box in Windows.
+
+**Rename and Remove are buttons.** Rename opens a box with the current name
+ready to type over. Remove asks whether you are sure before anything goes.
+`F2` and `Delete` do the same two things from the list, as they do everywhere
+else in the app.
+
+The old left and right arrows cycled between the four, and Space did whichever
+one you had landed on. That is a mode: something to remember, and something
+the window had to keep telling you because nothing on screen said which of the
+four you were on. It is gone.
+
+The microphone's buttons are unavailable rather than missing, and the line
+under the list says why: it cannot be renamed or removed, and `Ctrl+M` turns
+it off. It can still be muted and soloed from here, which is what makes solo
+work in both directions.
+
 ## 3.4.2, 8 September 2026
 
 **You can see where Ctrl+B is going to send the show, and change it.**

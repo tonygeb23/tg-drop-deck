@@ -12,6 +12,53 @@ Read [../CLAUDE.md](../CLAUDE.md) first. Every design rule in it still holds,
 including the standing one about dashes. This file records only what is
 different on a Mac, and why.
 
+## Video, and why the Mac is deliberately behind
+
+**Tony, 8 September 2026: the Mac gets video once Windows is proven stable,
+and when it does it builds on what Windows established rather than inventing
+its own shape.** The two copies had shared a version number since 3.2.2 and
+this is where they part: Windows is on 3.4.x with video, the Mac stays on
+3.3.2 with none, and the download page says so in as many words.
+
+That is a decision, not a backlog. Video streaming shipped on Windows on
+7 September and had three fixes in the two days after it, two of which were
+faults nothing had noticed for days. Porting a design while it is still
+moving means porting the mistakes as well.
+
+**What Windows settled, and what the Mac should therefore copy rather than
+redesign.** Every one of these was argued out with a measurement behind it, so
+a Mac port that reaches a different answer needs a Mac measurement, not a
+preference:
+
+- **One picture source at a time**, chosen from a card the app draws, an
+  image, a camera, the screen, or the screen with the camera inset. No
+  scenes, no layers. `dropdeck/picture.py` and `dropdeck/screen.py`.
+- **Audio is the master clock and video is stamped against it.** Video PTS
+  counts frames encoded against the audio sample counter, never a wall clock
+  and never the camera's own timing. This is why a source can be swapped mid
+  stream without moving the timeline, and it is the single most important
+  thing to carry across.
+- **Anything that blocks belongs on its own thread, and the caller takes the
+  last frame it finished.** A Windows desktop blit costs 16 to 33 ms, which
+  is the whole budget at 30 fps, on the thread carrying the audio. The Mac
+  equivalent is `CGDisplayStream` or `ScreenCaptureKit`, and the same rule
+  applies whatever its cost turns out to be: measure it before deciding.
+- **The screen fills the frame and the camera goes in a corner**, because a
+  1920x1080 desktop rendered 640 wide is unreadable. That is a fact about
+  eyes and pixels, not about Windows, so it holds on a Mac.
+- **The pre-flight**, `dropdeck/preflight.py`, imports no wx and touches no
+  network on purpose. It is plain arithmetic over a settings dict, so it is
+  the one piece of the Windows video work that could be ported almost
+  literally, or reimplemented against the same list of warnings.
+- **Where Ctrl+B goes is a visible checked list**, not a hidden setting.
+  `Command+B` and the On air menu should match.
+
+**What the Mac cannot copy.** `mac/` has no FFmpeg at all: `StreamOut.swift`
+writes Icecast and SHOUTcast by hand over `Network`. RTMP means an RTMP client
+and an FLV muxer in Swift, over TLS. VideoToolbox does H.264 and AVFoundation
+does cameras, both natively, so the video half is the easy half. Call it a
+fortnight, and it is not started until Windows has been quiet for a while.
+
 ## Why not the Python
 
 The obvious plan was to run the existing wxPython app on macOS. It was rejected
