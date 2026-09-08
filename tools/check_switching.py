@@ -254,14 +254,23 @@ def main(seconds=20.0):
 
     # The picture really changed, and changed as many times as it was told to.
     marks = [signature(f) for f in frames]
-    # A run of frames either side of a boundary, so codec noise inside one
-    # steady picture cannot be mistaken for a switch.
     moved = [at for at, (a, b) in enumerate(zip(marks, marks[1:]))
              if float(np.linalg.norm(b - a)) > 25.0]
-    say("the picture visibly changed once per switch, and no more",
-        len(moved) == len(swaps),
-        "%d visible changes for %d switches, at frames %s"
-        % (len(moved), len(swaps), moved))
+    # ASKED PER SWITCH, not as a total, and that is a correction rather than
+    # a loosening. Counting every visible change and expecting it to equal
+    # the number of switches quietly assumed every source holds still, which
+    # is true of a card and false of the screen: a real desktop changes
+    # whenever anything on it moves, and it SHOULD. Asserting otherwise was
+    # asserting the desktop was frozen, which is the opposite of the thing
+    # this tool exists to prove.
+    missed = []
+    for when, frame_at, name in swaps:
+        near = [at for at in moved if abs(at - frame_at) <= 3]
+        if not near:
+            missed.append(name)
+    say("the picture visibly changed at every switch",
+        not missed, "nothing changed when switching to %s" % ", ".join(missed)
+        if missed else "%d switches, all visible" % len(swaps))
 
     gaps = np.diff(result.video_timestamps) if len(
         result.video_timestamps) > 2 else np.array([])

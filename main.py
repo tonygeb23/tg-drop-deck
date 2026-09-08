@@ -179,6 +179,32 @@ def selftest():  # noqa: C901
         problems.append("the video encoder does not work in this build: %r"
                         % exc)
     try:
+        from dropdeck import overlay as _overlay
+        if not _overlay.available():
+            problems.append("text cannot be drawn in this build: %s"
+                            % _overlay.why_unavailable())
+        else:
+            # ACTUALLY DRAW. Pillow imports perfectly happily with none of
+            # its native modules present, and then quietly renders nothing:
+            # the first 3.5.0 build shipped exactly that, because an old
+            # --exclude-module PIL beat the new --collect-all. Opening a
+            # font and putting a tile on a frame is the only check that
+            # would have caught it.
+            _tile = _overlay.render_tile("Test 09:41", 320, 80, 40)
+            if _tile is None:
+                problems.append("the text renderer produced nothing, so the "
+                                "card and the overlay would both be empty")
+            else:
+                import numpy as _np3
+                _ink = int(_np3.asarray(_tile)[:, :, 3].max())
+                if _ink < 200:
+                    problems.append("the text renderer drew nothing visible")
+                else:
+                    notes.append("screen text: working, %s"
+                                 % _C.FONT_BOLD)
+    except Exception as exc:
+        problems.append("screen text raised in this build: %r" % exc)
+    try:
         from dropdeck import screen as _screen
         if not _screen.available():
             problems.append("the screen cannot be captured in this build: %s"

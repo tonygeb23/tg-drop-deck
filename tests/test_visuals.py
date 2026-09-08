@@ -490,5 +490,45 @@ for size in ((1920, 1080), (640, 360)):
           other.shape == (size[1], size[0], 3))
 
 
+# ---------------------------------------------------------------------------
+print("\nThe frame keeps it in step")
+# ---------------------------------------------------------------------------
+
+import inspect                          # noqa: E402
+import dropdeck.ui as _ui               # noqa: E402
+import dropdeck.dialogs as _dialogs     # noqa: E402
+from dropdeck import streamout          # noqa: E402
+
+# The overlay is built FROM the settings, so anything that writes the
+# settings has to rebuild it. Changing the station name in Preferences with a
+# place showing "my station name" would otherwise leave the old name on the
+# air until the next broadcast.
+check("Preferences rebuilds the overlay after it writes the board",
+      "refresh_overlay" in inspect.getsource(_ui.DropDeckFrame._on_settings))
+check("and the window that edits the places pushes them at the show too",
+      "refresh_overlay" in inspect.getsource(_dialogs.ScreenTextDialog))
+
+# It has to survive a reconnect for the same reason the video source does:
+# _build rebuilds the destination from the settings snapshot taken at Ctrl+B.
+check("the streamer holds the overlay, so a reconnect keeps it",
+      "self.overlay" in inspect.getsource(streamout.Streamer._build))
+check("and one can be handed over while live",
+      hasattr(streamout.Streamer, "set_overlay")
+      and hasattr(streamout.RtmpDestination, "set_overlay"))
+
+# What is playing has to reach BOTH the card and the overlay, or one of them
+# sits on the last song for the rest of the show.
+title_path = inspect.getsource(streamout.Streamer.set_title)
+check("a new title reaches the overlay as well as the card",
+      "self.overlay" in title_path and "video_source" in title_path)
+
+# The health watch must not be handed a card and told it is frozen: a card is
+# supposed to be still, and complaining about it would be a permanent alarm
+# on the app's own default picture.
+check("only a live source is ever called frozen",
+      "PICTURE_CAMERA" in inspect.getsource(streamout._moving)
+      and "PICTURE_CARD" not in inspect.getsource(streamout._moving))
+
+
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)

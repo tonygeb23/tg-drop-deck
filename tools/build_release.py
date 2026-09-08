@@ -165,10 +165,17 @@ def build_executable():
         # the digits have to be tabular or the clock jitters.
         "--add-data", FONT_DATA,
         # Only the tools need these. Leaving them out saves about 60 MB.
+        # PIL WAS ON THIS LIST AND CAME OFF IT IN 3.5.0. It was a tools-only
+        # dependency until the overlay arrived, and an --exclude-module beats
+        # a --collect-all, so the first 3.5.0 build shipped every Pillow .py
+        # file and NOT ONE of its native modules. Nothing raised: Pillow
+        # imports, the text renderer quietly answers None, the card falls
+        # back to its blocky font and the overlay draws nothing at all. The
+        # selftest now opens a font and draws, so this cannot happen quietly
+        # again.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",
         "--exclude-module", "pytest",
-        "--exclude-module", "PIL",
         "main.py",
     ]
     run(command)

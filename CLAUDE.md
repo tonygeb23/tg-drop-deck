@@ -232,6 +232,20 @@ And specific to this one:
   settings snapshot and would otherwise put the picture back to whatever it
   was at `Ctrl+B`. **The new source goes on the air before the old one is
   closed**, or a camera's half second to first frame is half a second of card.
+- **An `--exclude-module` beats a `--collect-all`, and the loser says
+  nothing.** `PIL` had been excluded from the build since it was a tools-only
+  dependency, so the first 3.5.0 build shipped every Pillow `.py` file and
+  **not one of its native modules**. Nothing raised. Pillow imports fine
+  without `_imaging`, the text renderer answers None, the card falls back to
+  its blocky font and the overlay draws nothing, all silently, and the
+  selftest passed. **The selftest now opens a font and draws a tile and
+  checks the pixels**, which is the only check that would have caught it.
+  The lesson generalises: for a bundled library, prove it WORKS in the
+  frozen build, never that it imports. It also cost a wrong number in
+  the changelog: the broken build was 3 MB smaller than the working
+  one, so "the download barely grew" was measured against a build
+  with the feature missing. **A size taken from a build you have not
+  proved is a size for a different program.**
 - **Named places, never a canvas.** `overlay.py` offers four fixed spots that
   cannot overlap, and there is no way to put something at an arbitrary
   position. That is not a shortcut, it is the feature: the research in

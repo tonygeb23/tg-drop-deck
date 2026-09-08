@@ -4895,6 +4895,10 @@ class DropDeckFrame(wx.Frame):
         self.mixer.duck_db = self.board.duck_db
         self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
         self._rebuild_station_menu()
+        # The overlay is built FROM these settings, so it has to be rebuilt
+        # after them. A place showing "my station name" would otherwise go on
+        # showing the old one, live, until the next time the show went on air.
+        self.refresh_overlay()
         # Beds already in flight keep the fade they started with - a voice owns
         # its envelope - so this takes effect from the next press.
         self.mixer.bed_fade_in = self.board.bed_fade_in
