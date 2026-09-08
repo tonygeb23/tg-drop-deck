@@ -25,7 +25,26 @@ STATION_FIELDS = (
     "stream_mount", "stream_user", "stream_password", "stream_format",
     "stream_bitrate", "stream_description", "stream_genre", "stream_url",
     "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
+    # The video side and the picture belong to the station too: a YouTube
+    # station needs them and the Icecast station on the same board does not.
+    "video_server", "video_host", "video_key", "live_to",
+    "picture", "picture_file", "picture_clock", "camera",
+    "video_width", "video_height", "video_fps", "video_bitrate",
 )
+
+
+def _video_number(value, fallback, low, high):
+    """A number out of a board file, clamped, or the default.
+
+    Same shape as _stream_port and _stream_bitrate above it. A picture size of
+    nought or a frame rate of a million is a crash at the moment somebody
+    goes live, which is the worst moment this app has.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(low, min(high, number))
 
 
 def _stations(value):
@@ -230,6 +249,42 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+
+        #: What goes on the screen when the destination insists on a picture.
+        #: YouTube refuses an audio only ingest, so a radio show still has to
+        #: send SOMETHING, and a card is what that something is by default.
+        #: A camera is offered and is not the default: most people using this
+        #: are running a radio show and have no reason to be on camera.
+        #: The video side, kept apart from the audio side above rather than
+        #: sharing its fields. They looked shareable and are not: an Icecast
+        #: address is a host name and an RTMP one is a whole URL with a
+        #: scheme, so one board cannot hold a radio station AND a YouTube
+        #: channel if they share stream_host. Setting up one would silently
+        #: destroy the other.
+        self.video_server = "youtube"
+        self.video_host = C.RTMP_INGEST["youtube"]
+        #: A stream key ONLY when Windows Credential Manager refused to keep
+        #: it, which is rare and is said out loud when it happens. It has a
+        #: field of its own rather than borrowing stream_password: that is the
+        #: Icecast source password, and putting a YouTube key in it wiped a
+        #: user's radio station password every time they looked at the video
+        #: page. Two different secrets, two different places.
+        self.video_key = ""
+        #: Which of the two Ctrl+B goes to. One at a time for now.
+        self.live_to = C.LIVE_TO_AUDIO
+
+        self.picture = C.PICTURE_CARD
+        self.picture_file = ""
+        self.picture_clock = False
+        self.camera = ""
+        self.video_width = C.RTMP_WIDTH
+        self.video_height = C.RTMP_HEIGHT
+        self.video_fps = C.RTMP_FPS
+        self.video_bitrate = C.RTMP_VIDEO_BITRATE
+        #: How much the app says about what the camera can see. Problems only
+        #: by default: quiet while the shot is good. See framing.py for why
+        #: this is three levels rather than a switch.
+        self.framing_level = "problems"
         #: Which half of a stereo input carries the voice. A hardware
         #: mixer feeding a line input puts it on one side, and taking the
         #: wrong one is silence.
@@ -507,6 +562,19 @@ class Board:
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
             "stream_stats_url": self.stream_stats_url,
+            "video_server": self.video_server,
+            "video_host": self.video_host,
+            "video_key": self.video_key,
+            "live_to": self.live_to,
+            "picture": self.picture,
+            "picture_file": self.picture_file,
+            "picture_clock": bool(self.picture_clock),
+            "camera": self.camera,
+            "video_width": int(self.video_width),
+            "video_height": int(self.video_height),
+            "video_fps": int(self.video_fps),
+            "video_bitrate": int(self.video_bitrate),
+            "framing_level": self.framing_level,
             "record_format": self.record_format,
             "record_bitrate": int(self.record_bitrate),
             "record_folder": self.record_folder,
@@ -583,19 +651,60 @@ class Board:
                                               C.DEFAULT_WARN_BEFORE_END))
         board.warn_seconds = _warn_seconds(data.get("warn_seconds"))
         board.preview_sounds = bool(data.get("preview_sounds", False))
-        board.stream_server = (data.get("stream_server") or "icecast")
+        server = data.get("stream_server")
+        board.stream_server = (server if server in C.STREAM_SERVER_ORDER
+                               else "icecast")
         board.stream_host = data.get("stream_host") or ""
         board.stream_port = _stream_port(data.get("stream_port"))
         board.stream_mount = data.get("stream_mount") or C.DEFAULT_STREAM_MOUNT
         board.stream_user = data.get("stream_user") or C.DEFAULT_STREAM_USER
         board.stream_password = data.get("stream_password") or ""
-        board.stream_format = (data.get("stream_format") or "mp3")
+        fmt_in = data.get("stream_format")
+        board.stream_format = (fmt_in if fmt_in in C.STREAM_FORMAT_ORDER
+                               else "mp3")
         board.stream_bitrate = _stream_bitrate(data.get("stream_bitrate"))
         board.stream_name = data.get("stream_name") or ""
         board.stream_description = data.get("stream_description") or ""
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""
         board.stream_stats_url = data.get("stream_stats_url") or ""
+        # A board file is not a trusted document, so every one of these falls
+        # back rather than becoming a setting that explodes at air time.
+        board.video_server = (data.get("video_server")
+                              if data.get("video_server") in C.VIDEO_SERVER_ORDER
+                              else "youtube")
+        board.video_host = data.get("video_host") or ""
+        board.video_key = data.get("video_key") or ""
+        board.live_to = (data.get("live_to")
+                         if data.get("live_to") in C.LIVE_TO else C.LIVE_TO_AUDIO)
+        # A board written by the first build of this feature put the platform
+        # in stream_server, where the audio settings live. Move it, rather
+        # than leaving a board that says its radio station is "youtube" and
+        # then tries to open a mount point on it.
+        if data.get("stream_server") in C.VIDEO_SERVER_ORDER:
+            board.video_server = data["stream_server"]
+            board.video_host = data.get("stream_host") or ""
+            board.live_to = C.LIVE_TO_VIDEO
+            board.stream_server = "icecast"
+            board.stream_host = ""
+        if not board.video_host:
+            board.video_host = C.RTMP_INGEST.get(board.video_server, "")
+        picture = data.get("picture")
+        board.picture = picture if picture in C.PICTURE_SOURCES else C.PICTURE_CARD
+        board.picture_file = data.get("picture_file") or ""
+        board.picture_clock = bool(data.get("picture_clock", False))
+        board.camera = data.get("camera") or ""
+        board.video_width = _video_number(data.get("video_width"),
+                                          C.RTMP_WIDTH, 160, 3840)
+        board.video_height = _video_number(data.get("video_height"),
+                                           C.RTMP_HEIGHT, 120, 2160)
+        board.video_fps = _video_number(data.get("video_fps"), C.RTMP_FPS,
+                                        1, 60)
+        board.video_bitrate = _video_number(data.get("video_bitrate"),
+                                            C.RTMP_VIDEO_BITRATE, 200, 20000)
+        level = data.get("framing_level")
+        board.framing_level = level if level in ("off", "problems",
+                                                 "everything") else "problems"
         fmt = data.get("record_format")
         board.record_format = fmt if fmt in C.RECORD_FORMAT_KEYS else "mp3"
         board.record_bitrate = _stream_bitrate(data.get("record_bitrate", 192))

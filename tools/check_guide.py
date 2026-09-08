@@ -100,6 +100,27 @@ def main():
                 if shortcut:
                     registered.add(shortcut)
 
+    def key_label(flags, code):
+        """A registered shortcut as the guide would write it."""
+        parts = []
+        if flags & wx.ACCEL_CTRL:
+            parts.append("Ctrl")
+        if flags & wx.ACCEL_ALT:
+            parts.append("Alt")
+        if flags & wx.ACCEL_SHIFT:
+            parts.append("Shift")
+        names = {wx.WXK_F1: "F1", wx.WXK_F2: "F2", wx.WXK_F3: "F3",
+                 wx.WXK_F4: "F4", wx.WXK_F5: "F5", wx.WXK_F6: "F6",
+                 wx.WXK_F7: "F7", wx.WXK_F8: "F8", wx.WXK_F9: "F9",
+                 wx.WXK_F10: "F10", wx.WXK_F11: "F11", wx.WXK_F12: "F12",
+                 wx.WXK_SPACE: "Space", wx.WXK_RETURN: "Enter",
+                 wx.WXK_TAB: "Tab", wx.WXK_DELETE: "Delete",
+                 wx.WXK_ESCAPE: "Escape", wx.WXK_UP: "Up",
+                 wx.WXK_DOWN: "Down", wx.WXK_HOME: "Home",
+                 wx.WXK_END: "End"}
+        parts.append(names.get(code, chr(code) if 32 < code < 127 else str(code)))
+        return "+".join(parts)
+
     print("Every keystroke the guide names")
     # Backticked things that look like keys.
     quoted = set(re.findall(r"`([^`]+)`", raw))
@@ -203,19 +224,48 @@ def main():
     # And the reverse: a key in the app that the guide never mentions.
     print()
     print("Keys the app has that the guide should probably mention")
-    important = {
-        "F2": "rename", "Ctrl+F2": "rename bank", "F3": "sound volume",
-        "F5": "bed volume", "F7": "playlist volume", "Ctrl+M": "microphone",
-        "Ctrl+Shift+M": "mic settings", "Ctrl+Shift+P": "playlist",
-        "Ctrl+Shift+S": "soundboard", "Alt+D": "random drop",
-        "Ctrl+Shift+D": "drop from file", "Ctrl+V": "paste",
-        "Ctrl+G": "global hotkeys", "Ctrl+L": "what is playing",
-        "Ctrl+F": "search", "Ctrl+E": "search", "Ctrl+D": "ducking",
-        "Ctrl+P": "audio settings", "Ctrl+F12": "save as", "F1": "help",
-        "Alt+Enter": "properties", "Ctrl+Tab": "next bank",
+    # DERIVED from the accelerator table the app really builds, not from a
+    # list kept by hand. A hand kept list is how Ctrl+Shift+F came to exist in
+    # the app, in the menu and in the tests while appearing nowhere in the
+    # manual: the checker that exists to catch exactly that passed, because
+    # nobody had added the new key to the list it was checking. RELEASING.md
+    # says it in one line: every check either derives what it checks, or it
+    # goes stale and starts lying.
+    #
+    # Anything genuinely not worth documenting is excused BY NAME with a
+    # reason, so an unexplained miss is a real miss.
+    NOT_IN_THE_GUIDE = {
+        "Ctrl+Q": "quit, which every Windows program has",
+        "Ctrl+W": "close, the same",
+        "Alt+F4": "Windows itself",
     }
-    absent = [key for key in important if key not in quoted]
-    check("the guide names every key that matters", not absent, absent)
+
+    def is_digit_map(flags, code):
+        """The eighty pads, which the guide documents as a PATTERN.
+
+        1 to 0 plain, with Shift, with Ctrl, with Ctrl and Shift, with Alt and
+        Ctrl, and with Alt, Ctrl and Shift. Eighty rows in the manual would be
+        eighty rows nobody reads; the guide gives the rule instead, and the
+        rule is checked elsewhere in this file.
+        """
+        return chr(code) in C.DIGITS if 32 < code < 127 else False
+    documented = {parse(text) for text in quoted}
+    documented.discard(None)
+    excused = {parse(text) for text in NOT_IN_THE_GUIDE}
+    excused.discard(None)
+    undocumented = []
+    for flags, code in sorted(registered):
+        if (flags, code) in documented or (flags, code) in excused:
+            continue
+        if is_digit_map(flags, code):
+            continue
+        # Alt+Enter on the numeric keypad is the same command as Alt+Enter,
+        # registered twice so both keyboards work. The guide names it once.
+        if code == wx.WXK_NUMPAD_ENTER:
+            continue
+        undocumented.append(key_label(flags, code))
+    check("the guide names every key the app registers",
+          not undocumented, "not in the manual: %s" % sorted(undocumented))
 
     print()
     print("The numbers the guide quotes")

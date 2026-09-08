@@ -41,6 +41,12 @@ DIST = os.path.join(BUILD_ROOT, "dist")
 FINAL = os.path.join(HERE, "dist")
 BUNDLE = os.path.join(DIST, C.APP_NAME)
 ICON = os.path.join(HERE, "assets", "dropdeck.ico")
+
+#: The face detection model, and where it has to land inside the bundle.
+#: PyInstaller wants "source<os.pathsep>destination", and the destination is
+#: the folder framing.model_path builds from sys._MEIPASS.
+MODEL_DIR = os.path.join(HERE, "assets", "models")
+MODEL_DATA = os.path.join(MODEL_DIR, C.FACE_MODEL_FILE) + os.pathsep     + os.path.join("assets", "models")
 INSTALLER_OUT = os.path.join(BUILD_ROOT, "installer")
 
 ISCC_CANDIDATES = [
@@ -137,6 +143,15 @@ def build_executable():
         # no compressor, no gate and no plugins, and the microphone
         # goes out raw with nothing to say why.
         "--collect-all", "pedalboard",
+        # OpenCV, for telling a presenter what the camera can see. Native
+        # code beside the package, the same as the rest of these. Without it
+        # the framing announcements turn themselves off and say why, so a
+        # build that misses this LOOKS fine and quietly loses a feature.
+        "--collect-all", "cv2",
+        # The face detection model, at the path framing.model_path expects.
+        # It is inside the bundle rather than beside it, unlike the demo
+        # pack: nobody has any reason to replace it.
+        "--add-data", MODEL_DATA,
         # Only the tools need these. Leaving them out saves about 60 MB.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",
@@ -145,6 +160,36 @@ def build_executable():
         "main.py",
     ]
     run(command)
+
+
+#: OpenCV ships its own copy of FFmpeg for cv2.VideoCapture. This app never
+#: opens a video with OpenCV: PyAV is the decoder, for files and for the
+#: camera, and framing.py asks OpenCV for exactly four things, none of which
+#: touch video I/O. So these are fifty six megabytes of a SECOND FFmpeg that
+#: nothing calls.
+#:
+#: It is worth the trouble because of the size the download had reached.
+#: Portable copies check their update against a size limit that shipped in
+#: the version they are RUNNING, and 3.3.x carries a 120 MB one. A zip above
+#: that could not update itself, and the fix cannot reach somebody who has
+#: not had it yet.
+UNUSED_IN_BUNDLE = ("opencv_videoio_ffmpeg",)
+
+
+def strip_unused():
+    """Remove things collected by --collect-all that nothing here calls."""
+    removed = 0
+    root = os.path.join(BUNDLE, "_internal")
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if any(name.startswith(prefix) for prefix in UNUSED_IN_BUNDLE):
+                path = os.path.join(folder, name)
+                size = os.path.getsize(path)
+                os.remove(path)
+                removed += size
+                print(f"  dropped {name} ({size / 1048576:.1f} MB)")
+    if removed:
+        print(f"  {removed / 1048576:.1f} MB of unused FFmpeg removed")
 
 
 def copy_payload():
@@ -187,6 +232,7 @@ def main():
     print("Drawing the icon")
     make_icon()
     build_executable()
+    strip_unused()
     print("Copying the demo pack and the guide")
     copy_payload()
     print("Zipping")

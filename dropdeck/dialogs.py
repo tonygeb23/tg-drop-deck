@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import ctypes
 import os
+import socket
+import ssl
 import threading
 import time
+import urllib.parse
+import webbrowser
 
 import wx
 
@@ -17,8 +21,12 @@ from . import audiofile
 from . import constants as C
 from . import feedback
 from . import dsp
+from . import camera
+from . import framing
 from . import proccapture
+from . import secrets
 from . import sources
+from . import streamhelp
 from . import streamout
 from . import streamstats
 from . import vst
@@ -659,7 +667,7 @@ class SettingsDialog(wx.Dialog):
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
     (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
-     PAGE_STREAM, PAGE_RECORD, PAGE_SPEECH) = range(8)
+     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH) = range(9)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -678,6 +686,7 @@ class SettingsDialog(wx.Dialog):
         self._build_mic_tab()
         self._build_voice_tab()
         self._build_stream_tab()
+        self._build_picture_tab()
         self._build_record_tab()
         self._build_speech_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
@@ -723,6 +732,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_MIC: self.mic_device,
                 self.PAGE_VOICE: self.voice_list,
                 self.PAGE_STREAM: self.stream_server,
+                self.PAGE_VIDEO: self.video_server,
                 self.PAGE_RECORD: self.record_format,
                 self.PAGE_SPEECH: self.speech_choice}.get(
                     self.tabs.GetSelection())
@@ -1318,7 +1328,7 @@ class SettingsDialog(wx.Dialog):
         moment a broadcaster finds out a password is wrong should not be the
         moment the show starts.
         """
-        panel, sizer = self._page("Streaming")
+        panel, sizer = self._page("Audio streaming")
 
         # More than one station, because Tony runs two and retyping an
         # address, a mount and a password to move between them is the kind of
@@ -1371,7 +1381,7 @@ class SettingsDialog(wx.Dialog):
         self.stream_server = field(
             "Se&rver",
             lambda: wx.Choice(panel, choices=[
-                streamout.SERVERS[key][0] for key in C.STREAM_SERVER_ORDER]),
+                streamout.server_label(key) for key in C.STREAM_SERVER_ORDER]),
             "Server type",
             "Icecast covers almost everything, including the Liquidsoap "
             "harbor a station puts in front of it so a presenter can take "
@@ -1507,11 +1517,151 @@ class SettingsDialog(wx.Dialog):
         # board, so without this Cancel left the board on whichever station
         # was last clicked. Saving or forgetting a station is a deliberate
         # act and stays; which one is current does not.
+        # What Cancel restores. The picture fields are in here as well as the
+        # stream ones, because picking a station assigns ALL of
+        # STATION_FIELDS: without them, clicking a station and then Cancel
+        # said "Nothing changed" and left the board pointing at another
+        # station's camera, which the next Ctrl+B would then open.
         self._stream_before = {field: getattr(self.board, field)
                                for field in self._stream_controls()}
+        self._stream_before.update({
+            field: getattr(self.board, field)
+            for field in ("picture", "picture_file", "picture_clock",
+                          "camera", "video_width", "video_height",
+                          "video_fps", "video_bitrate", "video_server",
+                          "video_host", "video_key", "live_to")})
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
         self._refresh_stations()
+
+    # ------------------------------------------------- RTMP and Icecast --
+    def _current_server(self):
+        return C.STREAM_SERVER_ORDER[max(0, self.stream_server.GetSelection())]
+
+    def _loaded_key(self):
+        """The saved stream key for the current station, if there is one."""
+        try:
+            return secrets.fetch(self.board.stream_name or "")
+        except Exception:
+            return ""
+
+    # ------------------------------------------------------ the video side --
+    def _current_platform(self):
+        return C.VIDEO_SERVER_ORDER[max(0, self.video_server.GetSelection())]
+
+    def _on_platform_changed(self, event):
+        if event is not None:
+            event.Skip()
+        self._apply_platform()
+
+    def _apply_platform(self):
+        """Follow the platform choice.
+
+        YouTube and Facebook have exactly one ingest address each and there is
+        nothing to be gained by making somebody type it, so it is filled in
+        and locked. A custom RTMP server is the one where the address really
+        is the user's.
+
+        A platform's address is ALWAYS set, never merely defaulted. The box is
+        disabled for YouTube and Facebook, so anything left in it from before
+        is an address the user cannot correct and the platform will not
+        accept. Going the other way, a platform address is cleared rather than
+        left sitting there as if it were the user's own server.
+        """
+        kind = self._current_platform()
+        self.video_key_page.Enable(kind in C.RTMP_KEY_PAGE)
+        self._say_bitrate_advice(kind)
+        warning = getattr(self, "live_warning", None)
+        if warning is not None:
+            if C.RTMP_GOES_LIVE_AT_ONCE.get(kind):
+                warning.SetLabel(
+                    "Careful: pressing Ctrl+B puts you live on YouTube "
+                    "straight away. There is no preview. Your subscribers "
+                    "are notified and the stream is saved to your channel.")
+            elif kind == "facebook":
+                warning.SetLabel(
+                    "Facebook shows you a preview first. Nothing is posted "
+                    "until you press Go Live Now in Live Producer.")
+            elif kind == "restream":
+                warning.SetLabel(
+                    "Create the RTMP stream on the Restream website first, "
+                    "then copy BOTH the address and the key it gives you: "
+                    "the address here is only the usual one and yours may "
+                    "differ. Restream passes the stream on to whichever "
+                    "channels you have switched on there, so with them all "
+                    "off nothing leaves Restream.")
+            else:
+                warning.SetLabel(
+                    "What happens when you connect is up to whoever runs "
+                    "the server.")
+            warning.Wrap(560)
+            warning.GetParent().Layout()
+        # Each platform's address is remembered separately for as long as the
+        # window is open. Without this, pasting the URL Restream gave you and
+        # then looking at the YouTube entry threw your URL away, because
+        # coming back found YouTube's address in the box and replaced it with
+        # Restream's default. Typed work is not something a dropdown gets to
+        # discard.
+        previous = getattr(self, "_last_platform", None)
+        if previous is not None and previous != kind:
+            self._hosts[previous] = self.video_host.GetValue().strip()
+        self._last_platform = kind
+
+        remembered = self._hosts.get(kind, "")
+        ingest = C.RTMP_INGEST.get(kind)
+        if kind in C.RTMP_FIXED_ADDRESS:
+            # Exactly one ingest, and it is not the user's to get wrong.
+            self.video_host.SetValue(ingest)
+        elif remembered:
+            self.video_host.SetValue(remembered)
+        elif ingest:
+            self.video_host.SetValue(ingest)
+        else:
+            self.video_host.SetValue("")
+        self.video_host.Enable(kind not in C.RTMP_FIXED_ADDRESS)
+
+    def _say_bitrate_advice(self, kind=None):
+        """Warn about a bitrate the platform will not like, before air.
+
+        Facebook publishes real bounds and says missing them can end a
+        broadcast. Finding that out mid show, unable to see the dashboard, is
+        the situation this exists to prevent.
+        """
+        advice = getattr(self, "bitrate_advice", None)
+        if advice is None:
+            return
+        try:
+            settings = self.picture_settings
+        except Exception:
+            return
+        text = streamout.bitrate_advice(
+            kind or self._current_platform(),
+            settings["video_width"], settings["video_height"],
+            settings["video_fps"], settings["video_bitrate"])
+        advice.SetLabel(text)
+        advice.Wrap(560)
+        advice.GetParent().Layout()
+
+    def _on_how_to(self, _event):
+        with StreamHelpDialog(self, self._current_platform()) as box:
+            box.ShowModal()
+
+    def _on_open_key_page(self, _event):
+        kind = self._current_platform()
+        url = C.RTMP_KEY_PAGE.get(kind)
+        if not url:
+            self._say_video("A custom server has no page to open. Your key "
+                            "comes from whoever runs it.")
+            return
+        try:
+            webbrowser.open(url)
+        except Exception:
+            self._say_video("The page could not be opened. It is %s" % url)
+            return
+        self._say_video(
+            "Opened the %s page in your browser. Copy the stream key from "
+            "there and paste it into Stream key."
+            % streamout.server_label(kind))
 
     #: The boxes a saved station fills in, and what reads and writes each.
     def _stream_controls(self):
@@ -1559,6 +1709,15 @@ class SettingsDialog(wx.Dialog):
         if not self.board.load_station(name):
             return
         self._fill_stream_fields()
+        # The key does not live in the station, so it is fetched by name.
+        self.video_key.SetValue(secrets.fetch(name))
+        self.video_server.SetSelection(
+            C.VIDEO_SERVER_ORDER.index(self.board.video_server)
+            if self.board.video_server in C.VIDEO_SERVER_ORDER else 0)
+        self.video_host.SetValue(self.board.video_host or "")
+        self.live_to_video.SetValue(self.board.live_to == C.LIVE_TO_VIDEO)
+        self._fill_picture_fields()
+        self._apply_platform()
         self._say_test("Loaded %s." % name)
 
     def _on_save_station(self, _event):
@@ -1568,7 +1727,12 @@ class SettingsDialog(wx.Dialog):
             self._say_test("Give the station a name first, in Station name.")
             self.stream_name.SetFocus()
             return
-        for field, value in (("stream_server", settings["server"]),
+        video = self.video_settings
+        for field, value in (("video_server", video["server"]),
+                             ("video_host", video["host"]),
+                             ("live_to", C.LIVE_TO_VIDEO if video["live"]
+                              else C.LIVE_TO_AUDIO),
+                             ("stream_server", settings["server"]),
                              ("stream_host", settings["host"]),
                              ("stream_port", settings["port"]),
                              ("stream_mount", settings["mount"]),
@@ -1581,15 +1745,38 @@ class SettingsDialog(wx.Dialog):
                              ("stream_mic", self.stream_mic.GetValue()),
                              ("stream_titles", self.stream_titles.GetValue())):
             setattr(self.board, field, value)
+        for field, value in self.picture_settings.items():
+            if field != "framing_level":     # app wide, not per station
+                setattr(self.board, field, value)
         self.board.save_station()
         self._refresh_stations(settings["name"])
-        self._say_test("Saved %s." % settings["name"])
+        note = self._keep_key(settings["name"], video["key"])
+        self._say_test("Saved %s.%s" % (settings["name"], note))
+
+    def _keep_key(self, station, key):
+        """Put the stream key somewhere better than the board file.
+
+        Returns what to add to the spoken confirmation, because a key that
+        could NOT be kept safely is something the user has to be told: it
+        stays in the board file then, the way it always did, and a board file
+        travels.
+        """
+        if not key:
+            secrets.forget(station)
+            return ""
+        if secrets.store(station, key):
+            return " The stream key is in Windows Credential Manager."
+        return (" The stream key could NOT be stored safely, so it is in "
+                "your board file. Do not send that file to anybody.")
 
     def _on_forget_station(self, _event):
         name = self.stream_picker.GetStringSelection()
         if not self.board.forget_station(name):
             self._say_test("There is nothing saved by that name.")
             return
+        # A forgotten station must not leave its key behind in the credential
+        # store, where nothing would ever clean it up.
+        secrets.forget(name)
         self._refresh_stations()
         self._say_test("Forgot %s." % name)
 
@@ -1636,6 +1823,96 @@ class SettingsDialog(wx.Dialog):
             wx.EndBusyCursor()
         self._say_test("Connected, and disconnected again. It will work.")
 
+    def _on_test_video(self, _event):
+        self._test_rtmp(self.video_settings)
+
+    def _test_rtmp(self, settings):
+        """Check a YouTube or Facebook station WITHOUT going live.
+
+        **This deliberately does not complete an RTMP handshake**, and that is
+        the whole point of it being separate from the Icecast test above.
+
+        An Icecast source connection is inert: you connect, the server waits
+        for audio, you hang up, and nothing has happened. RTMP to YouTube or
+        Facebook is not inert. A publish is what STARTS a broadcast, and a
+        presenter who cannot see their channel has no way to notice that a
+        connection test put them on the air, however briefly. Getting that
+        wrong once, on somebody's real channel, is worse than every problem
+        this button was meant to catch.
+
+        So it checks everything that can be checked from outside:
+
+            the address is one we recognise and is shaped like a URL
+            the name really resolves
+            the port really accepts a connection
+            TLS really completes, which is most of what goes wrong on 443
+            a key is present and looks like a key
+
+        What it cannot tell you is whether the KEY is right. Nothing can,
+        short of going live, so it says so plainly rather than implying a
+        pass it has not earned.
+        """
+        host = settings["host"].strip()
+        key = settings.get("key", "").strip()
+        parsed = urllib.parse.urlparse(host)
+        if not parsed.scheme or not parsed.hostname:
+            self._say_video(
+                "That does not look like a server address. It should start "
+                "with rtmp or rtmps.")
+            return
+        if not key:
+            self._say_video(
+                "There is no stream key. Get my stream key opens the page "
+                "where yours is.")
+            self.video_key.SetFocus()
+            return
+
+        port = parsed.port or (443 if parsed.scheme == "rtmps" else 1935)
+        self._say_video("Checking...")
+        wx.BeginBusyCursor()
+        try:
+            try:
+                socket.getaddrinfo(parsed.hostname, port,
+                                   proto=socket.IPPROTO_TCP)
+            except OSError:
+                self._say_video(
+                    "Could not find %s. Check the address, and that you are "
+                    "online." % parsed.hostname)
+                return
+            try:
+                sock = socket.create_connection((parsed.hostname, port),
+                                                C.STREAM_TIMEOUT)
+            except OSError as exc:
+                self._say_video(
+                    "Could not reach %s on port %d: %s. Something may be "
+                    "blocking it."
+                    % (parsed.hostname, port, exc.strerror or exc))
+                return
+            try:
+                if parsed.scheme == "rtmps":
+                    context = ssl.create_default_context()
+                    with context.wrap_socket(
+                            sock, server_hostname=parsed.hostname) as secure:
+                        secure.version()
+            except Exception as exc:
+                self._say_video(
+                    "Reached %s but the secure connection failed: %s"
+                    % (parsed.hostname, exc))
+                return
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        finally:
+            wx.EndBusyCursor()
+
+        self._say_video(
+            "%s is reachable and your stream key is %s. The key itself cannot "
+            "be checked without going live, so this does not prove it is "
+            "right. Nothing was broadcast."
+            % (parsed.hostname, secrets.redact(key)))
+
     def _say_test(self, text):
         self.stream_result.SetValue(text)
         frame = self.GetParent()
@@ -1661,6 +1938,380 @@ class SettingsDialog(wx.Dialog):
             "name": self.stream_name.GetValue().strip(),
             "stats_url": self.stream_stats.GetValue().strip(),
             "public": self.stream_public.GetValue(),
+        }
+
+    def _build_picture_tab(self):
+        """Going out on YouTube, Facebook or any RTMP server.
+
+        A page of its own, beside Audio streaming rather than folded into it.
+        They looked like one job and are not: no mount point, no port, no
+        format, a stream key instead of a password, and a picture, which the
+        audio side has no concept of at all. One page that changed half its
+        fields depending on a dropdown meant most of it was disabled most of
+        the time, and Windows leaves disabled controls OUT OF THE TAB ORDER,
+        so the stream key box could not be reached at all until you had
+        already found and changed the server. Tony hit exactly that.
+
+        A card is the default picture and a camera is not. Most people using
+        this are running a radio show and have no reason to be on camera.
+        """
+        panel, sizer = self._page("Video streaming")
+
+        note = wx.StaticText(panel, label=(
+            "YouTube and Facebook will not take sound on its own, so a "
+            "picture goes out with it. A card costs almost nothing."))
+        note.Wrap(560)
+        sizer.Add(note, 0, wx.ALL, 10)
+
+        # The single most important thing on this page, and the one a
+        # presenter cannot find out any other way. The two platforms behave
+        # OPPOSITELY: YouTube's own documentation says that ingesting to a
+        # stream key creates the watch page, puts you live, notifies your
+        # subscribers and archives the result, with no preview and nothing to
+        # confirm. Facebook posts nothing until somebody clicks Go Live Now.
+        # Somebody who cannot see either page would learn this afterwards.
+        self.live_warning = wx.StaticText(panel, label="")
+        self.live_warning.Wrap(560)
+        sizer.Add(self.live_warning, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.bitrate_advice = wx.StaticText(panel, label="")
+        self.bitrate_advice.Wrap(560)
+        sizer.Add(self.bitrate_advice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        grid = wx.FlexGridSizer(2, 8, 12)
+        grid.AddGrowableCol(1, 1)
+
+        def field(label, build, name, tip=""):
+            # The label first, always. See the note in _build_stream_tab.
+            grid.Add(wx.StaticText(panel, label=label), 0,
+                     wx.ALIGN_CENTER_VERTICAL)
+            control = build()
+            name_field(control, name)
+            if tip:
+                control.SetToolTip(tip)
+            grid.Add(control, 0, wx.EXPAND)
+            return control
+
+        self.video_server = field(
+            "&Platform",
+            lambda: wx.Choice(panel, choices=[
+                streamout.server_label(k) for k in C.VIDEO_SERVER_ORDER]),
+            "Platform",
+            "Where the video goes. YouTube and Facebook fill their own "
+            "address in; a custom server is any other RTMP receiver.")
+        self.video_server.SetSelection(
+            C.VIDEO_SERVER_ORDER.index(self.board.video_server)
+            if self.board.video_server in C.VIDEO_SERVER_ORDER else 0)
+        self.video_server.Bind(wx.EVT_CHOICE, self._on_platform_changed)
+
+        self.video_host = field(
+            "A&ddress",
+            lambda: wx.TextCtrl(panel, value=self.board.video_host),
+            "Address",
+            "The RTMP address to send to. YouTube and Facebook set their "
+            "own and it cannot be edited, because there is only one each and "
+            "it is not yours to get wrong. For Restream or your own server, "
+            "paste the address they give you, and prefer an rtmps one if "
+            "they offer it: a plain rtmp address sends your key unencrypted.")
+
+        self.video_key = field(
+            "Stream &key",
+            lambda: wx.TextCtrl(panel, value=self._loaded_key(),
+                                style=wx.TE_PASSWORD),
+            "Stream key",
+            "The key from YouTube or Facebook. It is kept in Windows "
+            "Credential Manager rather than in your board file, because "
+            "anybody who has it can broadcast to your channel.")
+
+        #: One remembered address per platform, for this window's lifetime.
+        self._hosts = {}
+        if self.board.video_server in C.VIDEO_SERVER_ORDER:
+            self._hosts[self.board.video_server] = self.board.video_host or ""
+        self._last_platform = None
+
+        self._picture_kinds = list(C.PICTURE_SOURCES)
+        self.picture_kind = field(
+            "&Show",
+            lambda: wx.Choice(panel, choices=[
+                C.PICTURE_LABELS[k] for k in self._picture_kinds]),
+            "What to show",
+            "A card is drawn by the app and shows your station name and what "
+            "is playing. A picture is your own artwork. A camera is a camera.")
+        self.picture_kind.SetSelection(
+            self._picture_kinds.index(self.board.picture)
+            if self.board.picture in self._picture_kinds else 0)
+        self.picture_kind.Bind(wx.EVT_CHOICE, self._on_picture_kind)
+
+        self.picture_file = field(
+            "Picture &file",
+            lambda: wx.TextCtrl(panel, value=self.board.picture_file),
+            "Picture file",
+            "A PNG or a JPEG. It is fitted inside the frame without being "
+            "stretched out of shape.")
+
+        self._cameras = []
+        self.camera_choice = field(
+            "&Camera",
+            lambda: wx.Choice(panel, choices=["Looking for cameras..."]),
+            "Camera",
+            "Which camera to use. The list is whatever Windows can see.")
+
+        self._sizes = [(1280, 720), (1920, 1080), (854, 480), (640, 360)]
+        self.video_size = field(
+            "Si&ze",
+            lambda: wx.Choice(panel, choices=[
+                camera.describe_size(w, h) for w, h in self._sizes]),
+            "Picture size",
+            "720p is the sensible answer and what most cameras do. 1080p "
+            "costs more upload for very little at this kind of bitrate.")
+
+        self.video_bitrate = field(
+            "Picture &quality",
+            lambda: wx.Choice(panel, choices=[
+                "%d kbps" % rate for rate in C.RTMP_VIDEO_BITRATES]),
+            "Picture quality",
+            "How much of your upload the picture gets. A card needs almost "
+            "none of this; a camera wants 2500 or more at 720p.")
+
+        self._framing_levels = list(framing.FRAMING_LEVELS)
+        self.framing_level = field(
+            "Tell me about the s&hot",
+            lambda: wx.Choice(panel, choices=[
+                framing.FRAMING_LEVEL_LABELS[k]
+                for k in self._framing_levels]),
+            "Tell me about the shot",
+            "Whether the app says when you are out of shot, off to one side "
+            "or in the dark. Ctrl+Shift+F answers whatever this is set to.")
+        self.framing_level.SetSelection(
+            self._framing_levels.index(self.board.framing_level)
+            if self.board.framing_level in self._framing_levels else 1)
+
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.live_to_video = wx.CheckBox(
+            panel, label="Go live &here when I press Ctrl+B")
+        self.live_to_video.SetValue(self.board.live_to == C.LIVE_TO_VIDEO)
+        self.live_to_video.SetToolTip(
+            "Ctrl+B sends the show to one place at a time. Turn this on to "
+            "send it here instead of to your radio station.")
+        sizer.Add(self.live_to_video, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        self.picture_clock = wx.CheckBox(
+            panel, label="Put a cloc&k on the card")
+        self.picture_clock.SetValue(bool(self.board.picture_clock))
+        sizer.Add(self.picture_clock, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        # Finding a stream key means going into a video web app and hunting
+        # for it, which is the worst part of setting this up with a screen
+        # reader and the one part the app can make easy. It is also the ONLY
+        # part: everything else is one paste and then never again.
+        howto = wx.Button(panel, label="&How do I set this up?")
+        howto.SetToolTip(
+            "Step by step for whichever platform is picked above, without "
+            "leaving the app.")
+        howto.Bind(wx.EVT_BUTTON, self._on_how_to)
+        row.Add(howto, 0, wx.RIGHT, 8)
+
+        self.video_key_page = wx.Button(panel, label="Get my stream ke&y")
+        self.video_key_page.SetToolTip(
+            "Opens the page on YouTube or Facebook where your stream key is, "
+            "so you do not have to go looking for it.")
+        self.video_key_page.Bind(wx.EVT_BUTTON, self._on_open_key_page)
+        row.Add(self.video_key_page, 0, wx.RIGHT, 8)
+
+        video_test = wx.Button(panel, label="T&est the connection")
+        video_test.SetToolTip(
+            "Checks the address is reachable without going live. It cannot "
+            "check the key itself, and nothing is broadcast.")
+        video_test.Bind(wx.EVT_BUTTON, self._on_test_video)
+        row.Add(video_test, 0, wx.RIGHT, 8)
+
+        look = wx.Button(panel, label="&Look through the camera now")
+        look.SetToolTip(
+            "Opens the camera, says what it can see, and closes it again. "
+            "Nothing is broadcast.")
+        look.Bind(wx.EVT_BUTTON, self._on_look)
+        row.Add(look, 0, wx.RIGHT, 8)
+        refresh = wx.Button(panel, label="Look for cameras a&gain")
+        refresh.Bind(wx.EVT_BUTTON, lambda _e: self._refresh_cameras(True))
+        row.Add(refresh, 0)
+        sizer.Add(row, 0, wx.ALL, 10)
+
+        self._label(panel, sizer, "What happened")
+        self.picture_result = wx.TextCtrl(
+            panel, style=wx.TE_READONLY | wx.TE_MULTILINE, size=(-1, 60),
+            value="Nothing tried yet.")
+        self.picture_result.SetName("What happened")
+        sizer.Add(self.picture_result, 0,
+                  wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self._fill_video_size()
+        self._refresh_cameras()
+        self._on_picture_kind(None)
+        self.video_size.Bind(wx.EVT_CHOICE,
+                             lambda _e: self._say_bitrate_advice())
+        self.video_bitrate.Bind(wx.EVT_CHOICE,
+                                lambda _e: self._say_bitrate_advice())
+        self._apply_platform()
+
+    def _fill_picture_fields(self):
+        """Put the board's picture settings into the boxes.
+
+        Needed because loading a station assigns every one of STATION_FIELDS,
+        picture included, and without this the page went on showing the
+        previous station's answers and OK wrote them back over the loaded one.
+        """
+        self.picture_kind.SetSelection(
+            self._picture_kinds.index(self.board.picture)
+            if self.board.picture in self._picture_kinds else 0)
+        self.picture_file.SetValue(self.board.picture_file or "")
+        self.picture_clock.SetValue(bool(self.board.picture_clock))
+        if self.board.camera in self._cameras:
+            self.camera_choice.SetSelection(
+                self._cameras.index(self.board.camera))
+        self._fill_video_size()
+        self._on_picture_kind(None)
+
+    def _fill_video_size(self):
+        want = (int(self.board.video_width), int(self.board.video_height))
+        if want not in self._sizes:
+            self._sizes.append(want)
+            self.video_size.Append(camera.describe_size(*want))
+        self.video_size.SetSelection(self._sizes.index(want))
+        rates = list(C.RTMP_VIDEO_BITRATES)
+        closest = min(rates, key=lambda r: abs(r - int(self.board.video_bitrate)))
+        self.video_bitrate.SetSelection(rates.index(closest))
+
+    def _refresh_cameras(self, say=False):
+        """Ask Windows what cameras there are, off the UI thread.
+
+        Enumeration opens DirectShow, which takes long enough to be felt, and
+        a Preferences box that freezes while it opens is a Preferences box
+        that looks broken.
+        """
+        def work():
+            try:
+                found = camera.cameras()
+            except Exception:
+                found = []
+            wx.CallAfter(self._cameras_found, found, say)
+
+        threading.Thread(target=work, daemon=True,
+                         name="dropdeck-camera-list").start()
+
+    def _cameras_found(self, found, say=False):
+        if not self:                       # the box was closed while looking
+            return
+        self._cameras = found
+        choices = found or ["No cameras found"]
+        self.camera_choice.Set(choices)
+        wanted = self.board.camera
+        self.camera_choice.SetSelection(
+            found.index(wanted) if wanted in found else 0)
+        if say:
+            self._say_picture(
+                "Found %d camera%s." % (len(found), "" if len(found) == 1 else "s")
+                if found else "No cameras found.")
+
+    def _on_picture_kind(self, event):
+        """Enable what this kind of picture needs. Nothing is hidden."""
+        if event is not None:
+            event.Skip()
+        kind = self._picture_kinds[max(0, self.picture_kind.GetSelection())]
+        self.picture_file.Enable(kind == C.PICTURE_IMAGE)
+        self.camera_choice.Enable(kind == C.PICTURE_CAMERA)
+        self.framing_level.Enable(kind == C.PICTURE_CAMERA)
+        self.picture_clock.Enable(kind == C.PICTURE_CARD)
+
+    #: The video page has one result box and two things that report into it,
+    #: the connection check and the camera, so they share a name.
+    def _say_video(self, text):
+        return self._say_picture(text)
+
+    def _say_picture(self, text):
+        self.picture_result.SetValue(text)
+        frame = self.GetParent()
+        speak = getattr(frame, "announce_answer", None)
+        if speak is not None:
+            speak(text)
+
+    def _on_look(self, _event):
+        """Open the camera, say what it sees, close it. Broadcasts nothing.
+
+        This is the button somebody presses before a show, and it answers the
+        question they actually have, which is not "does the camera work" but
+        "am I in it".
+        """
+        settings = self.picture_settings
+        if settings["picture"] != C.PICTURE_CAMERA:
+            self._say_picture("Set Show to a camera first.")
+            return
+        if not settings["camera"]:
+            self._say_picture("There is no camera to look through.")
+            return
+        self._say_picture("Opening the camera...")
+        wx.BeginBusyCursor()
+        try:
+            source = camera.CameraSource(settings["camera"],
+                                         settings["video_width"],
+                                         settings["video_height"],
+                                         settings["video_fps"])
+            try:
+                source.start()
+                if not source.wait_ready(C.CAMERA_OPEN_TIMEOUT):
+                    self._say_picture(source.error or
+                                      "The camera gave no picture.")
+                    return
+                watcher = framing.Framer(level=framing.FRAMING_OFF)
+                reading = watcher.measure(source.latest())
+                if watcher.error:
+                    self._say_picture(
+                        "The camera works: %s. %s"
+                        % (source.describe(), watcher.error))
+                    return
+                self._say_picture("%s. %s." % (source.describe(),
+                                               reading.sentence()))
+            finally:
+                source.close()
+        except camera.CameraError as exc:
+            self._say_picture(str(exc))
+        except Exception as exc:
+            self._say_picture(camera.explain(exc, settings["camera"]))
+        finally:
+            wx.EndBusyCursor()
+
+    @property
+    def video_settings(self):
+        """The video side, as it stands in the boxes."""
+        return {
+            "server": self._current_platform(),
+            "host": self.video_host.GetValue().strip(),
+            # Stripped hard: a key pasted off a web page routinely carries a
+            # trailing newline or a space, and that is one of the commonest
+            # reasons a key that LOOKS right is refused.
+            "key": "".join(self.video_key.GetValue().split()),
+            "live": bool(self.live_to_video.GetValue()),
+        }
+
+    @property
+    def picture_settings(self):
+        """Everything the picture needs, as it stands in the boxes."""
+        kind = self._picture_kinds[max(0, self.picture_kind.GetSelection())]
+        width, height = self._sizes[max(0, self.video_size.GetSelection())]
+        chosen = self.camera_choice.GetStringSelection()
+        return {
+            "picture": kind,
+            "picture_file": self.picture_file.GetValue().strip(),
+            "picture_clock": bool(self.picture_clock.GetValue()),
+            "camera": chosen if chosen in self._cameras else "",
+            "video_width": width,
+            "video_height": height,
+            "video_fps": int(self.board.video_fps or C.RTMP_FPS),
+            "video_bitrate": C.RTMP_VIDEO_BITRATES[
+                max(0, self.video_bitrate.GetSelection())],
+            "framing_level": self._framing_levels[
+                max(0, self.framing_level.GetSelection())],
         }
 
     def _build_record_tab(self):
@@ -3540,3 +4191,79 @@ class DonateDialog(wx.Dialog):
     @property
     def never_again(self):
         return bool(self.never.GetValue())
+
+
+class StreamHelpDialog(wx.Dialog):
+    """How to set up each platform, in the app rather than only on the web.
+
+    The manual is on the website so a confusing sentence can be fixed the same
+    day. That is right for the manual and wrong for this: setting up streaming
+    is the one job somebody does with the app open, one field at a time, and
+    telling them to go and find a web page mid task is telling them to lose
+    their place.
+
+    So the steps live here too, and both come from `streamhelp.py` so they
+    cannot drift apart.
+
+    **A read only multiline box, not a web view and not a list.** A screen
+    reader user can arrow through it line by line, read a word at a time, and
+    copy a piece out, which is exactly what somebody following instructions
+    needs. It also means the text can be as long as it needs to be.
+    """
+
+    def __init__(self, parent, platform=None):
+        super().__init__(parent, title="Setting up streaming",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._platforms = list(streamhelp.ORDER)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # The label is built before the control, the same rule as everywhere
+        # else: MSAA hands a screen reader the static text that PRECEDES a
+        # control in creation order.
+        outer.Add(wx.StaticText(self, label="&Which platform"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.picker = wx.Choice(self, choices=[
+            streamout.server_label(key) for key in self._platforms]
+            + ["All of them, and what to do when it goes wrong"])
+        name_field(self.picker, "Which platform")
+        self.picker.Bind(wx.EVT_CHOICE, self._on_pick)
+        outer.Add(self.picker, 0, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Instructions"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.text = wx.TextCtrl(
+            self, style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_RICH2,
+            size=(640, 420))
+        name_field(self.text, "Instructions")
+        outer.Add(self.text, 1, wx.EXPAND | wx.ALL, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        guide = wx.Button(self, label="Open the full &manual")
+        guide.SetToolTip("Opens the whole manual on the website, which covers "
+                         "everything else the app does.")
+        guide.Bind(wx.EVT_BUTTON,
+                   lambda _e: webbrowser.open(C.USER_GUIDE_URL))
+        row.Add(guide, 0, wx.RIGHT, 8)
+        row.Add(wx.Button(self, wx.ID_CLOSE, "&Close"), 0)
+        outer.Add(row, 0, wx.ALL, 10)
+        self.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE),
+                  id=wx.ID_CLOSE)
+        self.SetEscapeId(wx.ID_CLOSE)
+
+        self.SetSizerAndFit(outer)
+        wanted = platform if platform in self._platforms else self._platforms[0]
+        self.picker.SetSelection(self._platforms.index(wanted))
+        self._on_pick(None)
+        # Focus lands on the instructions rather than the picker, because
+        # reading them is what this window is for.
+        self.text.SetFocus()
+
+    def _on_pick(self, event):
+        if event is not None:
+            event.Skip()
+        index = max(0, self.picker.GetSelection())
+        if index >= len(self._platforms):
+            self.text.SetValue(streamhelp.everything())
+        else:
+            self.text.SetValue(streamhelp.as_text(self._platforms[index]))
+        self.text.SetInsertionPoint(0)

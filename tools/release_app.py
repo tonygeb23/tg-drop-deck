@@ -43,6 +43,11 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.4.0": ("Drop Deck can now go out on YouTube, Facebook, Restream or any "
+              "RTMP server, with a picture. A card with your station name on "
+              "it costs almost nothing, or use your own artwork or a camera. "
+              "Ctrl+Shift+F says what the camera can see: whether you are in "
+              "shot, centred and lit."),
     "3.3.2": ("A Mac only release. Nothing on Windows changed."),
     "3.3.1": ("A Mac only release: MP3 streaming and recording. Windows has had "
               "both since the beginning and nothing on Windows changed."),

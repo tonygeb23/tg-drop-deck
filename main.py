@@ -146,6 +146,55 @@ def selftest():  # noqa: C901
                             len(audiofile.supported_extensions())))
         except Exception as exc:
             problems.append("PyAV is in the build but unusable: %r" % exc)
+    # Video streaming. Both halves are things a FROZEN build can lose without
+    # the source noticing: the H.264 encoder lives in FFmpeg's DLLs, and the
+    # face model is a data file PyInstaller has to be told about. Losing
+    # either looks like nothing at all until somebody tries to go live.
+    try:
+        from dropdeck import streamout
+        from dropdeck import constants as _C
+        import numpy as _np
+        import io as _io
+        buf = _io.BytesIO()
+        container = av.open(buf, mode="w", format="flv")
+        stream = container.add_stream(_C.RTMP_VIDEO_ENCODER, rate=_C.RTMP_FPS)
+        stream.width, stream.height = 320, 180
+        stream.pix_fmt = "yuv420p"
+        stream.bit_rate = 600_000
+        stream.options = streamout._video_options(_C.RTMP_VIDEO_ENCODER,
+                                                  _C.RTMP_FPS, 600)
+        blank = _np.zeros((180, 320, 3), dtype=_np.uint8)
+        for index in range(3):
+            picture = av.VideoFrame.from_ndarray(blank, format="rgb24")
+            picture = picture.reformat(format="yuv420p")
+            picture.pts = index
+            for packet in stream.encode(picture):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        notes.append("video streaming: %s encodes, RTMP available"
+                     % _C.RTMP_VIDEO_ENCODER)
+    except Exception as exc:
+        problems.append("the video encoder does not work in this build: %r"
+                        % exc)
+    try:
+        from dropdeck import framing
+        if framing.available():
+            watcher = framing.Framer(level=framing.FRAMING_OFF)
+            import numpy as _np2
+            watcher.measure(_np2.zeros((180, 320, 3), dtype=_np2.uint8))
+            if watcher.error:
+                problems.append("the face detector is here but will not run: "
+                                "%s" % watcher.error)
+            else:
+                notes.append("camera framing: detector and model both load")
+        else:
+            problems.append("camera framing is unavailable in this build: %s"
+                            % framing.why_unavailable())
+    except Exception as exc:
+        problems.append("camera framing raised in this build: %r" % exc)
+
     try:
         import mutagen                                   # noqa: F401
         notes.append("tags: mutagen available, so artist and title are read")

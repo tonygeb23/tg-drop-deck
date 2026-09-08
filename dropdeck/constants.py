@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.4.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -736,6 +736,12 @@ STREAM_BEHIND_FOR = 5.0
 STREAM_BEHIND_AGAIN = 60.0
 
 #: Reconnect backoff, in seconds. Starts quick because most drops are brief.
+#: How long the pump may go round without finishing before the watchdog calls
+#: it stuck. Generously more than any real block takes, because a false alarm
+#: drops a working stream. See Streamer._watch for why this exists at all.
+STREAM_STALL_SECONDS = 12.0
+STREAM_WATCHDOG_POLL = 1.0
+
 STREAM_RETRY_FIRST = 2.0
 STREAM_RETRY_MAX = 30.0
 
@@ -755,5 +761,278 @@ STREAM_BITRATES = (64, 96, 128, 160, 192, 256, 320)
 
 #: The order the Streaming tab offers them in. Kept here rather than taken
 #: from a dict so the list on screen cannot quietly reorder itself.
+#: THE AUDIO SIDE ONLY. Icecast and SHOUTcast, which is what a radio station
+#: runs. The video platforms are a separate list on a separate page, because
+#: they are a separate job with none of the same settings: no mount point, no
+#: port, no format, and a stream key rather than a password.
 STREAM_SERVER_ORDER = ("icecast", "shoutcast")
 STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")
+
+#: The video side. Same shape, different page.
+VIDEO_SERVER_ORDER = ("youtube", "facebook", "restream", "rtmp")
+
+#: Which of the two Ctrl+B sends the show to. One at a time: sending to both
+#: means two encoders and twice the upload, and it is not built yet.
+LIVE_TO_AUDIO = "audio"
+LIVE_TO_VIDEO = "video"
+LIVE_TO = (LIVE_TO_AUDIO, LIVE_TO_VIDEO)
+LIVE_TO_LABELS = {
+    LIVE_TO_AUDIO: "my radio station",
+    LIVE_TO_VIDEO: "my video platform",
+}
+
+
+# ---------------------------------------------------------------------------
+# Going out on YouTube, Facebook and anything else that speaks RTMP
+# ---------------------------------------------------------------------------
+
+#: The ingest addresses, without the key. The key is a credential and is kept
+#: apart from these everywhere except the moment the URL is built.
+#:
+#: BOTH ARE RTMPS, AND THAT IS NOT A PREFERENCE. Facebook has refused
+#: unencrypted RTMP since 2018, and YouTube asks for RTMPS. Facebook's is on
+#: port 443 deliberately: it gets through firewalls that block 1935.
+RTMP_INGEST = {
+    "youtube": "rtmps://a.rtmps.youtube.com/live2",
+    "facebook": "rtmps://live-api-s.facebook.com:443/rtmp",
+    # Restream is a STARTING POINT here, not the answer, which is why its
+    # address stays editable while the other two do not. Restream tells you
+    # to create an RTMP stream in your account and then copy the URL and key
+    # IT gives you, and that URL can differ by account and by region. So this
+    # is the widely published default, and the page says to paste theirs over
+    # it if it differs.
+    "restream": "rtmp://live.restream.io/live",
+}
+
+#: The platforms whose address is fixed and must not be typed by hand. There
+#: is exactly one ingest for each and getting it wrong is not a thing a user
+#: should be able to do. Restream is deliberately NOT in here: it hands out
+#: the URL along with the key, and it is theirs to change.
+RTMP_FIXED_ADDRESS = ("youtube", "facebook")
+
+#: Where a user goes to fetch their key. Opened for them, because hunting for
+#: it in a video web app is the worst part of setting this up with a screen
+#: reader, and it is the ONE part the app can make easy.
+RTMP_KEY_PAGE = {
+    # youtube.com/live_dashboard rather than a studio.youtube.com URL: it is a
+    # 301 that YouTube maintains, it resolves to whichever channel is signed
+    # in, and it survives Studio moving its own pages around. It is also what
+    # OBS ships.
+    "youtube": "https://www.youtube.com/live_dashboard",
+    # The URL Facebook's own help page names, rather than the producer one.
+    "facebook": "https://www.facebook.com/live/create",
+    "restream": "https://restream.io/settings/streaming-setup",
+}
+
+#: The backup ingest each platform publishes, for when the primary is refusing
+#: connections. Not used automatically: switching hosts mid show is its own
+#: decision and this is here so the address is not guessed later.
+RTMP_INGEST_BACKUP = {
+    "youtube": "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
+}
+
+#: WHAT HAPPENS WHEN YOU CONNECT, which is not the same on the two platforms
+#: and is the most important thing about this feature.
+#:
+#: YouTube: pushing to the Stream tab key STARTS A PUBLIC BROADCAST. Its own
+#: words: a watch page is created, "you're now live on YouTube", notifications
+#: are sent to subscribers, and the stream is archived when you stop. There is
+#: no preview and nothing to confirm.
+#:
+#: Facebook: nothing is posted. Streaming software gets a preview in Live
+#: Producer and the broadcast starts only when somebody clicks Go Live Now.
+#:
+#: This is why the connection check never completes an RTMP handshake, and why
+#: going live says out loud what is about to happen.
+#: Restream is a third answer: it goes live wherever YOU have switched
+#: channels on in your Restream account, so it is as safe or as public as you
+#: have made it. With every channel off it goes nowhere at all, which makes it
+#: the one place a full end to end test can be run without touching anybody's
+#: real audience. That is worth saying rather than guessing at.
+RTMP_GOES_LIVE_AT_ONCE = {"youtube": True, "facebook": False,
+                          "restream": None, "rtmp": False}
+
+#: What the picture is, when there is no camera. YouTube refuses an audio only
+#: ingest, so a radio show still has to send something, and a still card costs
+#: about 64 kbps: measured 7 September 2026, not estimated.
+RTMP_WIDTH = 1280
+RTMP_HEIGHT = 720
+RTMP_FPS = 30
+RTMP_VIDEO_BITRATE = 2500
+
+#: Two seconds. YouTube asks for two and will not take more than four, and
+#: Facebook is the same. This is the number that decides whether a stream that
+#: connects is then called unhealthy, so it is not a knob.
+RTMP_KEYFRAME_SECONDS = 2
+
+#: The most frames that may be sent in one go when catching up. Deliberately
+#: tiny. Measured 7 September 2026: with the pump running once a quarter of a
+#: second, video left in bursts of eight and the gaps between bursts reached
+#: 234 ms, which is what "choppy" looks like from the sending end even though
+#: the AVERAGE frame gap was a perfect 33 ms. An average is the wrong thing to
+#: look at here; the p95 is the one that shows it.
+RTMP_CATCHUP_FRAMES = 2
+
+#: libx264, and NOT Windows' own Media Foundation encoder, which was the
+#: default until this was measured properly on 7 September 2026. Two findings,
+#: either of which would settle it:
+#:
+#: LATENCY. h264_mf holds SIXTEEN frames before it emits the first packet,
+#: which is 533 ms of delay added to every broadcast. libx264 holds none and
+#: h264_amf holds one. There is no way to turn it off: low_latency and every
+#: other option this build accepts changed nothing.
+#:
+#: TRUE CBR. A still card encodes to almost nothing, and both platforms
+#: publish bitrate floors: Facebook's is 400 kbps even at 360p. Asked for
+#: 2500 kbps on a static card, h264_mf delivered 30 kbps and libx264 with
+#: nal-hrd=cbr delivered 2467. Media Foundation ignores minrate and maxrate
+#: entirely, so it cannot meet a floor at all.
+#:
+#: h264_mf stays as the last resort, because it exists on every Windows
+#: machine and a stream with half a second of delay beats no stream.
+RTMP_VIDEO_ENCODER = "libx264"
+
+#: What to try if libx264 will not open, in order. The hardware encoders all
+#: honour a bitrate: h264_amf measured 101 per cent of target with no options
+#: at all.
+#:
+#: **h264_mf IS DELIBERATELY NOT IN THIS LIST**, and it used to be the
+#: default. Measured 7 September 2026 on 720p moving content with a 2500 kbps
+#: target, it sent 23,412 kbps: nine times over, with individual frames near
+#: 920 KB. It ignores rate_control, maxrate and bufsize, and refuses a profile
+#: option outright, so it emits CONSTRAINED BASELINE where both platforms ask
+#: for Main or High. It also holds sixteen frames, adding 533 ms of delay.
+#:
+#: A fallback that saturates the presenter's uplink and is then refused for
+#: its profile is worse than no stream: at least no stream says so. If
+#: nothing here opens, the app says it plainly instead.
+RTMP_VIDEO_ENCODERS = ("libx264", "h264_amf", "h264_nvenc", "h264_qsv")
+
+#: How much the rate may swing, as a fraction of a second. One second let a
+#: cut from card to camera dip to 1016 kbps and peak at 4210, either side of
+#: what Facebook publishes for 720p30. Half a second holds it tighter.
+RTMP_VBV_SECONDS = 0.5
+
+#: What each platform publishes for video bitrate, in kbps, by resolution.
+#: Used to tell somebody their settings are outside the range BEFORE they go
+#: live rather than after. Facebook gives real lower bounds; YouTube gives one
+#: recommended figure for H.264 and no bounds at all.
+FACEBOOK_BITRATES = {
+    (1920, 1080, 60): (4500, 9000),
+    (1920, 1080, 30): (3000, 6000),
+    (1280, 720, 60): (2250, 6000),
+    (1280, 720, 30): (1500, 4000),
+    (854, 480, 30): (600, 2000),
+    (640, 360, 30): (400, 1000),
+}
+YOUTUBE_RECOMMENDED = {
+    (1280, 720, 30): 4000, (1280, 720, 60): 6000,
+    (1920, 1080, 30): 10000, (1920, 1080, 60): 12000,
+}
+
+#: Facebook ends a broadcast at eight hours. Worth saying rather than letting
+#: somebody find out at the end of a long show.
+FACEBOOK_MAX_HOURS = 8
+
+#: What the picture can be. A camera is only one of them, and it is not the
+#: default: most of this app's users are running a radio show and have no
+#: reason to be on camera.
+PICTURE_CARD = "card"
+PICTURE_IMAGE = "image"
+PICTURE_CAMERA = "camera"
+PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA)
+
+#: What each is called on screen. Said as what it does, not as what it is.
+PICTURE_LABELS = {
+    PICTURE_CARD: "A card with my station name on it",
+    PICTURE_IMAGE: "A picture of my own",
+    PICTURE_CAMERA: "A camera",
+}
+
+#: What the Picture page offers. A card needs almost none of this and a
+#: camera at 720p wants 2500 or more.
+RTMP_VIDEO_BITRATES = (500, 1000, 1500, 2500, 4000, 6000)
+
+#: What the card is drawn in. Dark with a light face, because a stream sits in
+#: a dark player on most sites, and high contrast because somebody sighted is
+#: reading it on a phone.
+CARD_BACKGROUND = (14, 18, 28)
+CARD_FOREGROUND = (240, 242, 248)
+CARD_ACCENT = (110, 170, 255)
+
+#: How long to wait for a camera's first frame. Measured 7 September 2026 on a
+#: real webcam: 0.58 seconds from open to first frame. Five is generous and
+#: still short enough that a presenter is not left wondering.
+CAMERA_OPEN_TIMEOUT = 5.0
+CAMERA_STOP_TIMEOUT = 3.0
+
+#: Past this, the last frame is a photograph rather than a camera feed, and
+#: anything that reports on the shot should say it does not know.
+CAMERA_STALE_SECONDS = 2.0
+
+#: How long FFmpeg waits for a frame before giving up on the camera. This is
+#: what lets a stalled reader thread END, so the device is released and
+#: close() never has to reach in and shut a container another thread is
+#: reading. PyAV installs FFmpeg's interrupt callback on INPUT containers,
+#: which is why this works here and not on the streaming side.
+CAMERA_READ_TIMEOUT = 4.0
+
+#: FFmpeg's own capture buffer. A camera that delivers faster than it is
+#: drained fills this and then logs about dropping frames.
+CAMERA_BUFFER = "64M"
+
+#: How often a picture source that has fallen back to the card tries its real
+#: source again. Often enough that a camera coming back is noticed within a
+#: song, rare enough that a dead one is not hammered.
+PICTURE_RETRY_SECONDS = 5.0
+
+
+# ---------------------------------------------------------------------------
+# Knowing what the camera can see, without being able to look at it
+# ---------------------------------------------------------------------------
+
+FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
+
+#: What the detector is fed. Small on purpose: at this size it costs 3 ms, and
+#: a face big enough to matter is still tens of pixels across. The height is
+#: worked out from the camera's own shape, so a 4:3 camera is not squashed.
+FACE_INPUT_WIDTH = 320
+FACE_INPUT_HEIGHT = 180
+
+#: Below this, YuNet's answer is not worth acting on.
+FACE_CONFIDENCE = 0.6
+
+#: Three times a second. Fast enough that walking out of shot is noticed
+#: almost at once, slow enough to be six per cent of one core.
+FACE_CHECK_SECONDS = 0.35
+
+#: THESE WERE MEASURED, NOT CHOSEN, and the first draft of them was wrong.
+#: On a real 720p webcam at ordinary desk distance a face is about 0.12 of
+#: the frame width, and a guessed threshold of 0.15 called that "far away".
+#: Anything changed here should be checked against a real camera at a real
+#: sitting distance, not reasoned about.
+#:
+#: Horizontal and vertical are the centre of the face as a fraction of the
+#: frame. The bands are wide because "centred" means "nobody needs to do
+#: anything", not "exactly in the middle".
+FACE_LEFT_EDGE = 0.35
+FACE_RIGHT_EDGE = 0.65
+FACE_TOP_EDGE = 0.28
+FACE_BOTTOM_EDGE = 0.70
+
+#: Face width as a fraction of frame width.
+FACE_FAR_BELOW = 0.07
+FACE_CLOSE_ABOVE = 0.30
+
+#: How much further a reading has to travel to change back than it did to
+#: change. Without this a face resting on a boundary flips the answer several
+#: times a second, and the floor below then hides real changes behind wobble.
+FACE_HYSTERESIS = 0.04
+FACE_SIZE_HYSTERESIS = 0.02
+
+#: Mean brightness, 0 to 255. Measured in a normally lit room: 118.
+FACE_DARK_BELOW = 60
+
+#: The least time between two things being said about the shot. A show is
+#: three hours long and this is speech on top of a screen reader, on air.
+FACE_SAY_FLOOR = 4.0
