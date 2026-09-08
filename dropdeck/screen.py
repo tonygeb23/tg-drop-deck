@@ -415,12 +415,18 @@ class SplitSource(PictureSource):
 
     kind = C.PICTURE_SPLIT
 
-    def __init__(self, screen, camera, edge=None):
+    def __init__(self, screen, camera, edge=None, corner=None):
         self.screen = screen
         self.camera = camera
         #: The line round the inset, in the brand's accent colour so it reads
         #: as part of the look rather than as a default nobody chose.
         self.edge = tuple(edge or C.CARD_ACCENT)
+        #: Which corner the camera sits in. Asked for on 8 September 2026:
+        #: a presenter whose screen has its own furniture down one side, or
+        #: a platform that puts a chat panel over one corner, needs the
+        #: camera somewhere else, and there is no single right answer.
+        self.corner = (corner if corner in C.SPLIT_CORNERS
+                       else C.SPLIT_CORNER)
         self.error = ""
         #: Whether the last frame really had the camera in it. describe() used
         #: to ask the camera to describe itself, which a camera handing back
@@ -479,8 +485,13 @@ class SplitSource(PictureSource):
             return None
         margin_x = int(round(width * C.SPLIT_INSET_MARGIN))
         margin_y = int(round(height * C.SPLIT_INSET_MARGIN))
-        left = max(0, width - box_w - margin_x)
-        top = max(0, height - box_h - margin_y)
+        # The margin is kept on whichever edges the box is actually against,
+        # so the inset is the same distance from the corner whichever corner
+        # it is. Mirroring the arithmetic rather than the picture.
+        left = (margin_x if "left" in self.corner
+                else max(0, width - box_w - margin_x))
+        top = (margin_y if "top" in self.corner
+               else max(0, height - box_h - margin_y))
         return picture, (left, top, box_w, box_h)
 
     def latest(self):

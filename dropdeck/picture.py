@@ -578,7 +578,8 @@ def build(settings, on_fallback=None):
         from .screen import SplitSource
         primary = SplitSource(_screen(settings, width, height, fps),
                               _camera(settings, width, height, fps),
-                              edge=accent)
+                              edge=accent,
+                              corner=settings.get("split_corner"))
     else:
         return card
     return FallbackSource(primary, card, on_fallback)

@@ -4732,6 +4732,22 @@ class VideoSourceDialog(wx.Dialog):
         self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _e: self._describe())
         outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
 
+        # Which corner the camera sits in, when the screen is what is going
+        # out. Only alive for the split, because it means nothing otherwise.
+        corner_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.corner_label = wx.StaticText(self, label="Camera c&orner")
+        corner_row.Add(self.corner_label, 0, wx.ALIGN_CENTRE_VERTICAL
+                       | wx.RIGHT, 8)
+        self.corner = wx.Choice(self, choices=[c.capitalize()
+                                               for c in C.SPLIT_CORNERS])
+        self.corner.SetName("Camera corner")
+        self.corner.SetSelection(
+            C.SPLIT_CORNERS.index(self.board.split_corner)
+            if self.board.split_corner in C.SPLIT_CORNERS else 0)
+        self.corner.Bind(wx.EVT_CHOICE, self._on_corner)
+        corner_row.Add(self.corner, 0)
+        outer.Add(corner_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         self.doing = wx.StaticText(self, label="")
         # Room for two lines reserved BEFORE the window is fitted. The sizer
         # measures an empty label as nothing, and _describe then wraps a
@@ -4770,6 +4786,26 @@ class VideoSourceDialog(wx.Dialog):
                 continue
             out.append(kind)
         return out
+
+    def _on_corner(self, _event=None):
+        """Move the camera, live if we are live.
+
+        Saved and applied at once rather than on closing, because the whole
+        point of this window is trying it: somebody moving the camera to see
+        where it looks best should not have to close and reopen to find out.
+        """
+        at = self.corner.GetSelection()
+        if not 0 <= at < len(C.SPLIT_CORNERS):
+            return
+        self.board.split_corner = C.SPLIT_CORNERS[at]
+        self.frame._touch()
+        self.frame.announce("Camera in the %s" % self.board.split_corner)
+        if self.board.picture == C.PICTURE_SPLIT:
+            # Rebuild, so it moves now rather than at the next Ctrl+B.
+            try:
+                self.frame.set_video_source(C.PICTURE_SPLIT)
+            except Exception:
+                pass
 
     def refresh(self, keep=None):
         if keep is None:
@@ -4813,8 +4849,20 @@ class VideoSourceDialog(wx.Dialog):
         # A screen reader always gets the whole cell, so this is the half of
         # the window that was only wrong to look at.
         detail = C.PICTURE_DESCRIPTIONS.get(kind, "")
+        if kind == C.PICTURE_SPLIT:
+            # Say WHICH corner, rather than the fixed wording the constant
+            # carries. It stopped being a fixed corner in 3.5.2.
+            detail = ("Your screen filling the frame with the camera small "
+                      "in the %s corner. The screen stays readable this way."
+                      % self.board.split_corner)
         self.doing.SetLabel("%s  %s" % (said, detail) if detail else said)
         self.doing.Wrap(self.FromDIP(600))
+        # The corner only means anything for the split, so it is alive only
+        # there. Disabled rather than hidden: a control that appears and
+        # disappears as you arrow moves everything under it.
+        alive = kind == C.PICTURE_SPLIT
+        self.corner.Enable(alive)
+        self.corner_label.Enable(alive)
 
     # ---------------------------------------------------------------- keys --
     def _on_key(self, event):
@@ -5042,6 +5090,125 @@ class ScreenTextDialog(wx.Dialog):
             speaker(text)
 
 
+class AskPanel(wx.Panel):
+    """Type a question about a picture, hear the answer, ask another.
+
+    Tony, 8 September 2026: "can you add an edit box to chat and ask
+    questions?"
+
+    This is the same shape in two places, so it is one class. The dialog
+    hands it a way to GET a picture rather than a picture, because in both
+    places the picture is built fresh each time: the shot check opens the
+    camera, and the colours window renders whatever the brand is set to at
+    that moment.
+
+    Three rules it inherits from the rest of the AI work. **Its own thread**,
+    always. **It never raises**, because the answer is the only thing on
+    screen and a traceback there is not one. And it is **never on the way to
+    anything**: closing the window while an answer is in the air is fine.
+    """
+
+    def __init__(self, parent, frame, get_picture, kind="camera",
+                 label="&Ask a question about this"):
+        super().__init__(parent)
+        self.frame = frame
+        self.get_picture = get_picture
+        self.kind = kind
+        self.history = []
+        self._busy = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label=label), 0, wx.TOP, 6)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        # Enter sends it. A question box you have to tab out of to send is a
+        # question box nobody uses twice.
+        self.question = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        # Named for the heading directly above it, because that is what MSAA
+        # hands a screen reader anyway: the static text preceding a control
+        # in creation order wins. Setting a different Name here does not
+        # override it, it just makes the app disagree with Windows about
+        # what this box is called. Same trap as the streaming tab's fields.
+        self.question.SetName(label.replace("&", ""))
+        self.question.Bind(wx.EVT_TEXT_ENTER, self._on_ask)
+        row.Add(self.question, 1, wx.EXPAND | wx.RIGHT, 8)
+        self.send = wx.Button(self, label="As&k")
+        self.send.Bind(wx.EVT_BUTTON, self._on_ask)
+        row.Add(self.send, 0)
+        outer.Add(row, 0, wx.EXPAND | wx.TOP, 4)
+
+        outer.Add(wx.StaticText(self, label="The an&swer"), 0, wx.TOP, 8)
+        self.answer = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 130))
+        self.answer.SetName("The answer")
+        self.answer.SetValue("Nothing asked yet.")
+        outer.Add(self.answer, 1, wx.EXPAND | wx.TOP, 4)
+        self.SetSizer(outer)
+
+    def _key(self):
+        return secrets.fetch(self.frame.board.vision_provider,
+                             secrets.VISION_PREFIX)
+
+    def _on_ask(self, _event=None):
+        if self._busy:
+            return
+        asked = self.question.GetValue().strip()
+        if not asked:
+            self._show("Type a question first.")
+            self.question.SetFocus()
+            return
+        key = self._key()
+        if not key:
+            self._show("No key has been set up yet. Open Preferences, AI "
+                       "Provider, and put one in.")
+            return
+        board = self.frame.board
+        provider, model = board.vision_provider, board.vision_model
+        history = list(self.history)
+        getter = self.get_picture
+        kind = self.kind
+        self._busy = True
+        self.send.Enable(False)
+        self._show("Asking...")
+
+        def work():
+            try:
+                shot = getter()
+            except Exception as exc:
+                wx.CallAfter(self._done, asked, False,
+                             "There is no picture to ask about. %s" % exc)
+                return
+            if shot is None:
+                wx.CallAfter(self._done, asked, False,
+                             "There is no picture to ask about yet.")
+                return
+            ok, text = vision.converse(shot, asked, history, provider, key,
+                                       model)
+            wx.CallAfter(self._done, asked, ok, text)
+
+        threading.Thread(target=work, name="dropdeck-ask",
+                         daemon=True).start()
+
+    def _done(self, asked, ok, text):
+        self._busy = False
+        try:
+            self.send.Enable(True)
+            self._show(text)
+            if ok:
+                self.history.append((asked, text))
+                # Cleared so the next question can just be typed. The answer
+                # is beneath, and the conversation is remembered anyway.
+                self.question.SetValue("")
+            self.question.SetFocus()
+        except RuntimeError:
+            # Closed while the answer was in the air. Not a fault.
+            pass
+
+    def _show(self, text):
+        self.answer.SetValue(text or "")
+        self.answer.SetInsertionPoint(0)
+
+
 class ShotCheckDialog(wx.Dialog):
     """What a sighted person would see, said out loud.
 
@@ -5066,6 +5233,9 @@ class ShotCheckDialog(wx.Dialog):
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.frame = frame
         self._busy = False
+        #: The frame the last check looked at, so a follow-up asks about the
+        #: same picture rather than one taken a minute later.
+        self._looked_at = None
         outer = wx.BoxSizer(wx.VERTICAL)
 
         self.what = wx.StaticText(self, label=self._what_line())
@@ -5083,6 +5253,13 @@ class ShotCheckDialog(wx.Dialog):
         self.answer.SetValue("Nothing has been checked yet. Choose Check the "
                              "shot.")
         outer.Add(self.answer, 1, wx.EXPAND | wx.ALL, 10)
+
+        # The same picture the Check button looks at, so a follow-up is
+        # about the shot that was described rather than a fresh one taken
+        # while the presenter was moving.
+        self.ask = AskPanel(self, frame, self._last_or_fresh,
+                            kind=self._kind())
+        outer.Add(self.ask, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
         row = wx.StdDialogButtonSizer()
         self.go = wx.Button(self, wx.ID_OK, "&Check the shot")
@@ -5116,6 +5293,13 @@ class ShotCheckDialog(wx.Dialog):
                     "includes your screen. %s is asked." % who)
         return ("This describes the picture going out, camera and anything "
                 "on top of it. %s is asked." % who)
+
+    def _last_or_fresh(self):
+        """The picture the check looked at, or a new one if it never ran."""
+        if self._looked_at is not None:
+            return self._looked_at
+        shot, _note = self.frame.preview_picture()
+        return shot
 
     def _picture(self):
         """Delegated, so being on air or not is the frame's business.
@@ -5163,6 +5347,7 @@ class ShotCheckDialog(wx.Dialog):
             # screen capture blocks on the compositor, and neither belongs
             # on the thread carrying the keyboard.
             picture_, note = frame.preview_picture()
+            wx.CallAfter(self._remember, picture_)
             if picture_ is None:
                 wx.CallAfter(
                     self._done, False,
@@ -5180,6 +5365,9 @@ class ShotCheckDialog(wx.Dialog):
         # thread that carries audio, and the UI thread carries the keyboard.
         threading.Thread(target=work, name="dropdeck-shotcheck",
                          daemon=True).start()
+
+    def _remember(self, shot):
+        self._looked_at = shot
 
     def _done(self, ok, text):
         self._busy = False
@@ -5367,6 +5555,29 @@ class ColoursDialog(wx.Dialog):
         self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
         outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # The whole look, in a box you can TAB TO and arrow through. The
+        # status line above says it too, but a StaticText cannot be read
+        # line by line and cannot be re-read without moving the selection,
+        # which is exactly what somebody wants after choosing a preset.
+        outer.Add(wx.StaticText(self, label="This &look"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.summary = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 76))
+        self.summary.SetName("This look")
+        outer.Add(self.summary, 0,
+                  wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # And what a sighted person would actually make of it, which no
+        # amount of contrast arithmetic can answer. Tony, 8 September 2026.
+        self.describe_button = wx.Button(
+            self, label="What does this look like to a sighted &viewer?")
+        self.describe_button.Bind(wx.EVT_BUTTON, self._on_describe_brand)
+        outer.Add(self.describe_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.ask = AskPanel(self, self.frame, self._sample, kind="branding",
+                            label="&Ask about these colours")
+        outer.Add(self.ask, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
         row = wx.BoxSizer(wx.HORIZONTAL)
         self.change = wx.Button(self, label="C&hange...")
         self.change.Bind(wx.EVT_BUTTON, lambda _e: self._change())
@@ -5384,6 +5595,67 @@ class ColoursDialog(wx.Dialog):
         self.list.SetFocus()
 
     # --------------------------------------------------------------- rows --
+    def _sample(self):
+        """A frame showing the brand as it is set RIGHT NOW.
+
+        Rendered rather than described in words, because the question being
+        asked is what it LOOKS like, and a model cannot answer that from a
+        list of colour names any better than the person asking can.
+        """
+        from . import picture as pic
+        back = colours.rgb(self._current("background"))
+        ink = colours.rgb(self._current("text"))
+        accent = colours.rgb(self._current("accent"))
+        card = pic.CardSource(name=self.board.stream_name or "Your station",
+                              title="Now playing: a song and an artist",
+                              background=back, foreground=ink, accent=accent)
+        shot = card.frame(1280, 720)
+        # With the overlay on it, because the panels behind the words are
+        # part of the look and they are drawn at the destination, not here.
+        try:
+            marks = self.frame.build_overlay(self.frame._picture_settings())
+            if marks is not None:
+                shot = marks.draw_on(shot)
+        except Exception:
+            pass
+        return shot
+
+    def _on_describe_brand(self, _event=None):
+        """Ask for a full opinion of the look, on a thread of its own."""
+        key = secrets.fetch(self.board.vision_provider,
+                            secrets.VISION_PREFIX)
+        if not key:
+            self.ask._show("No key has been set up yet. Open Preferences, "
+                           "AI Provider, and put one in.")
+            return
+        provider, model = self.board.vision_provider, self.board.vision_model
+        self.describe_button.Enable(False)
+        self.ask._show("Looking at these colours...")
+
+        def work():
+            try:
+                shot = self._sample()
+            except Exception as exc:
+                wx.CallAfter(self._brand_done, False,
+                             "The sample could not be drawn. %s" % exc)
+                return
+            ok, text = vision.describe(shot, "branding", provider, key, model)
+            wx.CallAfter(self._brand_done, ok, text)
+
+        threading.Thread(target=work, name="dropdeck-brand",
+                         daemon=True).start()
+
+    def _brand_done(self, ok, text):
+        try:
+            self.describe_button.Enable(True)
+            self.ask._show(text)
+            if ok:
+                # Remembered, so a follow-up question knows what was said.
+                self.ask.history.append(
+                    ("What does this look like to a sighted viewer?", text))
+        except RuntimeError:
+            pass
+
     def _current(self, key):
         return {"background": self.board.colour_background,
                 "text": self.board.colour_text,
@@ -5454,6 +5726,36 @@ class ColoursDialog(wx.Dialog):
                         self.board.colour_background))
         self.doing.SetLabel(said)
         self.doing.Wrap(self.FromDIP(580))
+        self._summarise()
+
+    def _summarise(self):
+        """The whole look in one place, however the list is being arrowed.
+
+        The status line changes with the selected ROW, which is right for
+        "what is this row", and wrong for "what have I ended up with". This
+        box always says the whole thing, and it is a text control so it can
+        be tabbed to and read a line at a time.
+        """
+        box = getattr(self, "summary", None)
+        if box is None:
+            return
+        back = self._current("background")
+        ink = self._current("text")
+        accent = self._current("accent")
+        got = self._matching_scheme()
+        lines = []
+        if got in colours.SCHEME_NAMES:
+            lines.append(colours.describe_scheme(got))
+        else:
+            lines.append("Your own mix, not one of the ready-made looks.")
+        lines.append("Background %s, words %s, accent %s."
+                     % (back, ink, accent))
+        lines.append("Words on the background: %s"
+                     % colours.describe_pair(ink, back))
+        lines.append("Accent on the background: %s"
+                     % colours.describe_pair(accent, back))
+        box.SetValue(os.linesep.join(lines))
+        box.SetInsertionPoint(0)
 
     # ---------------------------------------------------------------- keys --
     def _on_key(self, event):

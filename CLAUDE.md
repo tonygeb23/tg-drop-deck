@@ -366,6 +366,30 @@ And specific to this one:
   it either: the Restart Manager only restarts what it closed itself and a
   PyInstaller build does not register with it. There is a second `[Run]`
   entry now, guarded on `WantsRestart`, and the app passes `/restartapp=1`.
+- **The shot check ASKS, so it may as well be asked more than once.**
+  `AskPanel` is one class used by the shot check and the colours window,
+  because it is the same thing in both: a question, a thread, an answer.
+  Two rules. A follow-up asks about **the picture that was described**, not
+  a fresh one, or "is the plant still there" is answered about a frame taken
+  while the presenter was moving. And `vision.converse` sends **one message
+  carrying the picture and the conversation as text**, rather than a real
+  multi turn exchange: the three providers shape multi turn differently and
+  this app does not need the difference, so one shape that works everywhere
+  beats three that each work in one place.
+- **The colours window answers a question contrast cannot.** WCAG says a
+  pair can be READ. It cannot say the look is dated, or that the accent has
+  a hazard-tape feel, and those are real things a sighted viewer sees and
+  Tony cannot. So the brand is RENDERED to a real frame and sent, rather
+  than described as a list of names: a model cannot judge what three names
+  look like together any better than the person asking can. The prompt says
+  the reader already knows the contrast, tells it to be willing to say the
+  thing looks bad, and says outright that a compliment they cannot check is
+  worth nothing.
+- **A word search is not a check.** `test_shotcheck` asserted "nothing in
+  here remembers a consent" by grepping vision.py for "remember", and broke
+  the moment `converse` gained a docstring about remembering what was
+  already SAID. The property is now asserted as behaviour. Any check that
+  greps source for an English word is measuring the prose, not the code.
 - **Named places, never a canvas.** `overlay.py` offers four fixed spots that
   cannot overlap, and there is no way to put something at an arbitrary
   position. That is not a shortcut, it is the feature: the research in

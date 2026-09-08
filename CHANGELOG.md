@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.5.2, 8 September 2026
+
+**The camera can go in any corner.** When your screen is what is going out,
+**Alt+Shift+V** now has a **Camera corner** choice: bottom right, bottom left,
+top right or top left. It moves while you are live, and it is worth having
+because your screen has its own furniture and some platforms put a chat panel
+over one corner.
+
+**You can ask questions about your shot.** The shot check window has a
+question box under the answer. Ask "is the plant behind me distracting", or
+"can you read the lower third", and it answers about the same picture it just
+described. It remembers the conversation, so "what about the other side" means
+something.
+
+**And the colours window can tell you what your branding actually looks
+like.** Two new things there. **This look** is a box you can tab to and read a
+line at a time, saying the whole brand at once rather than one row of it.
+And **What does this look like to a sighted viewer?** asks a model to look at
+a rendered sample and give you a real opinion: warm or cold, deliberate or
+accidental, what kind of station it would suit and what it would suit badly.
+
+That last one is the only question in this app that arithmetic genuinely
+cannot answer. Contrast numbers tell you a pair can be read. They cannot tell
+you it looks like a 1990s news broadcast. There is a question box there too.
+
 ## 3.5.1, 8 September 2026
 
 **You can check your shot before you go live, which is when checking is any

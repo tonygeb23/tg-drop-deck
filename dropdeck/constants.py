@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.5.1"
+APP_VERSION = "3.5.2"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -1162,6 +1162,13 @@ SPLIT_INSET_WIDTH = 0.25
 #: it, which matters when the corner of a window happens to be pale.
 SPLIT_INSET_MARGIN = 0.025
 SPLIT_INSET_BORDER = 2
+
+#: Which corner the camera goes in. Named rather than numbered, because the
+#: name is what gets read out and what somebody says to themselves. Bottom
+#: right first, being the default and where a webcam has sat in every
+#: broadcast anybody has watched.
+SPLIT_CORNERS = ("bottom right", "bottom left", "top right", "top left")
+SPLIT_CORNER = "bottom right"
 
 #: What the Picture page offers. A card needs almost none of this and a
 #: camera at 720p wants 2500 or more.

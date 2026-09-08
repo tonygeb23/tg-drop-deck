@@ -94,6 +94,14 @@ KEYS = {
              (wx.WXK_ALT, wx.WXK_SHIFT), "T"),
     "onscreen": ("Ctrl+Shift+V", "what is on screen", "describe_screen",
                  (wx.WXK_CONTROL, wx.WXK_SHIFT), "V"),
+    # Added in 3.5.0 and 3.5.1. Both live in the same Alt+Shift family and
+    # both were added to the 400s block, which is exactly where the
+    # ID_STATION_BASE collision hid for a whole release. Pressed rather than
+    # called, because that collision passed every test in the repository.
+    "colours": ("Alt+Shift+C", "the colours window", "_on_colours",
+                (wx.WXK_ALT, wx.WXK_SHIFT), "C"),
+    "shot": ("Alt+Shift+D", "the shot check", "_on_shot_check",
+             (wx.WXK_ALT, wx.WXK_SHIFT), "D"),
 }
 
 

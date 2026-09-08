@@ -250,9 +250,58 @@ def best_provider(fallback):
     return have[0] if have else fallback
 
 
+#: A follow-up. Deliberately NOT the long checklist above: that one is for
+#: the first look, and repeating it would have the model re-reading the whole
+#: shot when somebody asked "is the plant behind me distracting".
+_FOLLOW_UP = """You are answering a blind broadcaster's question about this
+picture. They cannot see it at all and cannot check what you say against it.
+
+Answer the question they actually asked, first, in one or two sentences. Then
+add only what genuinely bears on it. Be specific: say where things are using
+left, right, top and bottom from the viewer's point of view, and give numbers
+where there are any.
+
+Plain spoken sentences, no markdown, no headings, no bullet characters. Do not
+re-describe the whole picture unless that is what was asked. If you cannot
+tell from the picture, say so plainly rather than guessing."""
+
+#: The picture is a set of COLOURS rather than a camera shot, so the question
+#: is a different one: how does this look, and would anybody call it good.
+_BRANDING = """This is a still frame showing how a broadcaster's on-screen
+branding will look: their background colour, the colour of their words, and an
+accent colour used for a rule and a border.
+
+The person asking is blind. They chose these colours from names and contrast
+numbers and have never seen them together. They are not asking whether the
+text is readable, which they already know from the numbers. They are asking
+what a sighted viewer would actually think of it.
+
+Answer in plain spoken sentences, no markdown and no headings:
+
+First, one line: what impression the whole thing gives. Warm, cold, serious,
+cheap, expensive, dated, clinical, friendly. Be willing to say if it looks
+bad.
+
+Then up to six short lines on: how the colours sit together and whether any
+pair fights; whether it reads as a deliberate palette or as three unrelated
+colours; what kind of station or show it would suit, and what it would suit
+badly; anything that would look wrong to a viewer, such as a colour with
+unwanted associations, or one that looks like a warning or an error.
+
+Then one line starting "Try:" naming ONE change that would most improve it,
+in colour NAMES rather than numbers.
+
+Be honest rather than encouraging. They cannot see it, so a compliment they
+cannot check is worth nothing to them."""
+
+
 def prompt_for(kind):
     """The question, which is most of whether the answer is any use."""
-    return _SCREEN if kind == "screen" else _CAMERA
+    if kind == "screen":
+        return _SCREEN
+    if kind == "branding":
+        return _BRANDING
+    return _CAMERA
 
 
 # ---------------------------------------------------------------------------
@@ -411,25 +460,35 @@ def describe(picture, kind, provider, key, model="", timeout=TIMEOUT):
     """Look at one picture and say what is wrong with it.
 
     Returns `(ok, text)`. **Never raises**, and never runs on the streaming
-    thread: the caller puts it on one of its own.
+    thread: the caller puts it on one of its own. The guards and the sending
+    live in `_send`, which `converse` shares, so a fix to either reaches
+    both.
     """
+    if picture is None:
+        return False, ("There is no picture to look at. Start the camera, or "
+                       "choose a picture source first.")
+    return _send(picture, prompt_for(kind), provider, key, model, timeout)
+
+
+def _send(picture, prompt, provider, key, model="", timeout=TIMEOUT):
+    """One picture, one question, one answer. The half describe and converse
+    have in common, kept in one place so a fix to either reaches both."""
     if not key:
-        return False, ("No key has been set up yet. Put one in on the "
-                       "Shot check page of Preferences, then try again.")
+        return False, ("No key has been set up yet. Put one in on the AI "
+                       "Provider page of Preferences, then try again.")
     provider = (provider or "").strip().lower()
     build = _BUILDERS.get(provider)
     if build is None:
         return False, ("That provider is not one this app knows. Choose "
-                       "Claude, ChatGPT or Gemini on the Shot check page.")
+                       "Claude, ChatGPT or Gemini on the AI Provider page.")
     if picture is None:
-        return False, ("There is no picture to look at. Start the camera, or "
-                       "choose a picture source first.")
+        return False, "There is no picture to look at."
     jpeg = as_jpeg(picture)
     if jpeg is None:
         return False, ("The picture could not be prepared for sending, so "
                        "nothing has left this machine.")
     model = (model or "").strip() or DEFAULT_MODELS.get(provider, "")
-    request, read = build(model, key, jpeg, prompt_for(kind))
+    request, read = build(model, key, jpeg, prompt)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as answer:
             got = json.loads(answer.read().decode("utf-8", "replace"))
@@ -445,6 +504,38 @@ def describe(picture, kind, provider, key, model="", timeout=TIMEOUT):
         return False, ("%s looked at the picture and said nothing back."
                        % PROVIDER_NAMES.get(provider, provider))
     return True, text
+
+
+def converse(picture, question, history, provider, key, model="",
+             timeout=TIMEOUT):
+    """Ask something about a picture, remembering what was already said.
+
+    **One message carrying the picture and the conversation as text**, rather
+    than a real multi turn exchange. The three providers shape multi turn
+    differently and this app does not need the difference: the whole
+    conversation is one person asking about one still, it is a handful of
+    lines long, and one shape that works everywhere is worth more here than
+    three that each work in one place.
+
+    `history` is a list of `(question, answer)` already exchanged. Returns
+    `(ok, text)` and never raises, like everything else here.
+    """
+    if not (question or "").strip():
+        return False, "Type a question first."
+    parts = [_FOLLOW_UP]
+    if history:
+        parts.append("\nWhat has already been said about this picture:")
+        for asked, answered in history[-MEMORY:]:
+            parts.append("\nThey asked: %s\nYou answered: %s"
+                         % (asked.strip(), answered.strip()))
+    parts.append("\nTheir question now: %s" % question.strip())
+    return _send(picture, "\n".join(parts), provider, key, model, timeout)
+
+
+#: How many earlier exchanges travel with a follow-up. Enough to keep "and
+#: what about the other side" meaning something, few enough that a long
+#: conversation does not quietly become an expensive one.
+MEMORY = 6
 
 
 def sent_kilobytes(picture):

@@ -29,6 +29,7 @@ STATION_FIELDS = (
     # station needs them and the Icecast station on the same board does not.
     "video_server", "video_host", "video_key", "live_to",
     "picture", "picture_file", "picture_clock", "camera", "screen",
+    "split_corner",
     "text_places", "colour_background", "colour_text", "colour_accent",
     "video_width", "video_height", "video_fps", "video_bitrate",
 )
@@ -335,6 +336,9 @@ class Board:
         #: that module already gives about stream keys, and one more: a
         #: vision key is billable, so a board file passed to somebody else
         #: would be handing them a bill.
+        #: Which corner the camera sits in when the screen is on air.
+        self.split_corner = C.SPLIT_CORNER
+
         self.vision_provider = C.VISION_PROVIDER
         self.vision_model = ""
 
@@ -661,6 +665,7 @@ class Board:
             "colour_background": self.colour_background,
             "colour_text": self.colour_text,
             "colour_accent": self.colour_accent,
+            "split_corner": self.split_corner,
             "vision_provider": self.vision_provider,
             "vision_model": self.vision_model,
             "video_width": int(self.video_width),
@@ -797,6 +802,9 @@ class Board:
                                       C.COLOUR_ACCENT)
         # Whitelisted the same way a colour name is: a board file is plain
         # JSON that a user can write, and this one ends up in a URL.
+        corner = data.get("split_corner")
+        board.split_corner = (corner if corner in C.SPLIT_CORNERS
+                              else C.SPLIT_CORNER)
         provider = data.get("vision_provider")
         if provider not in C.VISION_PROVIDERS:
             # Nobody has chosen. Take the one that has a key on this machine

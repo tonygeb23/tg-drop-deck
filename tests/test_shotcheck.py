@@ -63,11 +63,18 @@ check("and warns about what may be behind the window",
       "password" in question.lower() and "email" in question.lower())
 check("a camera asks nothing", vision.consent_question("camera", "google") == "")
 # There is no remembered yes anywhere, on purpose: a yes given about one
-# screen is not a yes about the next one.
-source = inspect.getsource(vision)
-check("nothing in here remembers a consent",
-      "remember" not in source.lower().replace("remembered yes", ""),
-      "")
+# screen is not a yes about the next one. Asserted as BEHAVIOUR rather than
+# by grepping the file for "remember", which is what this used to do and
+# which broke the moment converse() gained a docstring about remembering
+# what was already SAID. A word search is not a check.
+check("asking is a pure function of the KIND, with nothing stored",
+      all(vision.needs_consent("screen") for _ in range(5)))
+check("and it never stops asking, however many times it is asked",
+      [vision.needs_consent("screen") for _ in range(5)] == [True] * 5)
+check("nothing in the module holds a consent decision",
+      not [n for n in dir(vision)
+           if "consent" in n.lower() and not callable(getattr(vision, n))],
+      [n for n in dir(vision) if "consent" in n.lower()])
 
 head("Nothing raises, ever, whatever is wrong")
 
