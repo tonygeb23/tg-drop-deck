@@ -602,11 +602,28 @@ final class Board {
     // air. A saved station is kept in the Windows shape, a dictionary of the
     // stream_* keys, so the list moves between the two copies untouched.
 
+    /// What travels in a saved station.
+    ///
+    /// **The video half belongs to the station too**, and leaving it out was
+    /// not merely incomplete, it was destructive: `cleanStations` filters an
+    /// incoming station down to this list, so a board written on Windows whose
+    /// station carried a YouTube channel, opened here and saved, lost it for
+    /// good. The two copies share one file and this is the list that decides
+    /// what survives a round trip.
+    ///
+    /// A YouTube station needs these and the Icecast station on the same board
+    /// does not, which is exactly why they are per station rather than per
+    /// board.
     static let stationFields = [
         "stream_name", "stream_server", "stream_host", "stream_port",
         "stream_mount", "stream_user", "stream_password", "stream_format",
         "stream_bitrate", "stream_description", "stream_genre", "stream_url",
         "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
+        "video_server", "video_host", "video_key", "live_to",
+        "picture", "picture_file", "picture_clock", "camera", "screen",
+        "split_corner", "text_places", "colour_background", "colour_text",
+        "colour_accent", "video_width", "video_height", "video_fps",
+        "video_bitrate",
     ]
 
     /// Whatever was in the file, as a list of usable stations. A board file is
@@ -644,6 +661,24 @@ final class Board {
             "stream_mic": stream.sendMic,
             "stream_titles": stream.sendTitles,
             "stream_stats_url": stream.statsURL,
+            "video_server": videoServer,
+            "video_host": videoHost,
+            "video_key": videoKey,
+            "live_to": liveTo,
+            "picture": picture,
+            "picture_file": pictureFile,
+            "picture_clock": pictureClock,
+            "camera": camera,
+            "screen": screen,
+            "split_corner": splitCorner,
+            "text_places": textPlaces,
+            "colour_background": colourBackground,
+            "colour_text": colourText,
+            "colour_accent": colourAccent,
+            "video_width": videoWidth,
+            "video_height": videoHeight,
+            "video_fps": videoFPS,
+            "video_bitrate": videoBitrate,
         ]
     }
 
@@ -678,6 +713,56 @@ final class Board {
         if let v = station["stream_mic"] as? Bool { stream.sendMic = v }
         if let v = station["stream_titles"] as? Bool { stream.sendTitles = v }
         if let v = station["stream_stats_url"] as? String { stream.statsURL = v }
+
+        // The video half, whitelisted the same way the board loader does it.
+        //
+        // **A missing key means the field did not exist when this was saved,
+        // not that it should be set to nothing.** Stations saved before 3.4.0
+        // carry no live_to at all, and copying that nothing over the top left
+        // the board with a destination that was neither of the two and then
+        // behaved as audio whatever the user had chosen. So each of these is
+        // only touched when the station really has it.
+        if let v = station["video_server"] as? String, C.videoServerOrder.contains(v) {
+            videoServer = v
+        }
+        if let v = station["video_host"] as? String { videoHost = v }
+        if let v = station["video_key"] as? String { videoKey = v }
+        if let v = station["live_to"] as? String, C.liveTo.contains(v) { liveTo = v }
+        if let v = station["picture"] as? String, C.pictureSources.contains(v) {
+            picture = v
+        }
+        if let v = station["picture_file"] as? String { pictureFile = v }
+        if let v = station["picture_clock"] as? Bool { pictureClock = v }
+        if let v = station["camera"] as? String { camera = v }
+        if let v = station["screen"] as? String, C.screenChoices.contains(v) { screen = v }
+        if let v = station["split_corner"] as? String, C.splitCorners.contains(v) {
+            splitCorner = v
+        }
+        if station["text_places"] != nil {
+            textPlaces = Board.textPlaces(from: station["text_places"])
+        }
+        if station["colour_background"] != nil {
+            colourBackground = Board.colour(station["colour_background"], colourBackground)
+        }
+        if station["colour_text"] != nil {
+            colourText = Board.colour(station["colour_text"], colourText)
+        }
+        if station["colour_accent"] != nil {
+            colourAccent = Board.colour(station["colour_accent"], colourAccent)
+        }
+        if station["video_width"] != nil {
+            videoWidth = Board.videoNumber(station["video_width"], videoWidth, 160, 3840)
+        }
+        if station["video_height"] != nil {
+            videoHeight = Board.videoNumber(station["video_height"], videoHeight, 120, 2160)
+        }
+        if station["video_fps"] != nil {
+            videoFPS = Board.videoNumber(station["video_fps"], videoFPS, 1, 60)
+        }
+        if station["video_bitrate"] != nil {
+            videoBitrate = Board.videoNumber(station["video_bitrate"], videoBitrate,
+                                             200, 20000)
+        }
         return true
     }
 

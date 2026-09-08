@@ -481,6 +481,14 @@ enum C {
     /// that connects is then called unhealthy, so it is not a knob.
     static let rtmpKeyframeSeconds = 2
 
+    /// Windows watches for a stream that has stopped going out and says so
+    /// after twelve seconds, because FFmpeg's writer can wedge without
+    /// erroring. Here the write itself carries a timeout, twenty seconds in
+    /// `RTMP.swift`, so a wedged socket throws and the reconnect that follows
+    /// says "Off air, trying again" on its own. The presenter is told either
+    /// way; it is eight seconds later and by a different route, and it is
+    /// written down here rather than left to be rediscovered.
+
     /// The most frames that may be sent in one go when catching up.
     /// Deliberately tiny. Measured 7 September 2026 on Windows: with the pump
     /// running once a quarter of a second, video left in bursts of eight and
@@ -493,6 +501,13 @@ enum C {
     /// a cut from card to camera dip to 1016 kbps and peak at 4210, either
     /// side of what Facebook publishes for 720p30. Half a second holds it
     /// tighter.
+    ///
+    /// **Does not port, and that is measured.** It is a libx264 buffer size on
+    /// Windows. VideoToolbox has no equivalent knob, and it does not need one:
+    /// `ConstantBitRate` held a static card at 2375 kbps of a 2500 target
+    /// here, which is the swing this number exists to stop. Kept so the two
+    /// copies can be compared and so nobody adds it back believing it is
+    /// missing.
     static let rtmpVBVSeconds = 0.5
 
     /// The matrix the picture is converted with, and the one it is tagged as.
@@ -696,6 +711,11 @@ enum C {
     /// How many refusals in a row before it is called a failure rather than a
     /// blink. A capture can miss a single frame while a screen is switching
     /// mode or a session is locking, and one of those is not a broken capture.
+    ///
+    /// **Does not port.** Windows counts failed blits because a GDI blit can
+    /// refuse; ScreenCaptureKit does not refuse, it simply stops delivering,
+    /// which `screenStaleSeconds` against the heartbeat already covers. Kept
+    /// for the same reason as the one above.
     static let screenRefusedLimit = 15
 
     /// How wide the camera is in the corner of a shared screen, as a fraction
@@ -729,6 +749,13 @@ enum C {
     /// left wondering.
     static let cameraOpenTimeout = 5.0
     static let cameraStopTimeout = 3.0
+
+    /// Windows has a CAMERA_READ_TIMEOUT as well, which is how long FFmpeg
+    /// waits for a frame before giving up so that a stalled reader thread can
+    /// END and release the device. There is no equivalent here and none is
+    /// wanted: `AVCaptureSession.stopRunning` releases the device outright
+    /// rather than asking a blocked reader to notice, so the thing that
+    /// timeout exists to work around does not happen.
 
     /// Past this, the last frame is a photograph rather than a camera feed,
     /// and anything that reports on the shot should say it does not know.

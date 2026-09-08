@@ -130,25 +130,38 @@ extension MainWindow {
         // Nearly every way of getting a broadcast wrong survives the
         // connection and ruins the show quietly.
         if board.askBeforeLive {
-            let report = preflight()
-            switch GoLivePanel(report: report, board: board).run(over: window) {
-            case .stayOff:
-                speaker.announceState("Still off air")
-                return
-            case .putItRight(let page):
-                showPreferences(tab: page == C.fixVideo ? "Video streaming" : "Streaming")
-                return
-            case .goLive:
-                break
+            // A LOOP, because Put it right opens the page that fixes it and
+            // then the question is worth asking again with the fix in. One
+            // shot would send somebody to Preferences and leave them off air
+            // with nothing to press.
+            var asking = true
+            while asking {
+                let report = preflight()
+                switch GoLivePanel(report: report, board: board).run(over: window) {
+                case .stayOff:
+                    speaker.announceState("Still off air")
+                    return
+                case .putItRight(let page):
+                    showPreferences(tab: page == C.fixVideo ? "Video streaming" : "Streaming")
+                    // Round again with the fix in, unless the box was ticked
+                    // on the way past.
+                    asking = board.askBeforeLive
+                case .goLive:
+                    asking = false
+                }
             }
         } else {
-            // The asking is off, so the checking still happens and only the
-            // things that would stop it are said.
+            // The asking is off. **The checking still happens and everything
+            // it found is still said**, stops and warnings alike, because a
+            // presenter who turned the dialog off did not ask to stop being
+            // told their microphone is off the air. Windows says the same list
+            // whether or not it is blocked.
             let report = preflight()
-            if report.blocked {
-                speaker.announceState(report.stops.map { $0.text }.joined(separator: ". "))
-                return
+            let trouble = (report.stops + report.warnings).map { $0.text }
+            if !trouble.isEmpty {
+                speaker.announceState(trouble.joined(separator: ". "))
             }
+            if report.blocked { return }
         }
         if board.liveTo == C.liveToVideo { startVideoStream() } else { startAudioStream() }
     }
@@ -221,11 +234,18 @@ extension MainWindow {
         // set up for YouTube and nothing else answered "Off air, and no server
         // is set up yet" while Command B would have gone live perfectly well.
         // It is the one question this key exists to answer.
-        if videoStreamer.isOn || (board.liveTo == C.liveToVideo && !streamer.isOn) {
-            speaker.announceAnswer(videoStreamer.statusLine())
-            return
-        }
-        speaker.announceAnswer(streamer.statusLine())
+        if videoStreamer.isOn { speaker.announceAnswer(videoStreamer.statusLine()); return }
+        if streamer.isOn { speaker.announceAnswer(streamer.statusLine()); return }
+        // **Off air, this answers with the pre-flight rather than a bare "Off
+        // air".** It is the one question this key exists to answer, and a
+        // board set up for a video platform and nothing else used to be told
+        // "no server is set up yet" while Command B would have gone live
+        // perfectly well.
+        let report = preflight()
+        var line = "Off air. Command B would go to \(report.summary())"
+        let trouble = (report.stops + report.warnings).map { $0.text }
+        if !trouble.isEmpty { line += ". " + trouble.joined(separator: ". ") }
+        speaker.announceAnswer(line)
     }
 
     /// Command Shift A. Who is listening, which has to handle the awkward case

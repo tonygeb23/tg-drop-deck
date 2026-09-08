@@ -95,18 +95,17 @@ enum Overlays {
 
     // ---------------------------------------------------------- the font ---
 
-    private static var fonts: [Int: CTFont] = [:]
+    private static var fonts: [String: CTFont] = [:]
     private static let fontLock = NSLock()
-    private static var graphicsFont: CGFont? = {
-        // Beside the binary in the bundle, or beside the sources when this is
-        // being run from a checkout by a test.
+
+    private static func load(_ name: String) -> CGFont? {
         var tried: [String] = []
-        if let inBundle = Bundle.main.path(forResource: C.fontBold,
-                                           ofType: nil, inDirectory: "fonts") {
+        if let inBundle = Bundle.main.path(forResource: name, ofType: nil,
+                                           inDirectory: "fonts") {
             tried.append(inBundle)
         }
-        tried.append("mac/Resources/fonts/" + C.fontBold)
-        tried.append("assets/fonts/" + C.fontBold)
+        tried.append("mac/Resources/fonts/" + name)
+        tried.append("assets/fonts/" + name)
         for path in tried {
             if let data = FileManager.default.contents(atPath: path),
                let provider = CGDataProvider(data: data as CFData),
@@ -115,6 +114,19 @@ enum Overlays {
             }
         }
         return nil
+    }
+
+    private static let boldFont: CGFont? = load(C.fontBold)
+    /// The card's title and its clock are Roboto REGULAR on Windows, and were
+    /// Bold here until 3.5.2 because only one face was ever loaded. A card
+    /// somebody has been broadcasting for months has to look the same on the
+    /// other machine, so both faces ship and both are used.
+    private static let regularFont: CGFont? = load(C.fontRegular)
+
+    private static var graphicsFont: CGFont? = {
+        // Beside the binary in the bundle, or beside the sources when this is
+        // being run from a checkout by a test.
+        boldFont
     }()
 
     /// Whether anything can be drawn on top of the picture at all.
@@ -123,36 +135,38 @@ enum Overlays {
     /// asks it, Pillow being a wheel that can be missing, and because a
     /// checkout running a test without the fonts should say so rather than
     /// draw nothing and look correct.
-    static func available() -> Bool { graphicsFont != nil }
+    static func available() -> Bool { boldFont != nil && regularFont != nil }
 
     static func whyUnavailable() -> String {
-        available() ? "" : "The bundled font is missing, so nothing can be put on the picture."
+        available() ? "" : "A bundled font is missing, so nothing can be put on the picture."
     }
 
-    /// One size of the bundled font, made once and kept.
-    static func font(_ size: Int) -> CTFont? {
-        guard let graphicsFont else { return nil }
+    /// One size of one of the two bundled faces, made once and kept.
+    static func font(_ size: Int, bold: Bool = true) -> CTFont? {
+        guard let face = bold ? boldFont : regularFont else { return nil }
+        let key = "\(size)|\(bold)"
         fontLock.lock(); defer { fontLock.unlock() }
-        if let got = fonts[size] { return got }
-        let made = CTFontCreateWithGraphicsFont(graphicsFont, CGFloat(size), nil, nil)
-        fonts[size] = made
+        if let got = fonts[key] { return got }
+        let made = CTFontCreateWithGraphicsFont(face, CGFloat(size), nil, nil)
+        fonts[key] = made
         return made
     }
 
     /// How wide a string is, in the font a tile is drawn in.
-    static func width(_ text: String, size: Int) -> Double {
-        guard !text.isEmpty, let face = font(size) else { return 0 }
+    static func width(_ text: String, size: Int, bold: Bool = true) -> Double {
+        guard !text.isEmpty, let face = font(size, bold: bold) else { return 0 }
         let line = CTLineCreateWithAttributedString(NSAttributedString(
             string: text, attributes: [.font: face]))
         return CTLineGetTypographicBounds(line, nil, nil, nil)
     }
 
     /// The text, shortened with an ellipsis if it will not fit.
-    static func fit(_ text: String, size: Int, room: Double) -> String {
-        if width(text, size: size) <= room { return text }
+    static func fit(_ text: String, size: Int, room: Double,
+                    bold: Bool = true) -> String {
+        if width(text, size: size, bold: bold) <= room { return text }
         let ell = "..."
         var cut = text
-        while !cut.isEmpty && width(cut + ell, size: size) > room {
+        while !cut.isEmpty && width(cut + ell, size: size, bold: bold) > room {
             cut.removeLast()
         }
         return cut.isEmpty ? ell : cut + ell
@@ -331,6 +345,9 @@ final class Overlay {
         case C.textPlaying: return title
         case C.textTime:
             let formatter = DateFormatter()
+            // A fixed pattern needs a fixed locale, or a region setting can
+            // turn "HH:mm" into twelve hour with an am or pm on the end.
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = C.overlayClockFormat
             return formatter.string(from: clock())
         case C.textWords: return custom[key] ?? ""

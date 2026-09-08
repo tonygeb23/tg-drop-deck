@@ -29,6 +29,7 @@
 // not states, and put a floor between them.
 
 import Foundation
+import CoreVideo
 
 /// What the watcher can conclude.
 enum PictureHealth: String {
@@ -160,5 +161,35 @@ final class HealthWatcher {
         case .frozen: return "the picture has stopped moving"
         case .ok:     return "the picture looks fine"
         }
+    }
+}
+
+
+extension HealthWatcher {
+    /// One frame straight off the encoder's buffer.
+    ///
+    /// **This is the shape the numbers were measured against.** Windows
+    /// strides the real 1280 by 720 frame by eight, which is 160 by 90 and
+    /// 14,400 samples. Handing this a subsample that had ALREADY been reduced
+    /// to 64 by 36 left it striding that by eight again, so it was judging a
+    /// broadcast on forty pixels, and `healthFrozenBelow` of 0.35 is far
+    /// noisier over forty values than over fourteen thousand. The module
+    /// mirrored Windows faithfully and its caller did not, which is exactly
+    /// the kind of fault a cross check of the module alone cannot see.
+    @discardableResult
+    func look(buffer: CVPixelBuffer, moving: Bool = true,
+              now: Double? = nil) -> String {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer)?
+                .assumingMemoryBound(to: UInt8.self) else { return "" }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let stride = CVPixelBufferGetBytesPerRow(buffer)
+        let bytes = Array(UnsafeBufferPointer(start: base, count: stride * height))
+        // BGRA, and the alpha is not part of how bright anything is.
+        return look(frame: bytes, width: width, height: height,
+                    bytesPerPixel: 4, counted: 3, rowBytes: stride,
+                    moving: moving, now: now)
     }
 }

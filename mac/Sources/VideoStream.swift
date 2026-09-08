@@ -357,9 +357,7 @@ final class VideoStreamer {
             // the source handed back.
             let shown = Pixels.composite(frame, overlay, width: settings.width,
                                          height: settings.height)
-            health.look(frame: VideoStreamer.sample(shown), width: 64, height: 36,
-                        bytesPerPixel: 4, counted: 3, rowBytes: 64 * 4,
-                        moving: picture.moving)
+            health.look(buffer: shown, moving: picture.moving)
             if framer.due(), let camera = VideoStreamer.cameraFrame(picture) {
                 framer.look(camera)
             }
@@ -384,29 +382,6 @@ final class VideoStreamer {
             }
         }
         return true
-    }
-
-    /// A 64 by 36 subsample, which is all the health watcher needs and keeps
-    /// it off the profile entirely.
-    static func sample(_ buffer: CVPixelBuffer) -> [UInt8] {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        var out = [UInt8](repeating: 0, count: 64 * 36 * 4)
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?
-                .assumingMemoryBound(to: UInt8.self) else { return out }
-        let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
-        let stride = CVPixelBufferGetBytesPerRow(buffer)
-        for y in 0..<36 {
-            let sy = min(h - 1, y * h / 36)
-            for x in 0..<64 {
-                let sx = min(w - 1, x * w / 64)
-                let from = base + sy * stride + sx * 4
-                let to = (y * 64 + x) * 4
-                out[to] = from[0]; out[to + 1] = from[1]
-                out[to + 2] = from[2]; out[to + 3] = 255
-            }
-        }
-        return out
     }
 
     /// The camera's own picture, for the framing checker.

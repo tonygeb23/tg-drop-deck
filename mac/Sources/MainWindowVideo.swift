@@ -123,7 +123,20 @@ extension MainWindow {
 
     // ---------------------------------------------------------- the keys ---
 
+    /// Refuse a picture window when Command B is pointed at the radio station.
+    ///
+    /// **A picture nobody will ever send is worse than no window**, because
+    /// it answers confidently. The same silent-wrong-answer class as the 3.5.1
+    /// fault, where the shot check described a card the user had not chosen.
+    private func videoIsWhereItGoes() -> Bool {
+        if board.liveTo == C.liveToVideo { return true }
+        speaker.announceAnswer("Command B is set to go to your radio station, which "
+                             + "sends no picture. Video streaming is in Preferences")
+        return false
+    }
+
     func showVideoSource() {
+        guard videoIsWhereItGoes() else { return }
         let panel = VideoSourcePanel(
             board: board, speaker: speaker, live: videoStreamer.isOn,
             apply: { [weak self] kind in
@@ -150,6 +163,7 @@ extension MainWindow {
     }
 
     func showScreenText() {
+        guard videoIsWhereItGoes() else { return }
         let panel = ScreenTextPanel(
             board: board, speaker: speaker, live: videoStreamer.isOn, window: window,
             ask: { [weak self] title, message, value, fieldLabel in
@@ -204,16 +218,17 @@ extension MainWindow {
         if videoStreamer.isOn, let frame = videoStreamer.currentFrame() { return frame }
         let source = Picture.build(pictureSettings())
         source.start()
+        // Closed whatever happens: a camera left open holds the device and
+        // its light stays on.
+        defer { source.close() }
         _ = source.waitReady(timeout: C.cameraOpenTimeout)
         let frame = source.frame(width: board.videoWidth, height: board.videoHeight)
         let overlay = Overlay(settings: overlaySettings())
         overlay.setTitle(nowPlayingTitle)
-        let shown = frame.map {
+        return frame.map {
             Pixels.composite($0, overlay, width: board.videoWidth,
                              height: board.videoHeight)
         }
-        source.close()
-        return shown
     }
 
     func showShotCheck() {
@@ -266,9 +281,13 @@ extension MainWindow {
         var parts: [String] = []
         if videoStreamer.isOn {
             parts.append("On air, showing \(videoStreamer.describePicture())")
+        } else if board.liveTo != C.liveToVideo {
+            speaker.announceAnswer("Nothing. Command B is set to go to your radio "
+                                 + "station, which sends no picture")
+            return
         } else {
             let label = (C.pictureLabels[board.picture] ?? board.picture).lowercased()
-            parts.append("Off air. It would show \(label)")
+            parts.append("\(label), once you go live")
         }
         let overlay = Overlay(settings: overlaySettings())
         overlay.setTitle(nowPlayingTitle)
@@ -286,14 +305,20 @@ extension MainWindow {
     func setLiveTo(_ which: String) {
         guard C.liveTo.contains(which) else { return }
         if streamer.isOn || videoStreamer.isOn {
-            speaker.announce("Come off air first. Where the show goes cannot change "
-                           + "while it is going.")
+            speaker.announce("Come off air first, Command B, then change where it goes")
             return
         }
         board.liveTo = which
         board.dirty = true
         let name = C.liveToLabels[which] ?? which
-        speaker.announceState("Command B now goes to \(name)")
+        // The pre-flight summary, so the answer is where it is going rather
+        // than which of two words was picked.
+        let report = preflight()
+        var said = "Command B now goes to \(name), \(report.summary())"
+        if report.blocked {
+            said += ". " + report.stops.map { $0.text }.joined(separator: ". ")
+        }
+        speaker.announceState(said)
         updateAirMenu()
     }
 }

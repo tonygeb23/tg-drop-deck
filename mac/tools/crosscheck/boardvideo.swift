@@ -56,6 +56,32 @@ let cases: [(String, [String: Any])] = [
     ("places-not-dict", ["text_places": ["top"]]),
     ("colours-good", ["colour_background": "navy", "colour_text": "cream",
                       "colour_accent": "gold"]),
+    ("unknown-keys", ["something_from_a_later_build": ["a": 1],
+                      "another": [1, 2, 3], "video_server": "restream"]),
+]
+
+let stations: [(String, [Any])] = [
+    ("station-full", [[
+        "stream_name": "Blindside Radio", "stream_server": "icecast",
+        "stream_host": "radio.example.com", "stream_port": 8000,
+        "stream_mount": "/live", "stream_password": "secret",
+        "video_server": "youtube", "video_host": "rtmps://a.rtmps.youtube.com/live2",
+        "live_to": "video", "picture": "camera", "camera": "A camera",
+        "split_corner": "top left", "colour_background": "navy",
+        "colour_text": "cream", "colour_accent": "gold",
+        "video_width": 1920, "video_height": 1080, "video_fps": 60,
+        "video_bitrate": 6000,
+        "text_places": ["top": ["kind": "station", "words": "", "file": ""]],
+    ]]),
+    ("station-old", [[
+        "stream_name": "Old One", "stream_server": "icecast",
+        "stream_host": "old.example.com", "live_to": NSNull(),
+    ]]),
+    ("station-junk", [["stream_name": "Junk", "video_server": "vimeo",
+                       "picture": "hologram", "video_width": 99999,
+                       "text_places": "not a dict"],
+                      ["no_name": true],
+                      "not a dict at all"]),
 ]
 
 func field(_ b: Board, _ name: String) -> Any {
@@ -79,6 +105,7 @@ func field(_ b: Board, _ name: String) -> Any {
     case "video_fps": return b.videoFPS
     case "video_bitrate": return b.videoBitrate
     case "framing_level": return b.framingLevel
+    case "vision_provider": return b.visionProvider
     default: return ""
     }
 }
@@ -87,7 +114,21 @@ let fields = ["video_server", "video_host", "video_key", "live_to", "picture",
               "picture_file", "picture_clock", "camera", "screen", "split_corner",
               "colour_background", "colour_text", "colour_accent",
               "vision_model", "video_width", "video_height", "video_fps",
-              "video_bitrate", "framing_level"]
+              "video_bitrate", "framing_level", "vision_provider"]
+
+func py(_ b: Bool) -> String { b ? "True" : "False" }
+
+func pyRepr(_ v: Any) -> String {
+    if v is NSNull { return "None" }
+    if let s = v as? String { return "'" + s.replacingOccurrences(of: "'", with: "\\'") + "'" }
+    if let b = v as? Bool { return b ? "True" : "False" }
+    if let i = v as? Int { return String(i) }
+    if let d = v as? [String: Any] {
+        let inner = d.keys.sorted().map { "'\($0)': \(pyRepr(d[$0]!))" }
+        return "{" + inner.joined(separator: ", ") + "}"
+    }
+    return String(describing: v)
+}
 
 var out: [String] = []
 for (name, payload) in cases {
@@ -102,5 +143,36 @@ for (name, payload) in cases {
     }
     let d = b.toDict()
     for f in fields { out.append("\(name)|out.\(f)|\(rp(d[f] ?? ""))") }
+    for key in payload.keys.filter({ !fields.contains($0) }).sorted() {
+        out.append("\(name)|kept.\(key)|\(d[key].map(pyRepr) ?? "None")")
+    }
+}
+
+// ------------------------------------------------------------- the stations ---
+
+for (name, list) in stations {
+    var data: [String: Any] = ["app": "TG Drop Deck", "format": 3,
+                               "stream_stations": list, "live_to": "audio",
+                               "video_server": "facebook", "picture": "card",
+                               "split_corner": "bottom right"]
+    let b = Board.from(dict: data, relativeTo: nil)
+    _ = data
+    out.append("\(name)|count|\(b.streamStations.count)")
+    for station in b.streamStations {
+        for key in station.keys.sorted() {
+            out.append("  kept|\(name)|\(key)|\(pyRepr(station[key]!))")
+        }
+    }
+    for station in b.streamStations {
+        let who = station["stream_name"] as? String ?? ""
+        let got = b.loadStation(who)
+        out.append("  loaded|\(name)|\(who)|\(py(got))")
+        for f in fields { out.append("    after|\(name)|\(f)|\(rp(field(b, f)))") }
+    }
+    b.saveStation("Round Trip")
+    let saved = b.streamStations.first { ($0["stream_name"] as? String) == "Round Trip" } ?? [:]
+    for key in saved.keys.sorted() {
+        out.append("  saved|\(name)|\(key)|\(pyRepr(saved[key]!))")
+    }
 }
 print(out.joined(separator: "\n"))

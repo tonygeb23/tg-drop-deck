@@ -334,6 +334,9 @@ final class ScreenTextPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return title.isEmpty ? "nothing playing" : title
         case C.textTime:
             let formatter = DateFormatter()
+            // A fixed pattern needs a fixed locale, or a region setting can
+            // turn "HH:mm" into twelve hour with an am or pm on the end.
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = C.overlayClockFormat
             return formatter.string(from: Date())
         default:
@@ -609,8 +612,10 @@ final class AskPanel: NSObject {
             return
         }
         guard let shot = picture() else {
-            show("There is no picture to ask about yet.")
-            speaker.announce("There is no picture to ask about yet.")
+            let said = "There is no picture to ask about yet. Choose a picture with "
+                     + "Option Shift V, or check the camera is plugged in."
+            show(said)
+            speaker.announce(said)
             return
         }
         // Consent is asked HERE, on the main queue, before anything leaves.
@@ -819,7 +824,9 @@ final class ShotCheckPanel: NSObject {
                 self.goButton?.isEnabled = true
                 self.lookedAt = shot
                 self.show(got.text)
-                self.speaker.announceAnswer("Shot check: " + AskPanel.firstLine(got.text))
+                let first = AskPanel.firstLine(got.text)
+                self.speaker.announceAnswer(first.isEmpty ? "Shot check finished"
+                                                          : "Shot check: " + first)
                 if got.ok, !ShotCheckPanel.toldAboutTabbing {
                     ShotCheckPanel.toldAboutTabbing = true
                     self.speaker.announceHelp("Tab to What it looks like to read the rest.")

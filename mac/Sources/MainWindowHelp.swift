@@ -273,17 +273,31 @@ extension MainWindow {
     /// Load a saved station from the On air menu. Not while it is broadcasting:
     /// swapping the server under a live stream mid sentence is not a thing to
     /// do quietly.
-    func pickStation(_ name: String) {
-        guard name != board.stream.name else { return }
-        if streamer.isOn {
-            speaker.announce("Come off air first, Command B, then change station")
+    func pickStation(_ name: String) { loadSavedSetup(name) }
+
+    /// Load a saved setup, and say where the show goes now.
+    ///
+    /// **A saved setup carries both Preferences pages and where the show
+    /// goes**, so loading one can move the show from a radio station to a
+    /// video platform. Saying only the station's host would not mention that,
+    /// which is why this answers with the pre-flight's summary.
+    func loadSavedSetup(_ name: String) {
+        guard !name.isEmpty, name != board.stream.name else { return }
+        if streamer.isOn || videoStreamer.isOn {
+            speaker.announce("Come off air first, Command B, then change where it goes")
             updateAirMenu()
             return
         }
+        let wasVideo = board.liveTo == C.liveToVideo
         if board.loadStation(name) {
             mic.onAir = board.stream.sendMic
             touch()
-            speaker.announce("Station \(name), \(board.stream.host)")
+            let report = preflight()
+            var said = "\(name). Command B goes to \(report.summary())"
+            if wasVideo != (board.liveTo == C.liveToVideo) {
+                said += ", which is a different kind of destination from the last one"
+            }
+            speaker.announce(said)
         }
         updateAirMenu()
     }

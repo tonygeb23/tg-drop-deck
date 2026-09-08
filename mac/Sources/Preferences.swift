@@ -352,6 +352,15 @@ extension MainWindow {
         testButton.bezelStyle = .rounded
         testButton.toolTip = "Connects with the settings above, says what the server answered, "
                            + "and disconnects. It sends no audio."
+        // **The way back on.** Go live has a box that turns the asking off for
+        // good, and a "do not ask again" with no way back is a one way door.
+        let askBox = check("Say what Command B is about to do, and wait",
+                           board.askBeforeLive)
+        askBox.toolTip = "Command B says where the show is going, what it is sending, "
+                       + "what will be on the screen and whether your microphone is on "
+                       + "the air, and then Return puts you live."
+        streamBox.addArrangedSubview(askBox)
+
         let stationRow = NSStackView(views: [saveStation, forgetStation, testButton])
         stationRow.orientation = .horizontal
         stationRow.spacing = 8
@@ -664,6 +673,8 @@ extension MainWindow {
                 deviceChanged = true
             }
         }
+
+        board.askBeforeLive = askBox.state == .on
 
         // ------------------------------------------------------------- video --
         board.videoServer = C.videoServerOrder[max(0, platformPopup.indexOfSelectedItem)]

@@ -34,7 +34,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var actions: [Command: Selector] = [:]
     private var soundsMenu: NSMenu!
     /// The saved stations, rebuilt every time the menu opens.
-    private var stationMenu: NSMenu!
     private var liveToMenu: NSMenu!
 
     private func trace(_ s: String) {
@@ -401,6 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(goLiveItem)
         air.addItem(item("What the stream is doing", .streamStatus, #selector(streamStatus)))
         air.addItem(item("Who is listening...", .streamStats, #selector(streamStats)))
+        air.addItem(item("What the camera can see", .cameraCheck, #selector(cameraCheck)))
         air.addItem(.separator())
         micItem = item("Microphone on", .micToggle, #selector(toggleMic))
         air.addItem(micItem)
@@ -415,17 +415,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(muteSourcesItem)
         soloItem = item("Solo the microphone", .soloMic, #selector(soloMic))
         air.addItem(soloItem)
+        // The video half, 3.5.2, in the order Windows lists it and in the
+        // place Windows puts it: between Source control and Audio sources.
+        air.addItem(item("What is on screen", .sayScreen, #selector(sayScreen)))
+        air.addItem(item("Check my shot...", .shotCheck, #selector(shotCheck)))
+        air.addItem(item("Colours...", .colours, #selector(colours)))
+        air.addItem(item("Screen text...", .screenText, #selector(screenText)))
+        air.addItem(item("Video source...", .videoSource, #selector(videoSource)))
         air.addItem(item("Audio sources...", .sources, #selector(showSources)))
         air.addItem(.separator())
-        // The video half, 3.5.2. Video source sits beside Audio sources on
-        // purpose: they answer the same question about the two halves of what
-        // goes out.
-        air.addItem(item("Video source...", .videoSource, #selector(videoSource)))
-        air.addItem(item("Screen text...", .screenText, #selector(screenText)))
-        air.addItem(item("Colours...", .colours, #selector(colours)))
-        air.addItem(item("Check my shot...", .shotCheck, #selector(shotCheck)))
-        air.addItem(item("What the camera can see", .cameraCheck, #selector(cameraCheck)))
-        air.addItem(item("What is on screen", .sayScreen, #selector(sayScreen)))
         // Where Command B sends the show, which should have been here the day
         // video arrived: until 3.4.2 the choice lived on the page for one of
         // the two answers, so a board with a radio station and a YouTube
@@ -441,12 +439,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(plain("Set up streaming...", #selector(streamSetup)))
         // Switching station without going through Preferences, because on a
         // show night that is one dialog too many.
-        stationMenu = NSMenu(title: "Station")
-        stationMenu.delegate = self
-        let stationItem = NSMenuItem(title: "Station", action: nil, keyEquivalent: "")
-        stationItem.submenu = stationMenu
-        air.addItem(stationItem)
-        rebuildStationMenu()
+        // The top level Station menu was where saved setups lived until
+        // 3.4.2. They moved under Streaming location because a saved setup
+        // carries BOTH Preferences pages and where the show goes, so it is an
+        // answer to the same question the two destinations answer. It is gone
+        // rather than aliased: two menus rebuilding the same NSMenu means
+        // whichever runs last wins, and the loser's items vanish.
         airItem.submenu = air
         bar.addItem(airItem)
 
@@ -537,50 +535,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         muteSourcesItem?.state = allMuted ? .on : .off
         soloItem?.title = main.sourceGroup.soloed == nil ? "Solo the microphone" : "Drop the solo"
         soloItem?.state = main.sourceGroup.soloed == nil ? .off : .on
-        rebuildStationMenu()
+        rebuildLiveToMenu()
     }
 
-    /// The saved stations, with a tick beside the one that is loaded. With none
-    /// saved it offers the thing somebody with no stations actually wants,
-    /// rather than a dead "none yet" line.
-    /// Both places the show can go, with a dot beside the one Command B will
-    /// use. A visible checked list rather than a hidden setting.
+    /// The two destinations, said the way their owner would say them.
+    ///
+    /// An unset one answers "not set up yet" rather than nothing. **A choice
+    /// you cannot see is the whole complaint this menu exists to answer**, so
+    /// an absent line would be the same fault in a smaller place.
+    private func liveToLabels() -> (audio: String, video: String) {
+        let name = main.board.stream.name
+        let host = main.board.stream.host
+        var station = name.isEmpty ? host : name
+        if !host.isEmpty && !name.isEmpty { station = "\(name), \(host)" }
+        if station.isEmpty { station = "not set up yet" }
+        let platform = main.board.videoHost.isEmpty
+            ? "not set up yet"
+            : StreamServers.serverLabel(main.board.videoServer)
+        return (station, platform)
+    }
+
+    /// Where Command B sends the show, with a dot beside the one it uses.
+    ///
+    /// Every entry answers the same question, which is why the two
+    /// destinations and the saved setups live together: the two are what is
+    /// typed into the two Preferences pages, and a saved setup is a whole
+    /// configuration INCLUDING which of the two it is. Picking any of them is
+    /// picking where the show goes.
     func rebuildLiveToMenu() {
         guard liveToMenu != nil else { return }
         liveToMenu.removeAllItems()
-        for which in C.liveTo {
-            let name = C.liveToLabels[which] ?? which
-            var label = name.prefix(1).uppercased() + name.dropFirst()
-            if which == C.liveToAudio {
-                let station = main.board.stream.name
-                let where_ = station.isEmpty ? main.board.stream.host : station
-                if !where_.isEmpty { label += ", \(where_)" }
-            } else {
-                label += ", \(StreamServers.serverLabel(main.board.videoServer))"
-            }
-            let entry = NSMenuItem(title: label, action: #selector(pickLiveTo(_:)),
-                                   keyEquivalent: "")
-            entry.target = self
-            entry.representedObject = which
-            entry.state = main.board.liveTo == which ? .on : .off
-            liveToMenu.addItem(entry)
-        }
-    }
+        let labels = liveToLabels()
+        let audio = NSMenuItem(title: "My radio station: \(labels.audio)",
+                               action: #selector(pickLiveTo(_:)), keyEquivalent: "")
+        audio.target = self
+        audio.representedObject = C.liveToAudio
+        audio.state = main.board.liveTo == C.liveToAudio ? .on : .off
+        audio.toolTip = "Send the show to your radio server: Icecast, Liquidsoap or "
+                      + "SHOUTcast. Set it up on the Streaming page"
+        liveToMenu.addItem(audio)
 
-    private func rebuildStationMenu() {
-        guard let menu = stationMenu, main != nil else { return }
-        menu.removeAllItems()
-        let names = Array(main.board.stationNames.prefix(C.maxStations))
-        if names.isEmpty {
-            menu.addItem(plain("Set one up...", #selector(streamSetup)))
-            return
+        let video = NSMenuItem(title: "My video platform: \(labels.video)",
+                               action: #selector(pickLiveTo(_:)), keyEquivalent: "")
+        video.target = self
+        video.representedObject = C.liveToVideo
+        video.state = main.board.liveTo == C.liveToVideo ? .on : .off
+        video.toolTip = "Send the show to YouTube, Facebook, Restream or any RTMP "
+                      + "server, with a picture. Set it up on the Video streaming page"
+        liveToMenu.addItem(video)
+
+        liveToMenu.addItem(.separator())
+
+        // A submenu rather than more entries here, and not for tidiness: these
+        // overwrite BOTH Preferences pages, where the two above only choose
+        // between them. Loading one can move the show from a radio station to
+        // a video platform, and it says so when it does.
+        let names = main.board.stationNames
+        if !names.isEmpty {
+            let saved = NSMenu(title: "Load a saved setup")
+            for name in names.prefix(20) {
+                let entry = NSMenuItem(title: name, action: #selector(pickSavedSetup(_:)),
+                                       keyEquivalent: "")
+                entry.target = self
+                entry.representedObject = name
+                entry.state = name == main.board.stream.name ? .on : .off
+                entry.toolTip = "Load this saved setup, and send the show wherever it "
+                              + "was saved to go"
+                saved.addItem(entry)
+            }
+            let savedItem = NSMenuItem(title: "Load a saved setup", action: nil,
+                                       keyEquivalent: "")
+            savedItem.submenu = saved
+            liveToMenu.addItem(savedItem)
         }
-        for name in names {
-            let item = NSMenuItem(title: name, action: #selector(pickStation(_:)), keyEquivalent: "")
-            item.target = self
-            item.state = name == main.board.stream.name ? .on : .off
-            menu.addItem(item)
-        }
+        let setUp = NSMenuItem(title: "Set these up...", action: #selector(streamSetup),
+                               keyEquivalent: "")
+        setUp.target = self
+        setUp.toolTip = "The address, mount point and password for a server, or the "
+                      + "platform and stream key for video"
+        liveToMenu.addItem(setUp)
     }
 
     @objc func muteSources() { main.toggleSourceMute(); refreshAirMenu() }
@@ -615,6 +648,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func streamHelp() { main.showStreamHelp() }
     @objc func pickLiveTo(_ sender: NSMenuItem) {
         main.setLiveTo(sender.representedObject as? String ?? C.liveToAudio)
+    }
+    @objc func pickSavedSetup(_ sender: NSMenuItem) {
+        main.loadSavedSetup(sender.representedObject as? String ?? "")
     }
     @objc func showSources() { main.showSources() }
     @objc func streamSetup() { main.showPreferences(tab: "Streaming") }
@@ -659,8 +695,6 @@ extension AppDelegate: NSMenuDelegate {
         if menu === soundsMenu {
             let slot = main.focusedSlot
             loopItem.state = (slot?.isBed == true && slot?.loop == true) ? .on : .off
-        } else if menu === stationMenu {
-            rebuildStationMenu()
         } else if menu === liveToMenu {
             rebuildLiveToMenu()
         }

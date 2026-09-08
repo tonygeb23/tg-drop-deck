@@ -213,7 +213,10 @@ final class CardSource: PictureSource {
     private func draw(width: Int, height: Int, name: String, title: String) -> CVPixelBuffer? {
         let bigSize = max(14, Int(Double(height) * 0.115))
         let smallSize = max(11, Int(Double(height) * 0.070))
-        guard let big = Overlays.font(bigSize), let small = Overlays.font(smallSize)
+        // Bold for the name, REGULAR for the title and the clock, which is how
+        // Windows draws a card. Both faces ship for this.
+        guard let big = Overlays.font(bigSize, bold: true),
+              let small = Overlays.font(smallSize, bold: false)
         else { return nil }
 
         return Pixels.draw(width: width, height: height) { ctx in
@@ -221,7 +224,7 @@ final class CardSource: PictureSource {
             let margin = max(8, width / 16)
             let room = Double(width - margin * 2)
 
-            let shown = Overlays.fit(name, size: bigSize, room: room)
+            let shown = Overlays.fit(name, size: bigSize, room: room, bold: true)
             let line = CTLineCreateWithAttributedString(NSAttributedString(
                 string: shown, attributes: [.font: big,
                                             .foregroundColor: cg(foreground)]))
@@ -249,7 +252,7 @@ final class CardSource: PictureSource {
                             width: Double(width - margin * 2), height: ruleH))
 
             if !title.isEmpty {
-                let shownTitle = Overlays.fit(title, size: smallSize, room: room)
+                let shownTitle = Overlays.fit(title, size: smallSize, room: room, bold: false)
                 let tline = CTLineCreateWithAttributedString(NSAttributedString(
                     string: shownTitle, attributes: [.font: small,
                                                      .foregroundColor: cg(accent)]))
@@ -263,6 +266,7 @@ final class CardSource: PictureSource {
 
             if showClock {
                 let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.dateFormat = C.overlayClockFormat
                 let stamp = formatter.string(from: clock())
                 let cline = CTLineCreateWithAttributedString(NSAttributedString(

@@ -176,6 +176,70 @@ DIVERGENCES = [
      "board.py does data.get('camera') or '', which passes a number straight "
      "through as a number. The pre-flight then says 'your screen, with 42 in "
      "the corner'. The Mac takes a string or the default"),
+    # load_station on Windows does a bare setattr for every field and then
+    # clamps exactly three of them, so a SAVED STATION is a back door round
+    # every whitelist the board loader has. A station carrying
+    # video_width 99999 puts 99999 on the board, and from there into the
+    # encoder. The Mac whitelists each field the same way it does on load.
+    ("boardvideo",
+     "after|station-junk|video_server|'vimeo'",
+     "after|station-junk|video_server|'facebook'",
+     "board.py load_station setattrs video_server without checking it is one "
+     "of the four. The Mac keeps what was there"),
+    ("boardvideo",
+     "after|station-junk|picture|'hologram'",
+     "after|station-junk|picture|'card'",
+     "the same, for the picture source"),
+    ("boardvideo",
+     "saved|station-junk|picture|'hologram'",
+     "saved|station-junk|picture|'card'",
+     "and the same value written back out"),
+    ("boardvideo",
+     "after|station-junk|video_width|99999",
+     "after|station-junk|video_width|3840",
+     "board.py clamps video_width on LOAD and not when a station is loaded, "
+     "so a saved station can put any number at all into the encoder. The Mac "
+     "clamps both"),
+    ("boardvideo",
+     "saved|station-junk|text_places|'not a dict'",
+     "saved|station-junk|text_places|{'clock': {'file': '', 'kind': 'none', "
+     "'words': ''}, 'corner': {'file': '', 'kind': 'none', 'words': ''}, "
+     "'lower': {'file': '', 'kind': 'none', 'words': ''}, 'top': {'file': '', "
+     "'kind': 'none', 'words': ''}}",
+     "load_station puts the STRING 'not a dict' on the board as text_places "
+     "and saves it straight back out, so a hand edited station can leave a "
+     "board whose overlay settings are a string. The Mac takes four places "
+     "or nothing"),
+    ("boardvideo",
+     "saved|station-junk|video_server|'vimeo'",
+     "saved|station-junk|video_server|'facebook'",
+     "the unwhitelisted server, written back out"),
+    ("boardvideo",
+     "saved|station-junk|video_width|99999",
+     "saved|station-junk|video_width|3840",
+     "and the same value written back out"),
+    ("boardvideo",
+     "saved|station-full|text_places|{'top': {'file': '', 'kind': 'station', 'words': ''}}",
+     "saved|station-full|text_places|{'clock': {'file': '', 'kind': 'none', 'words': ''}, "
+     "'corner': {'file': '', 'kind': 'none', 'words': ''}, 'lower': {'file': '', "
+     "'kind': 'none', 'words': ''}, 'top': {'file': '', 'kind': 'station', 'words': ''}}",
+     "load_station setattrs text_places raw, so a station holding one place "
+     "leaves the board with a text_places that has one place in it rather "
+     "than four. Windows puts the other three back on the next load; the Mac "
+     "never lets it happen"),
+    ("boardvideo",
+     "unknown-keys|kept.another|None",
+     "unknown-keys|kept.another|[1, 2, 3]",
+     "board.py's to_dict builds a fresh dictionary of the keys THIS build "
+     "knows, so anything a later build added is dropped the first time an "
+     "older one saves. The Mac keeps them: Board.swift starts to_dict from "
+     "the unrecognised keys it read. The two copies share one file, so "
+     "silently discarding what the other one wrote is the worst kind of "
+     "difference there is"),
+    ("boardvideo",
+     "unknown-keys|kept.something_from_a_later_build|None",
+     "unknown-keys|kept.something_from_a_later_build|{'a': 1}",
+     "the same key, the same fault"),
     ("boardvideo",
      "wrong-types|out.camera|42",
      "wrong-types|out.camera|''",

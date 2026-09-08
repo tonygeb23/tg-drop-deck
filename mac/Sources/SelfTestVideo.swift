@@ -35,6 +35,7 @@ extension SelfTest {
         testKeychain()
         testPictureSources()
         testVideoKeys()
+        testSavedSetups()
     }
 
     // -------------------------------------------------------------- colours ---
@@ -88,17 +89,21 @@ extension SelfTest {
         // The reason there are places rather than coordinates: they cannot
         // land on top of each other, so "what is on screen" is four lines.
         var overlaps: [String] = []
-        let boxes = Overlays.places.map { ($0.key, $0.rect(1280, 720)) }
-        for i in 0..<boxes.count {
-            for j in (i + 1)..<boxes.count {
-                let a = boxes[i].1, b = boxes[j].1
-                let apart = a.right <= b.left || b.right <= a.left
-                          || a.bottom <= b.top || b.bottom <= a.top
-                if !apart { overlaps.append("\(boxes[i].0) and \(boxes[j].0)") }
+        for (w, h) in [(1280, 720), (1920, 1080), (854, 480), (640, 360)] {
+            let boxes = Overlays.places.map { ($0.key, $0.rect(w, h)) }
+            for i in 0..<boxes.count {
+                for j in (i + 1)..<boxes.count {
+                    let a = boxes[i].1, b = boxes[j].1
+                    let apart = a.right <= b.left || b.right <= a.left
+                              || a.bottom <= b.top || b.bottom <= a.top
+                    if !apart {
+                        overlaps.append("\(boxes[i].0) and \(boxes[j].0) at \(w) by \(h)")
+                    }
+                }
             }
         }
-        check("no two places can overlap", overlaps.isEmpty,
-              overlaps.joined(separator: ", "))
+        check("no two places can overlap, at any size that ships",
+              overlaps.isEmpty, overlaps.joined(separator: ", "))
 
         for (w, h) in [(1280, 720), (1920, 1080), (640, 360)] {
             var outside: [String] = []
@@ -319,6 +324,71 @@ extension SelfTest {
         // use rather than to a test run.
         out.append("  note  cameras seen: "
                    + (Cameras.all().isEmpty ? "none" : Cameras.all().joined(separator: ", ")))
+    }
+
+    // ------------------------------------------------------- saved setups ---
+
+    private func testSavedSetups() {
+        out.append("")
+        out.append("A saved setup carries the video half")
+
+        // **This was destructive before 3.5.2.** cleanStations filters an
+        // incoming station down to stationFields, so a board written on
+        // Windows whose station carried a YouTube channel, opened here and
+        // saved, lost it for good. The two copies share one file.
+        var missing: [String] = []
+        for key in ["video_server", "video_host", "video_key", "live_to",
+                    "picture", "picture_file", "picture_clock", "camera",
+                    "screen", "split_corner", "text_places",
+                    "colour_background", "colour_text", "colour_accent",
+                    "video_width", "video_height", "video_fps", "video_bitrate"]
+        where !Board.stationFields.contains(key) {
+            missing.append(key)
+        }
+        check("every video key is part of a saved setup", missing.isEmpty,
+              missing.joined(separator: ", "))
+
+        let board = Board()
+        board.stream.name = "A Station"
+        board.videoServer = "facebook"
+        board.videoHost = "rtmps://live-api-s.facebook.com:443/rtmp"
+        board.liveTo = C.liveToVideo
+        board.picture = C.pictureCamera
+        board.camera = "Some camera"
+        board.splitCorner = "top left"
+        board.colourAccent = "gold"
+        board.videoWidth = 1920
+        board.videoHeight = 1080
+        board.saveStation("A Station")
+
+        // Move everything, then load it back.
+        board.videoServer = "youtube"
+        board.liveTo = C.liveToAudio
+        board.picture = C.pictureCard
+        board.camera = ""
+        board.splitCorner = "bottom right"
+        board.colourAccent = "light blue"
+        board.videoWidth = 1280
+        board.videoHeight = 720
+        check("a saved setup loads", board.loadStation("A Station"))
+        check("and brings the platform with it", board.videoServer == "facebook",
+              board.videoServer)
+        check("and where the show goes", board.liveTo == C.liveToVideo, board.liveTo)
+        check("and the picture", board.picture == C.pictureCamera, board.picture)
+        check("and the camera", board.camera == "Some camera", board.camera)
+        check("and the corner", board.splitCorner == "top left", board.splitCorner)
+        check("and the accent", board.colourAccent == "gold", board.colourAccent)
+        check("and the size", board.videoWidth == 1920 && board.videoHeight == 1080,
+              "\(board.videoWidth) by \(board.videoHeight)")
+
+        // A station written by a build that had no video half must not blank
+        // the board's own settings when it is loaded.
+        board.streamStations.append(["stream_name": "Older",
+                                     "stream_host": "old.example.com"])
+        _ = board.loadStation("Older")
+        check("an older setup keeps the destination rather than blanking it",
+              board.liveTo == C.liveToVideo && board.videoServer == "facebook",
+              "\(board.liveTo), \(board.videoServer)")
     }
 
     // ------------------------------------------------------------ the keys ---
