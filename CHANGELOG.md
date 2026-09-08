@@ -1,5 +1,61 @@
 # Changelog
 
+## 3.5.0, 8 September 2026
+
+**Things can go on top of the picture now, and the app will tell you what is
+on screen.**
+
+**`Alt+Shift+T`, or On air, Screen text.** Four named places, and each one can
+show nothing, your station name, what is playing, the time, your own words, or
+a text file:
+
+| Place | Where it is |
+|---|---|
+| Top strip | across the top |
+| Corner | top right |
+| Lower third | bottom left |
+| Clock | bottom right |
+
+Up and down read them, Enter chooses what one shows, Delete empties it. It
+changes while you are on air.
+
+**A text file is re-read a second after it changes**, which is exactly how OBS
+does it, so anything else on your computer that writes a text file can drive
+your screen.
+
+**There is no canvas and there are no coordinates, and that is the point.**
+Putting something at an exact position is the easy half. Knowing whether it
+looks right is the half that needs eyes, and it is why every guide for blind
+streamers ends with "get a sighted person to lay it out once". Four places
+that are already the right size and cannot land on top of each other can be
+checked without looking, because the answer to "what is on screen" is four
+lines long.
+
+**`Ctrl+Shift+V` says what is on screen.** The picture, and everything on top
+of it, in words. On air or off. Nothing else in broadcasting does this: OBS's
+preview is a graphics surface with no accessibility information at all, on any
+platform, so there is nothing anywhere that will tell the person making a
+stream what is currently in it.
+
+**It tells you when the picture dies.** Camera unplugged, screen gone black,
+capture stuck on one frame. It says so once, after a few seconds so a blink
+does not set it off, and says when it comes back. OBS has never had this and
+people have asked for it on their forums for years.
+
+**Going live checks the text fits.** A title too long for the lower third is
+said before you connect rather than discovered by somebody watching.
+
+**And the card got real letters.** It was drawn in a hand-made font of five by
+seven blocks, capitals only, because that needed no font file. It is Roboto
+now, and so is everything above.
+
+The download grew by about three megabytes. For contrast, OBS is 390 MB, and
+275 MB of that is a complete copy of Chrome, which is what every animated
+overlay in that world actually is. None of it is here.
+
+Nothing about the soundboard, the running order, the keyboard or the sound
+going out has changed. The digit map is untouched.
+
 ## 3.4.3, 8 September 2026
 
 **Source control works the way Windows works.**

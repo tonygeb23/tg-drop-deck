@@ -1,6 +1,14 @@
 """Does Windows actually deliver Alt+Shift+V to this app.
 
-    python tools/check_video_key.py
+    python tools/check_video_key.py video       Alt+Shift+V
+    python tools/check_video_key.py text        Alt+Shift+T
+    python tools/check_video_key.py onscreen    Ctrl+Shift+V
+
+**One key per run, and that is not tidiness.** Three chords in one process
+was reliable for the first and dropped about half the later ones, whichever
+they were: the harness drifts, the foreground moves, the message loop falls
+behind. A check that fails half the time teaches nobody anything, so each key
+gets its own process and its own fresh grab of the foreground.
 
 A separate file from `check_keyboard.py` for the same reason that one is not
 in `tests/`: it synthesises real Windows input, real Windows input goes to
@@ -33,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wx
 
 from dropdeck import constants as C
-from dropdeck.dialogs import VideoSourceDialog
+from dropdeck.dialogs import ScreenTextDialog, VideoSourceDialog
 from dropdeck.ui import ID_VIDEO_SOURCES, DropDeckFrame
 # The foreground dance is already solved next door, several ways round
 # Windows refusing to hand the foreground to a process with no recent input.
@@ -77,31 +85,48 @@ def layout():
     return u32.GetKeyboardLayout(thread)
 
 
+#: What can be tested, and what each one should reach. One per run: see the
+#: note at the top of this file.
+KEYS = {
+    "video": ("Alt+Shift+V", "the video sources", "_on_video_sources",
+              (wx.WXK_ALT, wx.WXK_SHIFT), "V"),
+    "text": ("Alt+Shift+T", "the screen text", "_on_screen_text",
+             (wx.WXK_ALT, wx.WXK_SHIFT), "T"),
+    "onscreen": ("Ctrl+Shift+V", "what is on screen", "describe_screen",
+                 (wx.WXK_CONTROL, wx.WXK_SHIFT), "V"),
+}
+
+
 def main():
+    which = sys.argv[1] if len(sys.argv) > 1 else "video"
+    if which not in KEYS:
+        print("Which key? One of: %s" % ", ".join(sorted(KEYS)))
+        return 2
+    shown, what, handler_name, mods, letter = KEYS[which]
     app = wx.App(redirect=False)
 
     # BEFORE the frame exists. See this file's note: the frame binds the
     # bound method in __init__, so a class patch applied afterwards is never
     # the thing that runs and the counter below would always read zero.
     fired = []
-    real_handler = DropDeckFrame._on_video_sources
+    real_handler = getattr(DropDeckFrame, handler_name)
 
     def counted(self, event=None):
         fired.append(1)
-        return real_handler(self, event)
+        return None          # never open the real window
 
-    DropDeckFrame._on_video_sources = counted
+    setattr(DropDeckFrame, handler_name, counted)
 
     # THE CONTROL. Alt+Shift+S has shipped since 2.5.0 and Tony uses it, so
     # it is known good. If the simulator cannot deliver that either then the
-    # fault is in this file rather than in the new key, and saying so is the
-    # difference between a bug report and a wild goose chase.
+    # fault is in this file rather than in the key under test, and saying so
+    # is the difference between a bug report and a wild goose chase.
     control = []
     real_control = DropDeckFrame._on_sources
 
     def counted_control(self, event=None):
         control.append(1)
-        return None          # do not open the real window
+        return None
 
     DropDeckFrame._on_sources = counted_control
 
@@ -144,43 +169,46 @@ def main():
             before = layout()
             sim = wx.UIActionSimulator()
 
-            def chord(letter):
-                sim.KeyDown(wx.WXK_ALT)
-                sim.KeyDown(wx.WXK_SHIFT)
+            def chord(keys, key):
+                # Anything an earlier press left held turns this key into a
+                # different key, so everything is released first.
+                for stuck in (wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT):
+                    sim.KeyUp(stuck)
+                pump(150)
+                for mod in keys:
+                    sim.KeyDown(mod)
                 pump(120)
-                sim.Char(ord(letter))
+                sim.Char(ord(key))
                 pump(120)
-                sim.KeyUp(wx.WXK_SHIFT)
-                sim.KeyUp(wx.WXK_ALT)
+                for mod in reversed(keys):
+                    sim.KeyUp(mod)
                 pump(700)
 
-            chord("V")
+            # THE CONTROL, first, and it is a known good key: Alt+Shift+S has
+            # shipped since 2.5.0. If the simulator cannot deliver that, this
+            # file cannot judge anything and says so rather than blaming the
+            # app.
+            chord((wx.WXK_ALT, wx.WXK_SHIFT), "S")
+            if not control:
+                say("%s reaches the app" % shown, None,
+                    "the simulator could not deliver Alt+Shift+S either, "
+                    "which already works, so this run proves nothing")
+                return
+            say("the simulator can deliver a chord at all", bool(control))
 
-            if u32.GetForegroundWindow() != int(frame.GetHandle()) and not opened:
-                say("Alt+Shift+V reaches the app", None,
+            chord(mods, letter)
+            if u32.GetForegroundWindow() != int(frame.GetHandle()) and not fired:
+                say("%s reaches the app" % shown, None,
                     "the foreground moved during the press")
                 return
-            # The control first, so the verdict below can be trusted.
-            chord("S")
-            pump(500)
-            if not control:
-                say("Alt+Shift+V reaches the app", None,
-                    "the simulator could not deliver Alt+Shift+S either, "
-                    "which already works, so this file cannot judge it")
-                return
-            say("the simulator can deliver an Alt+Shift chord at all",
-                bool(control))
-            say("Alt+Shift+V really does open the video sources",
-                bool(opened),
-                ("the command never arrived: Windows ate the key"
-                 if not fired else "the handler ran but opened nothing")
-                if not opened else "")
+            say("%s really does reach %s" % (shown, what), bool(fired),
+                "" if fired else "the command never arrived: Windows ate it")
             say("and Windows did not switch the keyboard layout under it",
                 layout() == before,
                 "layout changed from %s to %s" % (before, layout()))
         finally:
             VideoSourceDialog.ShowModal = real
-            DropDeckFrame._on_video_sources = real_handler
+            setattr(DropDeckFrame, handler_name, real_handler)
             DropDeckFrame._on_sources = real_control
             # Putting somebody's machine back the way it was found.
             restore_foreground_lock(was_lock)

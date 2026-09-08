@@ -17,3 +17,9 @@ pedalboard
 # windows this app never opens. Without it the framing announcements turn
 # themselves off and say so; streaming is unaffected.
 opencv-python-headless
+# Real text on the picture: station name, what is playing, a clock. The only
+# thing in the bundle that can put a glyph on a pixel. cv2 has the Hershey
+# stroke fonts and nothing else, numpy has no rasteriser, and the FFmpeg PyAV
+# ships was built with no libfreetype, so drawtext is not there either.
+# Measured 8 September 2026. About 3 MB once _avif is excluded at build time.
+Pillow

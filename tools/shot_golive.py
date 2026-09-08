@@ -29,8 +29,8 @@ import wx
 from dropdeck import constants as C
 from dropdeck import preflight
 from dropdeck.board import Board
-from dropdeck.dialogs import (GoLiveDialog, SourceControlDialog,
-                              VideoSourceDialog)
+from dropdeck.dialogs import (GoLiveDialog, ScreenTextDialog,
+                              SourceControlDialog, VideoSourceDialog)
 from dropdeck.ui import DropDeckFrame
 from shot_settings import capture, OUT
 
@@ -100,12 +100,22 @@ def main():
     board.picture = C.PICTURE_SPLIT
     board.camera = "HP HD Camera"
     board.stream_mic = False        # so the warnings box is really there
+    board.text_places[C.PLACE_LOWER] = {"kind": C.TEXT_STATION, "words": "",
+                                        "file": ""}
+    board.text_places[C.PLACE_CLOCK] = {"kind": C.TEXT_TIME, "words": "",
+                                        "file": ""}
+    board.text_places[C.PLACE_TOP] = {"kind": C.TEXT_WORDS,
+                                      "words": "The Tony Gebhard Show",
+                                      "file": ""}
 
     settings = dict(frame._stream_settings())
     settings["password"] = ""       # and so the Put it right button is
     report = preflight.check(settings, board)
 
     for title, build, name in (
+            ("Screen text",
+             lambda: ScreenTextDialog(frame, board, live=True),
+             "screen-text.png"),
             ("Source control",
              lambda: SourceControlDialog(frame), "source-control.png"),
             ("Go live", lambda: GoLiveDialog(frame, report), "go-live.png"),

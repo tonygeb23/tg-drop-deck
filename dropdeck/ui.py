@@ -22,6 +22,8 @@ from . import constants as C
 from . import dsp
 from . import feedback
 from . import framing
+from . import health
+from . import overlay
 from . import picture
 from . import secrets
 from . import sources
@@ -33,7 +35,7 @@ from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (GoLiveDialog, VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
+from .dialogs import (GoLiveDialog, ScreenTextDialog, VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
@@ -68,6 +70,14 @@ ID_STREAM_HELP = wx.ID_HIGHEST + 412
 #: page, and the platform on the Video streaming page. One id each, because
 #: they are a choice rather than a list, and they sit with the saved locations
 #: under On air, Streaming location.
+#: What sits on top of the picture. Alt+Shift+T, beside Alt+Shift+V for the
+#: picture itself and Alt+Shift+S for the audio sources. T for text.
+ID_SCREEN_TEXT = wx.ID_HIGHEST + 416
+#: And the key that answers what is on screen right now, which is the thing
+#: no other broadcast tool does. Ctrl+Shift+V, beside Ctrl+Shift+F for the
+#: camera and Ctrl+Shift+B for the stream.
+ID_ON_SCREEN = wx.ID_HIGHEST + 417
+
 ID_LIVE_TO_AUDIO = wx.ID_HIGHEST + 414
 ID_LIVE_TO_VIDEO = wx.ID_HIGHEST + 415
 
@@ -1147,6 +1157,16 @@ class DropDeckFrame(wx.Frame):
                    "Source &control..." + chr(9) + "Alt+Ctrl+Shift+S",
                    "Mute, solo, rename or remove a source while you are on "
                    "air")
+        # Alt+N, not the obvious Alt+W: "What the stream is doing" already
+        # holds W on this menu, and tests/test_menus.py treats a menu and
+        # its submenus as one mnemonic namespace.
+        air.Append(ID_ON_SCREEN, "What is o&n screen\tCtrl+Shift+V",
+                   "Everything the audience can see right now: the picture, "
+                   "and anything on top of it")
+        air.Append(ID_SCREEN_TEXT,
+                   "Screen &text..." + chr(9) + "Alt+Shift+T",
+                   "Your station name, what is playing, a clock or your own "
+                   "words, in named places on the picture")
         air.Append(ID_VIDEO_SOURCES,
                    "&Video source..." + chr(9) + "Alt+Shift+V",
                    "What the stream is showing: a card, your artwork, a "
@@ -1263,6 +1283,8 @@ class DropDeckFrame(wx.Frame):
                   id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_video_sources, id=ID_VIDEO_SOURCES)
+        self.Bind(wx.EVT_MENU, self._on_screen_text, id=ID_SCREEN_TEXT)
+        self.Bind(wx.EVT_MENU, self.describe_screen, id=ID_ON_SCREEN)
         self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_AUDIO)
         self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_VIDEO)
         self.Bind(wx.EVT_MENU, self._on_source_control, id=ID_SOURCE_CONTROL)
@@ -1375,6 +1397,13 @@ class DropDeckFrame(wx.Frame):
             # the other half of the show. Deliberately reachable while live.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("V"),
                                 ID_VIDEO_SOURCES),
+            # T for text, in the same family.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("T"),
+                                ID_SCREEN_TEXT),
+            # Ctrl+Shift+V answers what is on screen. It sits with the other
+            # two "tell me" keys rather than with the two "change it" ones.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("V"),
+                                ID_ON_SCREEN),
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_CTRL | wx.ACCEL_SHIFT,
                                 ord("S"), ID_SOURCE_CONTROL),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
@@ -3851,8 +3880,14 @@ class DropDeckFrame(wx.Frame):
         self._sync_air_taps()
 
         self.video_source = self._build_picture(settings)
+        self.overlay = self.build_overlay(settings)
+        # A new watcher per broadcast, so a fault in yesterday's show is not
+        # still being remembered in today's.
+        self.watcher = (health.Watcher(on_say=self._on_picture_trouble)
+                        if self.video_source is not None else None)
         self.streamer = streamout.Streamer(
-            self.air_bus, settings,
+            self.air_bus, settings, overlay_=self.overlay,
+            watcher=self.watcher,
             on_state=self._on_stream_state,
             on_trouble=self._on_stream_trouble,
             video_source=self.video_source)
@@ -3997,6 +4032,10 @@ class DropDeckFrame(wx.Frame):
             streamer.stop()
         self._stop_framing()
         source, self.video_source = getattr(self, "video_source", None), None
+        # The overlay and the health watch belong to one broadcast. Left
+        # behind, the watcher would still be remembering yesterday's fault.
+        self.overlay = None
+        self.watcher = None
         if source is not None:
             # A camera left open after a show is a camera no other program can
             # use, and a light left on in the room.
@@ -4515,6 +4554,107 @@ class DropDeckFrame(wx.Frame):
         if self.board.camera and self.board.camera not in found:
             found = found + [self.board.camera]
         return found
+
+    # ------------------------------------------- what is on the picture --
+    #: There is no show yet, so there is nothing on top of a picture and
+    #: nothing watching one. Set here rather than left to getattr, because
+    #: two keys read them before anything has ever gone live.
+    overlay = None
+    watcher = None
+
+    def build_overlay(self, settings=None):
+        """What goes on top of the picture, from the board.
+
+        Returns None when there is nothing to draw, so the frame path stays
+        exactly as it was for anybody who has not set any of this up.
+        """
+        if not overlay.available():
+            return None
+        if settings is None:
+            settings = self._stream_settings()
+        wanted = {"name": settings.get("name") or self.board.stream_name}
+        anything = False
+        for key, held in (self.board.text_places or {}).items():
+            kind = held.get("kind", C.TEXT_NONE)
+            wanted["text_%s" % key] = kind
+            wanted["text_%s_words" % key] = held.get("words", "")
+            wanted["text_%s_file" % key] = held.get("file", "")
+            if kind != C.TEXT_NONE:
+                anything = True
+        if not anything:
+            return None
+        made = overlay.Overlay(wanted)
+        made.set_title(self._now_playing_title())
+        return made
+
+    def refresh_overlay(self):
+        """Rebuild it and put it on the air, if there is a show running."""
+        self.overlay = self.build_overlay()
+        streamer = getattr(self, "streamer", None)
+        if streamer is not None and self.streaming():
+            try:
+                streamer.set_overlay(self.overlay)
+            except Exception:
+                pass
+        self._update_status()
+
+    def _on_screen_text(self, _event=None):
+        if self.board.live_to != C.LIVE_TO_VIDEO:
+            self.announce_answer(
+                "Ctrl+B is set to go to your radio station, which sends no "
+                "picture. Video streaming is in Preferences")
+            return
+        if not overlay.available():
+            self.announce_answer(overlay.why_unavailable())
+            return
+        with ScreenTextDialog(self, self.board, live=self._showing()) as box:
+            box.ShowModal()
+
+    def describe_screen(self, _event=None):
+        """Ctrl+Shift+V. Everything the audience can see, right now.
+
+        The thing no other broadcast tool does. OBS's preview is a GPU
+        surface with no accessibility tree at all, on any platform, so there
+        is nothing anywhere that will tell the person producing a stream what
+        is currently in it. This does.
+
+        It answers off air as well as on, describing what WOULD go out, for
+        the same reason Ctrl+Shift+F answers off air: a key that only works
+        during a broadcast is a key you cannot practise with.
+        """
+        parts = []
+        showing = self._showing()
+        source = getattr(self, "video_source", None)
+        if showing and source is not None:
+            try:
+                parts.append(source.describe() or "a picture")
+            except Exception:
+                parts.append("a picture")
+        elif self.board.live_to != C.LIVE_TO_VIDEO:
+            self.announce_answer(
+                "Nothing. Ctrl+B is set to go to your radio station, which "
+                "sends no picture")
+            return
+        else:
+            parts.append("%s, once you go live"
+                         % C.PICTURE_LABELS.get(self.board.picture,
+                                                self.board.picture).lower())
+        marks = self.overlay if showing else self.build_overlay()
+        if marks is not None:
+            try:
+                parts.append(marks.describe())
+            except Exception:
+                pass
+        else:
+            parts.append("nothing on top of it")
+        watch = getattr(self, "watcher", None)
+        if showing and watch is not None and watch.state != health.OK:
+            parts.append(watch.describe())
+        self.announce_answer(". ".join(p for p in parts if p))
+
+    def _on_picture_trouble(self, text):
+        """The health watch found something. It runs on the streaming thread."""
+        wx.CallAfter(self.announce, text)
 
     def _on_video_sources(self, _event=None):
         if self.board.live_to != C.LIVE_TO_VIDEO:

@@ -29,8 +29,30 @@ STATION_FIELDS = (
     # station needs them and the Icecast station on the same board does not.
     "video_server", "video_host", "video_key", "live_to",
     "picture", "picture_file", "picture_clock", "camera", "screen",
+    "text_places",
     "video_width", "video_height", "video_fps", "video_bitrate",
 )
+
+
+def _text_places(raw):
+    """What is on top of the picture, whitelisted out of a board file.
+
+    A place whose kind is not one this build knows becomes "nothing" rather
+    than raising, and rather than being carried forward as a string nothing
+    will ever draw. Same rule as every other setting here.
+    """
+    out = {key: {"kind": C.TEXT_NONE, "words": "", "file": ""}
+           for key in C.PLACES_ORDER}
+    if not isinstance(raw, dict):
+        return out
+    for key, spot in raw.items():
+        if key not in out or not isinstance(spot, dict):
+            continue
+        kind = spot.get("kind")
+        out[key]["kind"] = kind if kind in C.TEXT_KINDS else C.TEXT_NONE
+        out[key]["words"] = str(spot.get("words") or "")[:200]
+        out[key]["file"] = str(spot.get("file") or "")
+    return out
 
 
 def _video_number(value, fallback, low, high):
@@ -281,6 +303,13 @@ class Board:
         #: Which screen goes out when the picture is the screen. Not a
         #: monitor number: see C.SCREEN_CHOICES for why.
         self.screen = C.SCREEN_ALL
+
+        #: What sits on top of the picture. One entry per named place: what
+        #: it is showing, the words when that is "my own words", and the file
+        #: when it is "a text file". Four places and no coordinates anywhere,
+        #: which is the whole design: see dropdeck/overlay.py.
+        self.text_places = {key: {"kind": C.TEXT_NONE, "words": "", "file": ""}
+                            for key in C.PLACES_ORDER}
         self.video_width = C.RTMP_WIDTH
         self.video_height = C.RTMP_HEIGHT
         self.video_fps = C.RTMP_FPS
@@ -594,6 +623,7 @@ class Board:
             "picture_clock": bool(self.picture_clock),
             "camera": self.camera,
             "screen": self.screen,
+            "text_places": {k: dict(v) for k, v in self.text_places.items()},
             "video_width": int(self.video_width),
             "video_height": int(self.video_height),
             "video_fps": int(self.video_fps),
@@ -720,6 +750,7 @@ class Board:
         board.camera = data.get("camera") or ""
         screen = data.get("screen")
         board.screen = screen if screen in C.SCREEN_CHOICES else C.SCREEN_ALL
+        board.text_places = _text_places(data.get("text_places"))
         board.video_width = _video_number(data.get("video_width"),
                                           C.RTMP_WIDTH, 160, 3840)
         board.video_height = _video_number(data.get("video_height"),

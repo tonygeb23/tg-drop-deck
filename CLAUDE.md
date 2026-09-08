@@ -232,6 +232,29 @@ And specific to this one:
   settings snapshot and would otherwise put the picture back to whatever it
   was at `Ctrl+B`. **The new source goes on the air before the old one is
   closed**, or a camera's half second to first frame is half a second of card.
+- **Named places, never a canvas.** `overlay.py` offers four fixed spots that
+  cannot overlap, and there is no way to put something at an arbitrary
+  position. That is not a shortcut, it is the feature: the research in
+  `docs/VISUALS-PLAN.md` could not find one account, anywhere, of a blind
+  person laying out a stream independently, because every tool offers a
+  canvas and a canvas cannot be checked without looking. Four places can be,
+  because "what is on screen" is four lines long and `Ctrl+Shift+V` reads it
+  out. **`tests/test_visuals.py` asserts they do not overlap at four
+  different frame sizes.** Adding a fifth place means proving the same.
+- **Three measurements hold the overlay up, and each is one line from being
+  undone.** Render a tile only when its text changes (about 2 ms, against
+  redrawing 30 times a second for nothing); blend the tile's RECTANGLE, not
+  the frame (about 2 ms against 30 ms, which is the whole budget); and use
+  integer maths (float is 42 ms). All three have a check. The end to end
+  proof is `tools/check_switching.py`, which now carries the overlay: 3 tiles
+  drawn over 900 frames, and the overlay costs 0.2 ms on the streaming
+  thread because it is cached.
+- **A DESTINATIONS factory stand-in must take `**kw`.** `destination_for`
+  gained `video_source` in 3.4.0 and an overlay and a health watcher in
+  3.5.0, and each time a test double with a fixed signature failed to
+  construct. The failure does not look like a signature error: the stream
+  reports "failed" and the test looks like a broken feature. Two debugging
+  sessions have gone on this. Take `**kw` from the start.
 - **`Image.alpha_composite` holds the GIL and `Image.paste` does not.**
   Measured 8 September 2026 against a simulated 10 ms audio wake-up: with
   `alpha_composite` on a render thread the audio thread was late by up to
@@ -321,6 +344,8 @@ dropdeck/
   appicon.py     the drawn mark, and the .ico the build stamps in
   preflight.py   what Ctrl+B is about to do, and what is wrong with it
   screen.py      the desktop as a picture source, and the camera in its corner
+  overlay.py     four named places on top of the picture, and what is in them
+  health.py      noticing the picture has gone black or frozen, and saying so
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs

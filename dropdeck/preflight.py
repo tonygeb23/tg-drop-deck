@@ -182,6 +182,70 @@ def _check_picture(settings, notes, screen_ready=True, screen_reason=""):
                           C.FIX_VIDEO))
 
 
+def _check_screen_text(settings, board, notes):
+    """Whether anything on top of the picture would be cut off.
+
+    Answerable now, and only now: once you are on the air the only way to
+    find out is somebody watching telling you. The place has a known width
+    and the text has a measurable one, so "that will not fit" is arithmetic
+    rather than an opinion.
+    """
+    places = getattr(board, "text_places", None)
+    if not places:
+        return
+    try:
+        from . import overlay
+    except Exception:
+        return
+    if not overlay.available():
+        return
+    width = settings.get("video_width", C.RTMP_WIDTH)
+    height = settings.get("video_height", C.RTMP_HEIGHT)
+    for key in C.PLACES_ORDER:
+        held = places.get(key) or {}
+        kind = held.get("kind", C.TEXT_NONE)
+        if kind == C.TEXT_NONE:
+            continue
+        if kind == C.TEXT_WORDS:
+            words = held.get("words", "")
+            if not words:
+                notes.append(Note(WARN, "The %s is set to your own words and "
+                                        "there are none yet, so it would be "
+                                        "empty" % overlay.place_label(key).lower(),
+                                  C.FIX_VIDEO))
+                continue
+        elif kind == C.TEXT_FILE:
+            path = held.get("file", "")
+            if not path:
+                notes.append(Note(WARN, "The %s is set to read a file and none "
+                                        "is chosen, so it would be empty"
+                                  % overlay.place_label(key).lower(),
+                                  C.FIX_VIDEO))
+                continue
+            if not os.path.isfile(path):
+                notes.append(Note(WARN, "The file the %s reads is not there any "
+                                        "more, so it would be empty"
+                                  % overlay.place_label(key).lower(),
+                                  C.FIX_VIDEO))
+                continue
+            words = ""
+        elif kind == C.TEXT_STATION:
+            words = settings.get("name") or ""
+            if not words:
+                notes.append(Note(WARN, "The %s shows your station name and "
+                                        "there is not one set"
+                                  % overlay.place_label(key).lower(),
+                                  C.FIX_AUDIO))
+                continue
+        else:
+            continue
+        if words and not overlay.fits(words, key, width, height):
+            notes.append(Note(WARN, "%s is too long for the %s and would be "
+                                    "cut short" % (words,
+                                                   overlay.place_label(key).lower()),
+                              C.FIX_VIDEO))
+
+
 def check(settings, board, audio_running=True, mic_open=False,
           screen_ready=True, screen_reason=""):
     """Work out what Ctrl+B would do with these settings.
@@ -247,6 +311,7 @@ def check(settings, board, audio_running=True, mic_open=False,
                                 "nothing to send", C.FIX_AUDIO))
     if video:
         _check_picture(settings, notes, screen_ready, screen_reason)
+        _check_screen_text(settings, board, notes)
         advice = streamout.bitrate_advice(
             server, settings.get("video_width", C.RTMP_WIDTH),
             settings.get("video_height", C.RTMP_HEIGHT),

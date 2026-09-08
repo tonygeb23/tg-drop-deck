@@ -229,6 +229,73 @@ class CardSource(PictureSource):
             return canvas
 
     def _draw(self, width, height, name, title):
+        drawn = self._draw_real(width, height, name, title)
+        if drawn is not None:
+            return drawn
+        return self._draw_blocks(width, height, name, title)
+
+    def _draw_real(self, width, height, name, title):
+        """The card in a real typeface. None when Pillow is not here.
+
+        Laid out from the same measurements as the blocky one so the card
+        somebody has been broadcasting for months does not jump about: name
+        centred above the middle, a rule under it, the title under that, and
+        the clock in the top right corner.
+        """
+        try:
+            from . import overlay
+        except Exception:
+            return None
+        if not overlay.available():
+            return None
+        try:
+            from PIL import Image, ImageDraw
+        except Exception:
+            return None
+        try:
+            card = Image.new("RGB", (width, height), tuple(self.background))
+            pen = ImageDraw.Draw(card)
+            margin = max(8, width // 16)
+            room = width - margin * 2
+
+            big = overlay.font(max(14, int(height * 0.115)), bold=True)
+            small = overlay.font(max(11, int(height * 0.070)), bold=False)
+            if big is None or small is None:
+                return None
+
+            shown = _shorten_real(pen, name, big, room)
+            box = pen.textbbox((0, 0), shown, font=big)
+            name_y = height // 2 - (box[3] - box[1])
+            pen.text(((width - (box[2] - box[0])) // 2 - box[0], name_y),
+                     shown, font=big, fill=tuple(self.foreground))
+
+            # box[3], not box[3] - box[1]. textbbox is measured from the
+            # drawing origin, so the INK ends at name_y + box[3]; using the
+            # height instead put the rule through the middle of the name,
+            # which is exactly where a descender lives.
+            rule_y = name_y + box[3] + max(6, height // 50)
+            rule_h = max(2, height // 240)
+            pen.rectangle([margin, rule_y, width - margin, rule_y + rule_h],
+                          fill=tuple(self.accent))
+
+            if title:
+                shown = _shorten_real(pen, title, small, room)
+                tbox = pen.textbbox((0, 0), shown, font=small)
+                pen.text(((width - (tbox[2] - tbox[0])) // 2 - tbox[0],
+                          rule_y + rule_h + max(8, height // 40)),
+                         shown, font=small, fill=tuple(self.accent))
+
+            if self.clock:
+                stamp = time.strftime("%H:%M")
+                cbox = pen.textbbox((0, 0), stamp, font=small)
+                pen.text((width - margin - (cbox[2] - cbox[0]) - cbox[0],
+                          margin), stamp, font=small, fill=tuple(self.accent))
+            return np.asarray(card, dtype=np.uint8)
+        except Exception:
+            # Anything at all goes wrong and the blocky card still works.
+            return None
+
+    def _draw_blocks(self, width, height, name, title):
         canvas = np.empty((height, width, 3), dtype=np.uint8)
         canvas[:, :] = np.asarray(self.background, dtype=np.uint8)
 
@@ -438,6 +505,16 @@ class FallbackSource(PictureSource):
                 source.close()
             except Exception:
                 pass
+
+
+def _shorten_real(pen, text, face, room):
+    """The text, with an ellipsis when it will not fit. Real glyph widths."""
+    if pen.textlength(text, font=face) <= room:
+        return text
+    cut = text
+    while cut and pen.textlength(cut + "...", font=face) > room:
+        cut = cut[:-1]
+    return (cut + "...") if cut else "..."
 
 
 def build(settings, on_fallback=None):

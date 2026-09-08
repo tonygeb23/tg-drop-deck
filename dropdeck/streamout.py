@@ -749,7 +749,10 @@ class IcecastDestination(Destination):
     puts its own sink in `SERVERS` still works, which is the point.
     """
 
-    def __init__(self, settings, bus_samplerate):
+    def __init__(self, settings, bus_samplerate, video_source=None,
+                 overlay_=None, watcher=None):
+        # A radio stream has no picture, so the three video arguments are
+        # accepted and dropped. destination_for stays one call for both.
         self.settings = dict(settings)
         self.bus_samplerate = int(bus_samplerate)
         self.encoder = None
@@ -933,13 +936,20 @@ class RtmpDestination(Destination):
     #: or two frames each time round and they leave evenly.
     chunk_seconds = 1.0 / C.RTMP_FPS
 
-    def __init__(self, settings, bus_samplerate, video_source=None):
+    def __init__(self, settings, bus_samplerate, video_source=None,
+                 overlay_=None, watcher=None):
         if av is None:
             raise EncoderError(
                 "the encoder is missing, so this copy cannot stream")
         self.settings = dict(settings)
         self.bus_samplerate = int(bus_samplerate)
         self.video_source = video_source
+        #: What goes ON TOP of whatever the source produced, and the watch
+        #: that notices the whole thing has stopped being a picture. Both are
+        #: swappable while live for the same reason the source is: they are
+        #: read into a local before use and neither touches the encoder.
+        self.overlay = overlay_
+        self.watcher = watcher
         # The rate the bus is really at. It used to be hard wired to 44100,
         # which quietly resampled every block of a 48k show for no reason, on
         # the thread that is also carrying the audio.
@@ -1125,6 +1135,14 @@ class RtmpDestination(Destination):
             for packet in self._video.encode(frame):
                 self._mux(packet)
 
+    def set_overlay(self, overlay_):
+        """Change what is on top of the picture, mid stream.
+
+        Safe for exactly the reasons in set_video_source: one attribute, read
+        into a local before use, and nothing about the encoder moves.
+        """
+        self.overlay = overlay_
+
     def set_video_source(self, source):
         """Point the encoder at a different picture, mid stream.
 
@@ -1151,16 +1169,38 @@ class RtmpDestination(Destination):
         self.video_source = source
 
     def _picture(self):
-        """The next picture, or black when there is no source yet."""
+        """The next picture, with anything that goes on top of it.
+
+        The order is the whole of it: the source draws, then the overlay
+        draws over the top, then the watcher looks at the result. The watcher
+        looks LAST on purpose, because what it is asked to notice is whether
+        the viewer is seeing anything, and the viewer sees the composite.
+        """
         source = self.video_source
-        if source is None:
-            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        try:
-            return source.frame(self.width, self.height)
-        except Exception:
-            # A picture source that throws must not take the stream down. The
-            # show carries on with the last thing that worked, or with black.
-            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        picture = None
+        if source is not None:
+            try:
+                picture = source.frame(self.width, self.height)
+            except Exception:
+                # A picture source that throws must not take the stream down.
+                picture = None
+        if picture is None and source is not None:
+            return None
+        if picture is None:
+            picture = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        marks = self.overlay
+        if marks is not None:
+            try:
+                picture = marks.draw_on(picture)
+            except Exception:
+                pass
+        watch = self.watcher
+        if watch is not None:
+            try:
+                watch.look(picture, moving=_moving(source))
+            except Exception:
+                pass
+        return picture
 
     def _mux(self, packet):
         # PyAV owns the socket here, so there is no write to count. The size
@@ -1416,13 +1456,26 @@ def is_rtmp(key):
     return key in DESTINATIONS
 
 
-def destination_for(settings, bus_samplerate, video_source=None):
+def _moving(source):
+    """Whether this source is SUPPOSED to be moving.
+
+    A card and a still image are legitimately frozen, so calling them frozen
+    would be an announcement on the app's own default picture, for ever. Only
+    a live source can be stuck.
+    """
+    kind = getattr(source, "kind", "")
+    return kind in (C.PICTURE_CAMERA, C.PICTURE_SCREEN, C.PICTURE_SPLIT)
+
+
+def destination_for(settings, bus_samplerate, video_source=None,
+                    overlay_=None, watcher=None):
     """The right destination for what the user picked."""
     kind = settings.get("server", "icecast")
     factory = DESTINATIONS.get(kind)
     if factory is None:
         return IcecastDestination(settings, bus_samplerate)
-    return factory(settings, bus_samplerate, video_source=video_source)
+    return factory(settings, bus_samplerate, video_source=video_source,
+                   overlay_=overlay_, watcher=watcher)
 
 
 # ---------------------------------------------------------------------------
@@ -1458,13 +1511,19 @@ class Streamer:
     """
 
     def __init__(self, bus, settings, on_state=None, on_title=None,
-                 on_trouble=None, video_source=None):
+                 on_trouble=None, video_source=None, overlay_=None,
+                 watcher=None):
         self.bus = bus
         self.settings = dict(settings)
         #: What goes on the screen, for a destination that needs a picture.
         #: Built by the caller, because the card wants the station name and
         #: a camera wants a device, and neither is this class's business.
         self.video_source = video_source
+        #: Held here as well as handed on, exactly like video_source: _build
+        #: reads these when it rebuilds after a drop, so an overlay changed
+        #: mid show survives the reconnect instead of reverting.
+        self.overlay = overlay_
+        self.watcher = watcher
         self.on_state = on_state or (lambda state, detail: None)
         self.state = OFF
         self.detail = ""
@@ -1550,6 +1609,19 @@ class Streamer:
         return time.monotonic() - self.started_at
 
     # ------------------------------------------------------------ pictures --
+    def set_overlay(self, overlay_):
+        """Change what is on top of the picture, on air or off."""
+        self.overlay = overlay_
+        destination = self._destination
+        setter = getattr(destination, "set_overlay", None)
+        if setter is None:
+            return False
+        try:
+            setter(overlay_)
+        except Exception:
+            return False
+        return True
+
     def set_video_source(self, source):
         """Change what the stream is showing, on air or off.
 
@@ -1591,8 +1663,13 @@ class Streamer:
         """
         with self._lock:
             self._title = title or ""
-        setter = getattr(self.video_source, "set_title", None)
-        if setter is not None:
+        # Both of them. The card is one place a viewer can read what is on;
+        # a "What is playing" overlay is the other, and a title that reached
+        # only one of them would leave the other frozen on the last song.
+        for holder in (self.video_source, self.overlay):
+            setter = getattr(holder, "set_title", None)
+            if setter is None:
+                continue
             try:
                 setter(title or "")
             except Exception:
@@ -1627,7 +1704,9 @@ class Streamer:
     def _build(self):
         """Make the destination. Raises with a sayable reason."""
         destination = destination_for(self.settings, self.bus.samplerate,
-                                      video_source=self.video_source)
+                                      video_source=self.video_source,
+                                      overlay_=self.overlay,
+                                      watcher=self.watcher)
         destination.connect()
         self._destination = destination
         self._resampler = _Resampler(self.bus.samplerate,

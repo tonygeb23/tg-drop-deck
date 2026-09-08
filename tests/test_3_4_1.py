@@ -300,11 +300,20 @@ if screen.available():
     # No new dependency, and that is a promise worth a check rather than a
     # comment: the installer is already 60 MB and every wheel added to it is
     # another thing to go missing in a frozen build.
-    text = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "requirements.txt"), encoding="utf-8").read()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = open(os.path.join(root, "requirements.txt"), encoding="utf-8").read()
     check("no capture library was added to do it",
           not any(name in text for name in ("mss", "dxcam", "d3dshot",
-                                            "pyautogui", "Pillow")), text)
+                                            "pyautogui")), text)
+    # Pillow arrived in 3.5.0 and is NOT a capture library, it is a text
+    # renderer: the claim this check protects is that grabbing the screen
+    # costs no dependency, and the proof of that is what screen.py imports.
+    grabber = open(os.path.join(root, "dropdeck", "screen.py"),
+                   encoding="utf-8").read()
+    check("and the screen is still grabbed with nothing but ctypes",
+          "import ctypes" in grabber
+          and not any(("import %s" % n) in grabber
+                      for n in ("mss", "dxcam", "PIL", "cv2")))
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +596,12 @@ class Remembering:
 
     chunk_seconds = 1.0 / 30
 
-    def __init__(self, settings, samplerate, video_source=None):
+    # **kw, because destination_for keeps growing: video_source in 3.4.0,
+    # then an overlay and a health watcher in 3.5.0. A stand in registered in
+    # DESTINATIONS has to take whatever the real factories take, or it fails
+    # to construct and the failure looks like the stream refusing to connect.
+    # That has now cost two debugging sessions; take **kw from the start.
+    def __init__(self, settings, samplerate, video_source=None, **kw):
         built.append(video_source)
         self.video_source = video_source
 

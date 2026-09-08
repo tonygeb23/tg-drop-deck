@@ -23,6 +23,7 @@ from . import feedback
 from . import dsp
 from . import camera
 from . import framing
+from . import overlay
 from . import preflight
 from . import proccapture
 from . import screen
@@ -4668,3 +4669,210 @@ class VideoSourceDialog(wx.Dialog):
         self.refresh()
         if said:
             self.doing.SetLabel(said)
+
+
+class ScreenTextDialog(wx.Dialog):
+    """What sits on top of the picture, and where. Alt+Shift+T.
+
+    Four named places, and for each one a choice of what it shows. There are
+    no coordinates on this window and there is no canvas, and that is the
+    design rather than a shortcut: the research behind docs/VISUALS-PLAN.md
+    could not find a single account of a blind person laying out a stream
+    independently, because every tool offers a canvas and a canvas is exactly
+    what cannot be checked without looking. Four places that cannot overlap
+    can be checked, because the answer to "what is on screen" is four lines
+    long and the app can read it out.
+
+    Same shape as the video source list next door: up and down read the
+    places, Enter chooses what goes in one.
+    """
+
+    def __init__(self, parent, board, live=False):
+        super().__init__(parent, title="Screen text",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = parent
+        self.board = board
+        self.live = bool(live)
+        self.changed = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label=("Up and down read the places. Enter chooses what "
+                         "goes in one. It changes while you are on air."
+                         if live else
+                         "Up and down read the places. Enter chooses what "
+                         "goes in one."))
+        note.Wrap(self.FromDIP(580))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Places on the picture"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(600, 170))
+        self.list.SetName("Places on the picture")
+        # The place name is column 0, because that is what first letter
+        # navigation searches. Same rule as the running order.
+        self.list.InsertColumn(0, "Place", width=130)
+        self.list.InsertColumn(1, "Where", width=110)
+        self.list.InsertColumn(2, "Showing", width=160)
+        self.list.InsertColumn(3, "Which is", width=190)
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _e: self._choose())
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _e: self._describe())
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.change = wx.Button(self, label="C&hange...")
+        self.change.Bind(wx.EVT_BUTTON, lambda _e: self._choose())
+        row.Add(self.change, 0, wx.RIGHT, 8)
+        self.clear = wx.Button(self, label="Emp&ty it")
+        self.clear.Bind(wx.EVT_BUTTON, lambda _e: self._empty())
+        row.Add(self.clear, 0)
+        row.AddStretchSpacer()
+        close = wx.Button(self, wx.ID_CANCEL, "&Close")
+        row.Add(close, 0)
+        outer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.refresh(0)
+        self.list.SetFocus()
+
+    # --------------------------------------------------------------- rows --
+    def refresh(self, keep=None):
+        if keep is None:
+            keep = max(0, self.list.GetFirstSelected())
+        self.list.DeleteAllItems()
+        for at, spot in enumerate(overlay.PLACES):
+            held = self.board.text_places.get(spot.key, {})
+            kind = held.get("kind", C.TEXT_NONE)
+            self.list.InsertItem(at, spot.label)
+            self.list.SetItem(at, 1, spot.describe_where().rstrip(","))
+            self.list.SetItem(at, 2, C.TEXT_LABELS.get(kind, kind))
+            self.list.SetItem(at, 3, self._detail(spot.key, kind))
+        if self.list.GetItemCount():
+            keep = max(0, min(keep, self.list.GetItemCount() - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+        self._describe()
+
+    def _detail(self, key, kind):
+        """The third column: what this place would actually be saying."""
+        held = self.board.text_places.get(key, {})
+        if kind == C.TEXT_WORDS:
+            return held.get("words", "") or "nothing typed yet"
+        if kind == C.TEXT_FILE:
+            path = held.get("file", "")
+            return os.path.basename(path) if path else "no file chosen yet"
+        if kind == C.TEXT_STATION:
+            return self.board.stream_name or "no station name set"
+        if kind == C.TEXT_PLAYING:
+            return self.frame._now_playing_title() or "nothing playing"
+        if kind == C.TEXT_TIME:
+            return time.strftime(C.OVERLAY_CLOCK_FORMAT)
+        return ""
+
+    def _selected(self):
+        at = self.list.GetFirstSelected()
+        return overlay.PLACES[at] if 0 <= at < len(overlay.PLACES) else None
+
+    def _describe(self):
+        spot = self._selected()
+        if spot is None:
+            self.doing.SetLabel("")
+            return
+        kind = self.board.text_places.get(spot.key, {}).get("kind", C.TEXT_NONE)
+        said = "%s %s. %s" % (spot.describe_where().capitalize(),
+                              spot.label.lower(),
+                              C.TEXT_DESCRIPTIONS.get(kind, ""))
+        self.change.Enable(True)
+        self.clear.Enable(kind != C.TEXT_NONE)
+        self.doing.SetLabel(said)
+        self.doing.Wrap(self.FromDIP(600))
+
+    # ---------------------------------------------------------------- keys --
+    def _on_key(self, event):
+        code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE):
+            self._choose()
+            return
+        if code in (wx.WXK_DELETE, wx.WXK_NUMPAD_DELETE):
+            self._empty()
+            return
+        event.Skip()
+
+    # ------------------------------------------------------------- editing --
+    def _choose(self):
+        spot = self._selected()
+        if spot is None:
+            return
+        kinds = list(C.TEXT_KINDS)
+        labels = [C.TEXT_LABELS[k] for k in kinds]
+        held = self.board.text_places.get(spot.key, {})
+        now = held.get("kind", C.TEXT_NONE)
+        with wx.SingleChoiceDialog(
+                self, "What should the %s show?" % spot.label.lower(),
+                "%s" % spot.label, labels) as box:
+            box.SetSelection(kinds.index(now) if now in kinds else 0)
+            if box.ShowModal() != wx.ID_OK:
+                self._speak("Left as %s" % C.TEXT_LABELS.get(now, now).lower())
+                return
+            want = kinds[box.GetSelection()]
+        if want == C.TEXT_WORDS:
+            with ask_text(self, "What should it say?", spot.label,
+                          held.get("words", "")) as box:
+                if box.ShowModal() != wx.ID_OK:
+                    return
+                held["words"] = box.GetValue().strip()
+        elif want == C.TEXT_FILE:
+            with wx.FileDialog(
+                    self, "Which text file?", wildcard="Text files (*.txt)|*.txt|"
+                    "Every file|*.*",
+                    style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as box:
+                if held.get("file"):
+                    box.SetPath(held["file"])
+                if box.ShowModal() != wx.ID_OK:
+                    return
+                held["file"] = box.GetPath()
+        held["kind"] = want
+        self.board.text_places[spot.key] = held
+        self.changed = True
+        self._apply()
+        at = self.list.GetFirstSelected()
+        self.refresh(at)
+        self.list.SetFocus()
+        self._speak("%s now shows %s"
+                    % (spot.label, C.TEXT_LABELS.get(want, want).lower()))
+
+    def _empty(self):
+        spot = self._selected()
+        if spot is None:
+            return
+        held = self.board.text_places.get(spot.key, {})
+        if held.get("kind", C.TEXT_NONE) == C.TEXT_NONE:
+            return
+        held["kind"] = C.TEXT_NONE
+        self.board.text_places[spot.key] = held
+        self.changed = True
+        self._apply()
+        at = self.list.GetFirstSelected()
+        self.refresh(at)
+        self.list.SetFocus()
+        self._speak("%s is empty now" % spot.label)
+
+    def _apply(self):
+        """Push it at the show, live if there is one."""
+        self.frame._touch()
+        try:
+            self.frame.refresh_overlay()
+        except Exception:
+            pass
+
+    def _speak(self, text):
+        speaker = getattr(self.frame, "announce", None)
+        if speaker is not None:
+            speaker(text)

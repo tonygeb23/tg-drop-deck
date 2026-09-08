@@ -47,6 +47,9 @@ ICON = os.path.join(HERE, "assets", "dropdeck.ico")
 #: the folder framing.model_path builds from sys._MEIPASS.
 MODEL_DIR = os.path.join(HERE, "assets", "models")
 MODEL_DATA = os.path.join(MODEL_DIR, C.FACE_MODEL_FILE) + os.pathsep     + os.path.join("assets", "models")
+
+FONT_DIR = os.path.join(HERE, "assets", "fonts")
+FONT_DATA = FONT_DIR + os.pathsep + "fonts"
 INSTALLER_OUT = os.path.join(BUILD_ROOT, "installer")
 
 ISCC_CANDIDATES = [
@@ -148,10 +151,19 @@ def build_executable():
         # the framing announcements turn themselves off and say why, so a
         # build that misses this LOOKS fine and quietly loses a feature.
         "--collect-all", "cv2",
+        # Pillow, for text on the picture. Its native _imagingft is
+        # what carries FreeType, so a bundle that misses it renders
+        # nothing and says nothing about why.
+        "--collect-all", "PIL",
         # The face detection model, at the path framing.model_path expects.
         # It is inside the bundle rather than beside it, unlike the demo
         # pack: nobody has any reason to replace it.
         "--add-data", MODEL_DATA,
+        # The two faces, inside the bundle at "fonts", which is where
+        # overlay._font_dir looks. Bundled rather than taken from
+        # Windows so a card looks the same everywhere, and because
+        # the digits have to be tabular or the clock jitters.
+        "--add-data", FONT_DATA,
         # Only the tools need these. Leaving them out saves about 60 MB.
         "--exclude-module", "scipy",
         "--exclude-module", "matplotlib",
@@ -173,7 +185,8 @@ def build_executable():
 #: the version they are RUNNING, and 3.3.x carries a 120 MB one. A zip above
 #: that could not update itself, and the fix cannot reach somebody who has
 #: not had it yet.
-UNUSED_IN_BUNDLE = ("opencv_videoio_ffmpeg",)
+# AVIF is 7.8 MB of Pillow and nothing here reads or writes one.
+UNUSED_IN_BUNDLE = ("opencv_videoio_ffmpeg", "_avif")
 
 
 def strip_unused():

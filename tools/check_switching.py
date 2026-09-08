@@ -51,7 +51,7 @@ os.environ.setdefault("APPDATA", tempfile.mkdtemp(prefix="dd-switch-"))
 import numpy as np
 
 from dropdeck import constants as C
-from dropdeck import picture, screen
+from dropdeck import health, overlay, picture, screen
 from dropdeck.engine import CHANNELS
 from dropdeck.streamout import RtmpDestination
 from mock_rtmp import MockRTMP
@@ -142,12 +142,21 @@ def main(seconds=20.0):
     # longer run outlives it and the publish dies with a connection reset that
     # looks exactly like a real network fault. It is not one.
     with MockRTMP.spawn(seconds=seconds + 15) as server:
+        # The overlay and the health watch ride along, because on a real
+        # show they will, and the question this file exists to answer is
+        # what the WHOLE thing costs on the thread carrying the audio.
+        marks = overlay.Overlay({
+            "name": "Blindside Radio",
+            "text_%s" % C.PLACE_LOWER: C.TEXT_STATION,
+            "text_%s" % C.PLACE_CLOCK: C.TEXT_TIME,
+        }) if overlay.available() else None
+        watcher = health.Watcher()
         destination = RtmpDestination(
             {"server": "rtmp", "host": server.url.rsplit("/", 1)[0],
              "password": server.url.rsplit("/", 1)[1], "bitrate": 128,
              "video_width": WIDTH, "video_height": HEIGHT, "video_fps": FPS,
              "video_bitrate": 1200},
-            RATE, video_source=plan[0])
+            RATE, video_source=plan[0], overlay_=marks, watcher=watcher)
         destination.connect()
 
         block = int(RATE * destination.chunk_seconds)
@@ -181,6 +190,18 @@ def main(seconds=20.0):
         live_screen.close()
 
     result = server.result()
+    say("the overlay was on the picture the whole way",
+        marks is None or marks.renders > 0,
+        "not attached" if marks is None else "%d tiles drawn" % marks.renders)
+    say("and it drew each tile once, not once a frame",
+        marks is None or marks.renders <= 4,
+        "" if marks is None else "%d renders over %d frames"
+        % (marks.renders, int(seconds * FPS)))
+    say("the health watch looked at every frame that went out",
+        watcher.frames > seconds * FPS * 0.9, "%d looks" % watcher.frames)
+    say("and never once cried wolf on a good picture",
+        watcher.state == "ok", watcher.describe())
+
     say("the connection survived every switch",
         result.publishing and not result.error, result.error or "no errors")
     say("every switch happened while it was live", len(swaps) == len(plan) - 1,

@@ -1283,7 +1283,11 @@ class _Wedges(streamout.Destination):
         self.released.set()
 
 
-streamout.DESTINATIONS["zzwedge"] = lambda s, r, video_source=None: _Wedges()
+# **kw, because destination_for grew an overlay and a health watcher in
+# 3.5.0. A stand in registered here has to take whatever the real
+# factories take, or it fails to construct and the stream reports
+# "failed" instead of exercising the wedge this test is about.
+streamout.DESTINATIONS["zzwedge"] = lambda s, r, **kw: _Wedges()
 try:
     _said = []
     _states = []

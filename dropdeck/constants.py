@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.4.3"
+APP_VERSION = "3.5.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -991,6 +991,116 @@ PICTURE_DESCRIPTIONS = {
 PICTURE_NEEDS_CAMERA = (PICTURE_CAMERA, PICTURE_SPLIT)
 PICTURE_NEEDS_SCREEN = (PICTURE_SCREEN, PICTURE_SPLIT)
 
+
+# ---------------------------------------------------------------------------
+# Things on top of the picture
+# ---------------------------------------------------------------------------
+
+#: The four named places. Deliberately few, and deliberately unable to
+#: overlap: two things in one spot is the confusion that not being able to
+#: look at the screen makes unrecoverable. See dropdeck/overlay.py.
+PLACE_TOP = "top"
+PLACE_CORNER = "corner"
+PLACE_LOWER = "lower"
+PLACE_CLOCK = "clock"
+PLACES_ORDER = (PLACE_TOP, PLACE_CORNER, PLACE_LOWER, PLACE_CLOCK)
+
+#: Said before the name when describing a place, so "top left lower third"
+#: never happens and somebody can picture it.
+PLACE_WHERE = {
+    PLACE_TOP: "across the top,",
+    PLACE_CORNER: "top right,",
+    PLACE_LOWER: "bottom left,",
+    PLACE_CLOCK: "bottom right,",
+}
+
+#: What a place can be showing.
+TEXT_NONE = "none"
+TEXT_STATION = "station"
+TEXT_PLAYING = "playing"
+TEXT_TIME = "time"
+TEXT_WORDS = "words"
+TEXT_FILE = "file"
+TEXT_KINDS = (TEXT_NONE, TEXT_STATION, TEXT_PLAYING, TEXT_TIME, TEXT_WORDS,
+              TEXT_FILE)
+
+TEXT_LABELS = {
+    TEXT_NONE: "Nothing",
+    TEXT_STATION: "My station name",
+    TEXT_PLAYING: "What is playing",
+    TEXT_TIME: "The time",
+    TEXT_WORDS: "My own words",
+    TEXT_FILE: "A text file",
+}
+
+TEXT_DESCRIPTIONS = {
+    TEXT_NONE: "This place stays empty.",
+    TEXT_STATION: "The station name from your streaming settings.",
+    TEXT_PLAYING: ("Whatever the running order is playing, changing as it "
+                   "does."),
+    TEXT_TIME: "A clock. The digits do not wobble, the font is chosen for it.",
+    TEXT_WORDS: "Something you type here, and it stays until you change it.",
+    TEXT_FILE: ("A text file, re-read a second after it changes. Any other "
+                "program that writes a text file can drive this."),
+}
+
+#: The panel behind the words, and the words. Dark with a light face, high
+#: contrast, because a stream sits in a dark player and somebody sighted is
+#: reading it on a phone. The same reasoning as the card.
+OVERLAY_BACKGROUND = (14, 18, 28)
+OVERLAY_FOREGROUND = (240, 242, 248)
+
+#: Not opaque, so the picture behind still reads as a picture, and not faint,
+#: so the words survive whatever is behind them.
+OVERLAY_ALPHA = 210
+
+#: Hours and minutes, no seconds. Seconds on a broadcast clock are a nervous
+#: tic and they force a redraw every second for nothing.
+OVERLAY_CLOCK_FORMAT = "%H:%M"
+
+#: How often a text file is looked at, and how much of it is read. The same
+#: one second poll OBS uses, which is why every "now playing" script already
+#: written works with this.
+OVERLAY_FILE_POLL = 1.0
+OVERLAY_FILE_MAX = 4096
+
+#: The bundled faces. Roboto, Apache 2.0, whole rather than subset so there is
+#: no modification question and every alphabet still works. Chosen because its
+#: digits are TABULAR: Pillow on Windows has no HarfBuzz, so "tnum" cannot be
+#: asked for, and a font without tabular figures makes the clock jitter every
+#: minute. Impact and Bahnschrift, the obvious broadcast choices, both fail
+#: that test. Measured 8 September 2026.
+FONT_REGULAR = "Roboto-Regular.ttf"
+FONT_BOLD = "Roboto-Bold.ttf"
+
+
+# ---------------------------------------------------------------------------
+# Noticing that the picture has died
+# ---------------------------------------------------------------------------
+
+#: Mean brightness under this, out of 255, and the picture is black. Measured
+#: against the real card and a real camera: a lit room reads about 118, the
+#: card about 30, and a genuinely dead capture reads under 4.
+HEALTH_BLACK_BELOW = 6.0
+
+#: How much two frames have to differ, on average, to count as moving. A
+#: still card is legitimately frozen, so this only ever fires on a source
+#: that is supposed to be live.
+HEALTH_FROZEN_BELOW = 0.35
+
+#: How long a fault has to last before it is worth saying. A camera blinks;
+#: a dead camera does not come back.
+HEALTH_PATIENCE = 4.0
+
+#: And how long before it is said again, so a broken source is not a
+#: commentary. The same floor the framing announcements use.
+HEALTH_REPEAT = 45.0
+
+#: What it says. Short, because it lands mid show and the presenter has to
+#: act on it, not admire it.
+HEALTH_BLACK_SAID = "The picture has gone black. Your viewers are seeing nothing"
+HEALTH_FROZEN_SAID = "The picture has frozen. It is stuck on one frame"
+HEALTH_BACK = "The picture is back"
 
 # ---------------------------------------------------------------------------
 # Sending the screen
