@@ -178,14 +178,8 @@ final class VideoStreamer {
         guard let picture else { return nil }
         guard let frame = picture.frame(width: settings.width,
                                         height: settings.height) else { return nil }
-        if overlay.anythingOn() {
-            CVPixelBufferLockBaseAddress(frame, [])
-            if let ctx = Pixels.context(for: frame) {
-                overlay.draw(into: ctx, width: settings.width, height: settings.height)
-            }
-            CVPixelBufferUnlockBaseAddress(frame, [])
-        }
-        return frame
+        return Pixels.composite(frame, overlay, width: settings.width,
+                                height: settings.height)
     }
 
     /// What is on the screen, in words.
@@ -358,24 +352,19 @@ final class VideoStreamer {
                 videoFrames += 1
                 continue
             }
-            // The overlay goes on here, once per frame, over the rectangle it
-            // owns and nothing else.
-            if overlay.anythingOn() {
-                CVPixelBufferLockBaseAddress(frame, [])
-                if let ctx = Pixels.context(for: frame) {
-                    overlay.draw(into: ctx, width: settings.width,
-                                 height: settings.height)
-                }
-                CVPixelBufferUnlockBaseAddress(frame, [])
-            }
-            health.look(frame: VideoStreamer.sample(frame), width: 64, height: 36,
+            // The overlay goes on here, once per frame, into a buffer of our
+            // own. See Pixels.composite for why it must not go onto the one
+            // the source handed back.
+            let shown = Pixels.composite(frame, overlay, width: settings.width,
+                                         height: settings.height)
+            health.look(frame: VideoStreamer.sample(shown), width: 64, height: 36,
                         bytesPerPixel: 4, counted: 3, rowBytes: 64 * 4,
                         moving: picture.moving)
             if framer.due(), let camera = VideoStreamer.cameraFrame(picture) {
                 framer.look(camera)
             }
             let at = videoFrames * 1000 / settings.fps
-            video.encode(frame, milliseconds: at)
+            video.encode(shown, milliseconds: at)
             videoFrames += 1
         }
 

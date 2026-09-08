@@ -280,6 +280,40 @@ extension SelfTest {
             screen.close()
         }
 
+        // **The overlay must not compound.** Every source caches the frame it
+        // hands back, so drawing the overlay onto that buffer draws it onto
+        // the same pixels again next frame, and again: a clock smears and a
+        // lower third turns to mud within a second. Nothing else here would
+        // catch it, because every frame is the right size, the right format
+        // and not black.
+        var overlaySettings = OverlaySettings()
+        overlaySettings.places = ["lower": ["kind": C.textWords,
+                                            "words": "Compounding check",
+                                            "file": ""]]
+        let overlay = Overlay(settings: overlaySettings)
+        let steady = CardSource(name: "Steady", title: "Nothing changes")
+        var readings: [Int] = []
+        for _ in 0..<6 {
+            guard let raw = steady.frame(width: C.rtmpWidth, height: C.rtmpHeight) else {
+                break
+            }
+            let shown = Pixels.composite(raw, overlay, width: C.rtmpWidth,
+                                         height: C.rtmpHeight)
+            readings.append(SelfTest.inspect(shown).mean)
+        }
+        check("the overlay is drawn once a frame, not once more each frame",
+              readings.count == 6 && Set(readings).count == 1,
+              readings.map(String.init).joined(separator: ", "))
+        // And the source's own buffer is untouched by it.
+        if let raw = steady.frame(width: C.rtmpWidth, height: C.rtmpHeight) {
+            let bare = SelfTest.inspect(raw).mean
+            let withText = SelfTest.inspect(Pixels.composite(
+                raw, overlay, width: C.rtmpWidth, height: C.rtmpHeight)).mean
+            check("the source keeps its own picture clean",
+                  SelfTest.inspect(raw).mean == bare && withText != bare,
+                  "bare \(bare), with the overlay \(withText)")
+        }
+
         // Cameras are listed without opening one. Opening asks the user for
         // permission, which is a system dialog and belongs to their first real
         // use rather than to a test run.

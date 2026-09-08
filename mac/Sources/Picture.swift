@@ -100,6 +100,29 @@ enum Pixels {
         return buffer
     }
 
+    /// A frame with the overlay drawn on top of it, as a NEW buffer.
+    ///
+    /// **Never draw on the buffer a source hands back.** Every source caches
+    /// the frame it returns, so that a card is not redrawn thirty times a
+    /// second and a camera is not rescaled thirty times a second. Painting the
+    /// overlay straight onto that cache means painting it onto the SAME
+    /// pixels again on the next frame, and again, so a clock smears and a
+    /// lower third turns to mud within a second. The Windows copy learned the
+    /// same thing in its split source, which copies before it insets.
+    ///
+    /// When there is nothing on top, the source's own buffer is handed
+    /// straight back and nothing is copied.
+    static func composite(_ frame: CVPixelBuffer, _ overlay: Overlay,
+                          width: Int, height: Int) -> CVPixelBuffer {
+        guard overlay.anythingOn(), let image = CameraSource.image(from: frame) else {
+            return frame
+        }
+        return draw(width: width, height: height) { ctx in
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            overlay.draw(into: ctx, width: width, height: height)
+        } ?? frame
+    }
+
     static func fill(_ ctx: CGContext, _ colour: RGB, width: Int, height: Int) {
         ctx.setFillColor(red: CGFloat(colour.r) / 255, green: CGFloat(colour.g) / 255,
                          blue: CGFloat(colour.b) / 255, alpha: 1)

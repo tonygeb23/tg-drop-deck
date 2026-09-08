@@ -191,15 +191,8 @@ extension MainWindow {
                                      height: board.videoHeight) else { return nil }
         let overlay = Overlay(settings: overlaySettings())
         overlay.setTitle(settings.title)
-        if overlay.anythingOn() {
-            CVPixelBufferLockBaseAddress(frame, [])
-            if let ctx = Pixels.context(for: frame) {
-                overlay.draw(into: ctx, width: board.videoWidth,
-                             height: board.videoHeight)
-            }
-            CVPixelBufferUnlockBaseAddress(frame, [])
-        }
-        return frame
+        return Pixels.composite(frame, overlay, width: board.videoWidth,
+                                height: board.videoHeight)
     }
 
     /// The picture going out, or the one that would go out.
@@ -215,16 +208,12 @@ extension MainWindow {
         let frame = source.frame(width: board.videoWidth, height: board.videoHeight)
         let overlay = Overlay(settings: overlaySettings())
         overlay.setTitle(nowPlayingTitle)
-        if let frame, overlay.anythingOn() {
-            CVPixelBufferLockBaseAddress(frame, [])
-            if let ctx = Pixels.context(for: frame) {
-                overlay.draw(into: ctx, width: board.videoWidth,
+        let shown = frame.map {
+            Pixels.composite($0, overlay, width: board.videoWidth,
                              height: board.videoHeight)
-            }
-            CVPixelBufferUnlockBaseAddress(frame, [])
         }
         source.close()
-        return frame
+        return shown
     }
 
     func showShotCheck() {
