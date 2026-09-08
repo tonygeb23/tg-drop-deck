@@ -232,6 +232,14 @@ And specific to this one:
   settings snapshot and would otherwise put the picture back to whatever it
   was at `Ctrl+B`. **The new source goes on the air before the old one is
   closed**, or a camera's half second to first frame is half a second of card.
+- **`Image.alpha_composite` holds the GIL and `Image.paste` does not.**
+  Measured 8 September 2026 against a simulated 10 ms audio wake-up: with
+  `alpha_composite` on a render thread the audio thread was late by up to
+  **16.9 ms**, as bad as a pure Python busy loop, and it is 2.01x slower on
+  two threads where `paste` is 1.00x. Nothing anywhere near the streaming
+  thread may call it. This is not yet reachable code, Pillow is not bundled,
+  but it is written here because the day it is bundled is the day somebody
+  reaches for the obvious function. See docs/VISUALS-PLAN.md.
 - **Screen capture is GDI through ctypes, and it must stay on its own
   thread.** Measured 8 September 2026: a desktop blit costs 16 to 33 ms and
   BLOCKS, because the Desktop Window Manager paces it to the display's

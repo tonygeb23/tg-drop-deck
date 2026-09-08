@@ -127,12 +127,30 @@ Those are all a text source plus a script, or a browser source.
 | Question | Answer, measured 8 September 2026 |
 |---|---|
 | Can we get text free from the bundled FFmpeg? | **No.** `drawtext` and `subtitles` are MISSING from PyAV's FFmpeg: no libfreetype compiled in. `overlay` and `scale` are present |
-| Pillow, installed | **15.9 MB**, so roughly **+6 MB** on an 87 MB installer |
+| Pillow, installed | 15.9 MB, but 7.8 MB of that is `_avif.pyd` we do not need. **8.1 MB kept, so about +3 MB** on an 87 MB installer |
 | Pillow, rendering a real lower third | **2.0 ms**, and only when the text changes |
 | Blending that box onto a frame, region only, integer maths | **2.0 ms per frame** |
 | The same thing over the whole 1280x720 frame, naively | **29.8 ms.** Do not do this |
 | Windows system fonts | Arial, Segoe UI, Calibri, Tahoma, Verdana all present |
 | Screen blit, for reference | 16 to 33 ms, on its own thread, already shipping |
+| An antialiased rounded rectangle in numpy, supersampled | **29.9 ms.** The same shape in `cv2`: **0.05 ms** |
+| A whole lower third composed AND H.264 encoded | **8.2 ms**, a 122 fps ceiling, 75 per cent headroom |
+| `Image.alpha_composite` while audio runs | **stalls the audio thread by up to 16.9 ms.** See the rule below |
+| `Image.paste` doing the same work | **no stall.** 1.00x on two threads, so it releases the GIL |
+
+### The rule that matters most, and it is a threading one
+
+**`Image.alpha_composite` holds the GIL. `Image.paste` releases it.**
+
+Measured against a simulated 10 ms audio wake-up: with `alpha_composite` on a
+render thread, the audio thread was late by up to **16.9 ms**, which is as bad
+as a pure Python busy loop. With `paste`, numpy or `cv2`, it was not late at
+all. A two thread scaling test settles the cause: `alpha_composite` is 2.01x
+slower on two threads and `paste` is 1.00x.
+
+This app's whole architecture is "nothing may stall the audio", so this goes
+in `CLAUDE.md` beside the screen capture rule. **Never call
+`Image.alpha_composite` anywhere near the streaming thread.**
 
 **The engineering conclusion is narrow and cheerful.** Cache the rendered
 overlay, blend only the rectangle it occupies, use integer maths, and a proper
@@ -209,14 +227,73 @@ request.
 Add Pillow. Replace the 5x7 bitmap font with proper anti-aliased text
 everywhere the app draws: the card, and everything after this.
 
-**Bundle one open licence font** rather than relying on system fonts, so a
-card looks the same on every machine and nothing depends on a Windows version.
-System fonts stay available as a choice.
+**Bundle Roboto**, rather than relying on system fonts, and the reason is not
+taste. It is the countdown.
+
+Pillow's Windows wheels ship FreeType but **no Raqm or HarfBuzz**, so
+`features=["tnum"]` is unreachable: we cannot ask a font for tabular figures.
+The digits must therefore be **tabular by default**, or a timer visibly
+jitters every single frame as the glyph widths change. Measured at 64 px on
+this machine:
+
+- **Segoe UI Bold: tabular.** All ten digits 37.0 px.
+- **Impact: NOT tabular**, 24.0 to 35.0 px. The obvious broadcast choice, and
+  it would jitter.
+- **Bahnschrift: NOT tabular**, 21.0 to 36.0 px.
+
+**Roboto** is SIL OFL 1.1 with **no Reserved Font Name**, has tabular digits,
+and instanced from its variable font gives a 155 KB static Bold, or 62 KB
+subset to Latin. Archivo Narrow is the smaller alternative on the same terms.
+
+Two licence facts worth having straight:
+
+- **Instancing or subsetting counts as modification** under the OFL, so a font
+  with a Reserved Font Name (IBM Plex, Source Sans) would have to be renamed.
+  Roboto and Archivo Narrow declare none, so there is nothing to do but ship
+  `OFL.txt`.
+- **Pillow statically links FreeType**, which is dual licensed, so taking
+  Pillow adds one credit line to the About box. That is the whole obligation
+  and it is compatible with MIT.
+
+**Segoe UI stays usable as a choice.** Microsoft's font FAQ explicitly permits
+burning it into video "providing the captions or text is rendered as a bitmap
+image", which is exactly what we do. It may be read from `C:\Windows\Fonts`
+at runtime and must **never** be copied into the bundle.
 
 Rules that fall out of the measurements and must not be designed away:
-- Render on change, never per frame.
-- Blend the rectangle, never the frame.
-- Integer maths.
+
+- **Render on change, never per frame.**
+- **Blend the rectangle, never the frame.** 4.9 ms on a region against 32 ms
+  full frame, which is 97 per cent of the budget for one overlay.
+- **Integer maths.** Float32 full frame is 42 ms, over budget on its own.
+- **`cv2` draws the shapes, not numpy.** An antialiased rounded rectangle is
+  0.05 ms in `cv2` and 29.9 ms supersampled in numpy. numpy has no rasteriser,
+  and there is no cheap numpy answer for a curve, a stroke or a glyph.
+- **Never `Image.alpha_composite` on the streaming thread.** See section 2.
+
+**Two things we do not need Pillow for, and should not use it for.** `cv2` is
+already bundled and does antialiased shapes, blur, transforms and PNG alpha.
+And the bundled FFmpeg's `overlay` filter can animate a slide-in from a time
+expression at 1.93 ms a frame, entirely inside FFmpeg, with no Python
+arithmetic per frame. Pillow is for glyphs. That is the gap it fills.
+
+### What we give up by choosing Pillow
+
+**Kerning.** Pillow's Windows wheels have no HarfBuzz, so it does not kern,
+and neither does GDI+. Measured: "AVAVAVAVAV" against "AAAAAVVVVV" in Segoe UI
+Bold at 96 px differed by 0.62 px, which is rounding, not kerning. For large
+Latin broadcast captions that is a mild looseness on pairs like "AV" and "To".
+For Arabic or Devanagari it would be a correctness failure rather than a
+cosmetic one.
+
+Only Skia kerns, at +10.3 MB and a packaging trap (it needs a 10 MB
+`icudtl.dat` beside the interpreter). **Not worth it unless we ever render a
+non-Latin script**, and if we do, that is the moment to revisit rather than
+now.
+
+GDI+ through ctypes is the other real option: **0 MB**, faster than Pillow at
+1.9 ms against 2.4, with native gradients and real blur. It was not chosen
+because it is Windows only, and the Mac is coming.
 
 ### Step 2: Named slots, not a canvas
 
@@ -269,8 +346,12 @@ once step 1 is in.
 ### What we are NOT doing, and why
 
 - **No browser sources.** 275 MB, a Chromium process per source, and memory
-  leaks measured in gigabytes over a show. This is the single biggest thing
-  OBS carries and refusing it is most of our size advantage.
+  leaks measured in gigabytes over a show. It is also not available to us even
+  if we wanted it, twice over: **`cefpython3` is abandoned** at version 66.1,
+  February 2021, maximum Python 3.9, so it will not import on 3.13; and
+  official CEF builds ship `proprietary_codecs=false`, so **no H.264 and no
+  AAC**. Refusing it is most of our size advantage and there was never a
+  decision to make.
 - **No game capture.** DLL injection into another process, per-build graphics
   offsets, a compiled hook. Not a Python problem.
 - **No GPU pipeline.** We composite on the CPU into numpy. Section 2 says that
@@ -284,13 +365,21 @@ once step 1 is in.
 | | Installer |
 |---|---|
 | Now | 87 MB |
-| After step 1 (Pillow plus a font) | about **93 MB** |
-| Everything above | about **93 MB**, because steps 2 to 5 are our own code |
+| After step 1 (Pillow without AVIF, plus a font) | about **90 MB** |
+| Everything above | about **90 MB**, because steps 2 to 5 are our own code |
 | OBS, for contrast | 390 MB installed, 275 MB of it Chromium |
 
-**Tony asked whether the install would need to get larger. About six
+**Tony asked whether the install would need to get larger. About three
 megabytes, once.** The expensive thing in this space is the browser engine and
 we are not taking it.
+
+**One tempting saving that is already banked, so do not count it twice.** The
+research found that `cv2` ships two redundant FFmpeg DLLs totalling 56 MB
+which never load, because PyAV does all the video work, and concluded that
+adding visuals could make the installer *smaller*. True in general, and not
+true here: `build_release.py` has dropped them since 3.0 via
+`UNUSED_IN_BUNDLE`, and the build log says "56.5 MB of unused FFmpeg removed"
+on every run. We took that money years ago.
 
 ---
 
