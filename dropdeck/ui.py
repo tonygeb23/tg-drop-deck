@@ -35,7 +35,9 @@ from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (GoLiveDialog, ScreenTextDialog, VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
+from .dialogs import (ColoursDialog, GoLiveDialog, ScreenTextDialog,
+                      ShotCheckDialog,
+                      VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
@@ -73,6 +75,12 @@ ID_STREAM_HELP = wx.ID_HIGHEST + 412
 #: What sits on top of the picture. Alt+Shift+T, beside Alt+Shift+V for the
 #: picture itself and Alt+Shift+S for the audio sources. T for text.
 ID_SCREEN_TEXT = wx.ID_HIGHEST + 416
+#: The brand: what sits underneath, what the words are, and the accent.
+#: Alt+Shift+C, in the same family as the other two Alt+Shift keys.
+ID_COLOURS = wx.ID_HIGHEST + 418
+#: The shot check. D for describe, and in the same Alt+Shift family as the
+#: other three things that are about the picture.
+ID_SHOT_CHECK = wx.ID_HIGHEST + 419
 #: And the key that answers what is on screen right now, which is the thing
 #: no other broadcast tool does. Ctrl+Shift+V, beside Ctrl+Shift+F for the
 #: camera and Ctrl+Shift+B for the stream.
@@ -1163,6 +1171,15 @@ class DropDeckFrame(wx.Frame):
         air.Append(ID_ON_SCREEN, "What is o&n screen\tCtrl+Shift+V",
                    "Everything the audience can see right now: the picture, "
                    "and anything on top of it")
+        air.Append(ID_SHOT_CHECK,
+                   "C&heck my shot..." + chr(9) + "Alt+Shift+D",
+                   "Ask Claude, ChatGPT or Gemini to look at the picture "
+                   "going out and say what is wrong with it. Never needed to "
+                   "go live, and going live never waits for it")
+        air.Append(ID_COLOURS, "C&olours..." + chr(9) + "Alt+Shift+C",
+                   "Your brand: the background everything sits on, the "
+                   "colour of the words, and the accent. Every choice says "
+                   "how well it will read")
         air.Append(ID_SCREEN_TEXT,
                    "Screen &text..." + chr(9) + "Alt+Shift+T",
                    "Your station name, what is playing, a clock or your own "
@@ -1284,6 +1301,8 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_video_sources, id=ID_VIDEO_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_screen_text, id=ID_SCREEN_TEXT)
+        self.Bind(wx.EVT_MENU, self._on_colours, id=ID_COLOURS)
+        self.Bind(wx.EVT_MENU, self._on_shot_check, id=ID_SHOT_CHECK)
         self.Bind(wx.EVT_MENU, self.describe_screen, id=ID_ON_SCREEN)
         self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_AUDIO)
         self.Bind(wx.EVT_MENU, self._on_live_to, id=ID_LIVE_TO_VIDEO)
@@ -1400,6 +1419,12 @@ class DropDeckFrame(wx.Frame):
             # T for text, in the same family.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("T"),
                                 ID_SCREEN_TEXT),
+            # And C for colours, which is the third of the same idea.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("C"),
+                                ID_COLOURS),
+            # D for describe. The fourth and last of the picture keys.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("D"),
+                                ID_SHOT_CHECK),
             # Ctrl+Shift+V answers what is on screen. It sits with the other
             # two "tell me" keys rather than with the two "change it" ones.
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("V"),
@@ -4382,6 +4407,9 @@ class DropDeckFrame(wx.Frame):
                     "picture_file": board.picture_file,
                     "picture_clock": board.picture_clock,
                     "camera": board.camera,
+                    "colour_background": board.colour_background,
+                    "colour_text": board.colour_text,
+                    "colour_accent": board.colour_accent,
                     "video_width": board.video_width,
                     "video_height": board.video_height,
                     "video_fps": board.video_fps,
@@ -4572,7 +4600,10 @@ class DropDeckFrame(wx.Frame):
             return None
         if settings is None:
             settings = self._stream_settings()
-        wanted = {"name": settings.get("name") or self.board.stream_name}
+        wanted = {"name": settings.get("name") or self.board.stream_name,
+                  "colour_background": self.board.colour_background,
+                  "colour_text": self.board.colour_text,
+                  "colour_accent": self.board.colour_accent}
         anything = False
         for key, held in (self.board.text_places or {}).items():
             kind = held.get("kind", C.TEXT_NONE)
@@ -4597,6 +4628,48 @@ class DropDeckFrame(wx.Frame):
             except Exception:
                 pass
         self._update_status()
+
+    def refresh_brand(self):
+        """Put a changed brand on the air at once, picture and words alike.
+
+        The colours reach the card, the letterbox bars, the panels behind the
+        overlay and the line round the camera inset, so a change has to rebuild
+        BOTH the picture source and the overlay. Rebuilding only one of them
+        would leave a navy card behind cream panels, which is worse than
+        either on its own.
+        """
+        self.refresh_overlay()
+        if not self._showing():
+            return
+        try:
+            source = self._build_picture(self._stream_settings())
+        except Exception:
+            return
+        if source is None:
+            return
+        old = getattr(self, "video_source", None)
+        self.video_source = source
+        try:
+            self.streamer.set_video_source(source)
+            self.streamer.set_title(self._now_playing_title())
+        except Exception:
+            pass
+        if old is not None and old is not source:
+            try:
+                old.close()
+            except Exception:
+                pass
+        self._stop_framing()
+        self._start_framing()
+
+    def _on_shot_check(self, _event=None):
+        """Ask a model that can see. Never on the way to air, always aside."""
+        with ShotCheckDialog(self, self) as box:
+            box.ShowModal()
+
+    def _on_colours(self, _event=None):
+        with ColoursDialog(self, self.board, live=self._showing()) as box:
+            box.ShowModal()
 
     def _on_screen_text(self, _event=None):
         if self.board.live_to != C.LIVE_TO_VIDEO:
@@ -4832,6 +4905,16 @@ class DropDeckFrame(wx.Frame):
             self.board.warn_seconds = dialog.warn_seconds
             self.board.cue_sound = dialog.cue_sound_key
             self.board.cue_level_db = dialog.cue_level_db
+            shot = dialog.vision_settings
+            self.board.vision_provider = shot["provider"]
+            self.board.vision_model = shot["model"]
+            # Only when something was typed. An empty box means "leave the
+            # key I already have", which is what the label under it says,
+            # and is the difference between tabbing past a field and wiping
+            # a credential.
+            if shot["key"]:
+                secrets.store(shot["provider"], shot["key"],
+                              secrets.VISION_PREFIX)
             self.board.record_format = dialog.record_format_key
             self.board.record_bitrate = dialog.record_bitrate_value
             self.board.record_folder = dialog.record_folder_path

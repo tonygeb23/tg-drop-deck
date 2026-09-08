@@ -150,12 +150,18 @@ class CameraSource(PictureSource):
 
     kind = C.PICTURE_CAMERA
 
-    def __init__(self, device, width=None, height=None, fps=None):
+    def __init__(self, device, width=None, height=None, fps=None,
+                 bars=None):
         self.device = device
         self.want_width = int(width or C.RTMP_WIDTH)
         self.want_height = int(height or C.RTMP_HEIGHT)
         self.want_fps = int(fps or C.RTMP_FPS)
         self.error = ""
+        #: What the letterbox bars are filled with. The brand
+        #: colour, so a shot that does not fill the frame reads as
+        #: deliberate rather than broken. This is the "background
+        #: underneath everything" in as literal a sense as it gets.
+        self.bars = tuple(bars or C.CARD_BACKGROUND)
         self.frames_read = 0
         self.width = 0
         self.height = 0
@@ -295,7 +301,7 @@ class CameraSource(PictureSource):
             if key == self._scaled_key and self._scaled is not None:
                 return self._scaled
             canvas = np.empty((height, width, 3), dtype=np.uint8)
-            canvas[:, :] = np.asarray(C.CARD_BACKGROUND, dtype=np.uint8)
+            canvas[:, :] = np.asarray(self.bars, dtype=np.uint8)
             canvas = _letterbox(source, canvas)
             self._scaled = canvas
             self._scaled_key = key

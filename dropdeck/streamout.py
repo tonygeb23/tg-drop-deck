@@ -841,6 +841,27 @@ class IcecastDestination(Destination):
                 pass
 
 
+def _tag_colour(video):
+    """Say on the wire that this is BT.709 at limited range.
+
+    Untagged is the real failure, not "super white": a player that has to
+    guess gets it wrong, and a stream that looks washed out or crushed on
+    somebody else's screen is exactly what that looks like. The four numbers
+    are libavutil's enums, 1 being BT.709 throughout, and MPEG range meaning
+    the 16 to 235 that the converter is already producing.
+
+    Wrapped, because the two encoders are different objects and an older
+    PyAV may not expose all four. A missing tag is the status quo, and a
+    raise here would take the whole broadcast down over metadata.
+    """
+    for attribute, value in (("colorspace", 1), ("color_primaries", 1),
+                             ("color_trc", 1), ("color_range", 1)):
+        try:
+            setattr(video.codec_context, attribute, value)
+        except Exception:
+            pass
+
+
 def _video_options(encoder, fps, bitrate=0):
     """Encoder options that give the keyframe interval the platforms want.
 
@@ -864,6 +885,11 @@ def _video_options(encoder, fps, bitrate=0):
     """
     interval = int(fps * C.RTMP_KEYFRAME_SECONDS)
     options = {"g": str(interval)}
+    # An FLV carries no colour metadata of its own, so for an RTMP stream the
+    # H.264 sequence header is the ONLY place the tag can travel. That is why
+    # this goes in the encoder parameters as well as on the codec context.
+    x264_params = ["colorprim=bt709", "transfer=bt709", "colormatrix=bt709",
+                   "range=tv"]
     if encoder == "libx264":
         options.update({
             "preset": "veryfast",
@@ -894,8 +920,9 @@ def _video_options(encoder, fps, bitrate=0):
             # 1016 kbps and peaked at 4210, either side of the 1500 to 4000
             # Facebook publishes for 720p30. Halving it holds the swing in.
             options.update({"minrate": rate, "maxrate": rate,
-                            "bufsize": "%dk" % int(bitrate * C.RTMP_VBV_SECONDS),
-                            "x264-params": "nal-hrd=cbr:filler=1"})
+                            "bufsize": "%dk" % int(bitrate * C.RTMP_VBV_SECONDS)})
+            x264_params += ["nal-hrd=cbr", "filler=1"]
+        options["x264-params"] = ":".join(x264_params)
     return options
 
 
@@ -1062,6 +1089,7 @@ class RtmpDestination(Destination):
                 video.width = self.width
                 video.height = self.height
                 video.pix_fmt = "yuv420p"
+                _tag_colour(video)
                 video.bit_rate = self.video_bitrate * 1000
                 video.time_base = fractions.Fraction(1, 1000)
                 video.options = _video_options(name, self.fps,
@@ -1128,7 +1156,14 @@ class RtmpDestination(Destination):
             if picture is None:
                 return
             frame = av.VideoFrame.from_ndarray(picture, format="rgb24")
-            frame = frame.reformat(format="yuv420p")
+            # dst_colorspace, and it is not optional. Measured 8 September
+            # 2026: without it swscale converts with the BT.601 matrix, so
+            # pure red left here as Y=81 and pure blue as Y=41. BT.709, which
+            # is what every player assumes for anything 720p or larger, wants
+            # 63 and 32. The picture was going out with standard definition
+            # colour weights and no tag to warn anybody.
+            frame = frame.reformat(format="yuv420p",
+                                   dst_colorspace=C.RTMP_COLOURSPACE)
             frame.pts = int(round(self._frames_sent * 1000.0 / self.fps))
             frame.time_base = fractions.Fraction(1, 1000)
             self._frames_sent += 1

@@ -54,6 +54,7 @@ import time
 
 import numpy as np
 
+from . import colours
 from . import constants as C
 
 try:
@@ -172,7 +173,8 @@ def place_label(key):
 # Drawing one tile
 # ---------------------------------------------------------------------------
 
-def render_tile(text, width, height, size, align="left"):
+def render_tile(text, width, height, size, align="left", panel=None,
+                ink=None):
     """One place's picture, as RGBA, or None when there is nothing to say.
 
     A rounded panel with the text on it, outlined so it survives whatever is
@@ -187,9 +189,11 @@ def render_tile(text, width, height, size, align="left"):
         return None
     tile = Image.new("RGBA", (max(2, width), max(2, height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(tile)
+    panel = tuple(panel or C.OVERLAY_BACKGROUND)
+    ink = tuple(ink or C.OVERLAY_FOREGROUND)
     draw.rounded_rectangle([0, 0, tile.width - 1, tile.height - 1],
                            radius=max(4, int(height * 0.16)),
-                           fill=tuple(C.OVERLAY_BACKGROUND) + (C.OVERLAY_ALPHA,))
+                           fill=panel + (C.OVERLAY_ALPHA,))
     pad = max(8, int(height * 0.22))
     shown = _fit(draw, text, face, tile.width - pad * 2)
     box = draw.textbbox((0, 0), shown, font=face)
@@ -200,10 +204,13 @@ def render_tile(text, width, height, size, align="left"):
         x = pad
     # An outline, because the panel is translucent and whatever is behind it
     # is not ours to choose.
-    draw.text((x, y), shown, font=face,
-              fill=tuple(C.OVERLAY_FOREGROUND) + (255,),
+    # The outline is black or white depending on which the words are further
+    # from, so an outline never makes text HARDER to see. Picking one and
+    # keeping it would have made pale text on a pale panel worse.
+    edge = (0, 0, 0) if colours.luminance(ink) > 0.4 else (255, 255, 255)
+    draw.text((x, y), shown, font=face, fill=ink + (255,),
               stroke_width=max(1, int(size * 0.045)),
-              stroke_fill=(0, 0, 0, 255))
+              stroke_fill=edge + (255,))
     return tile
 
 
@@ -276,6 +283,9 @@ class Overlay:
             self._tiles = {}
             self._text = {}
         self.station = settings.get("name") or settings.get("stream_name") or ""
+        self.panel = colours.rgb(settings.get("colour_background")
+                                 or C.COLOUR_BACKGROUND)
+        self.ink = colours.rgb(settings.get("colour_text") or C.COLOUR_TEXT)
 
     def kind_of(self, key):
         with self._lock:
@@ -357,7 +367,8 @@ class Overlay:
         spot = PLACES_BY_KEY[key]
         left, top, right, bottom = spot.rect(width, height)
         picture = render_tile(want, right - left, bottom - top,
-                              spot.text_size(height), spot.align)
+                              spot.text_size(height), spot.align,
+                              panel=self.panel, ink=self.ink)
         if picture is None:
             self._tiles[key] = None
             return None

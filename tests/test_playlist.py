@@ -1286,13 +1286,16 @@ check("Ctrl+Shift+M is its settings",
 from dropdeck.dialogs import SettingsDialog
 prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
                        page=SettingsDialog.PAGE_MIC)
-check("Preferences has nine tabs", prefs.tabs.GetPageCount() == 9,
-      prefs.tabs.GetPageCount())
+# Pinned by NAME and by COUNT so a tab cannot go missing in a refactor and
+# leave a setting unreachable. Shot check was added on 8 September 2026.
+_TABS = ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
+         "Audio streaming", "Video streaming", "Recording", "Speech",
+         "Shot check"]
+check("Preferences has ten tabs",
+      prefs.tabs.GetPageCount() == len(_TABS), prefs.tabs.GetPageCount())
 check("named for what is on them",
-      [prefs.tabs.GetPageText(i) for i in range(9)]
-      == ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
-          "Audio streaming", "Video streaming", "Recording", "Speech"],
-      [prefs.tabs.GetPageText(i) for i in range(9)])
+      [prefs.tabs.GetPageText(i) for i in range(len(_TABS))] == _TABS,
+      [prefs.tabs.GetPageText(i) for i in range(prefs.tabs.GetPageCount())])
 check("Ctrl+Shift+M opens it on the microphone tab",
       prefs.tabs.GetSelection() == SettingsDialog.PAGE_MIC,
       prefs.tabs.GetSelection())

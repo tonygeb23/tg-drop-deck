@@ -237,12 +237,18 @@ class ScreenSource(PictureSource):
 
     kind = C.PICTURE_SCREEN
 
-    def __init__(self, which="", width=None, height=None, fps=None):
+    def __init__(self, which="", width=None, height=None, fps=None,
+                 bars=None):
         self.which = which or C.SCREEN_ALL
         self.want_width = int(width or C.RTMP_WIDTH)
         self.want_height = int(height or C.RTMP_HEIGHT)
         self.want_fps = int(fps or C.RTMP_FPS)
         self.error = ""
+        #: What the letterbox bars are filled with. The brand
+        #: colour, so a shot that does not fill the frame reads as
+        #: deliberate rather than broken. This is the "background
+        #: underneath everything" in as literal a sense as it gets.
+        self.bars = tuple(bars or C.CARD_BACKGROUND)
         self.frames_read = 0
         self.width = 0
         self.height = 0
@@ -357,7 +363,7 @@ class ScreenSource(PictureSource):
             if key == self._scaled_key and self._scaled is not None:
                 return self._scaled
             canvas = np.empty((height, width, 3), dtype=np.uint8)
-            canvas[:, :] = np.asarray(C.CARD_BACKGROUND, dtype=np.uint8)
+            canvas[:, :] = np.asarray(self.bars, dtype=np.uint8)
             canvas = _letterbox(source, canvas)
             self._scaled = canvas
             self._scaled_key = key
@@ -409,9 +415,12 @@ class SplitSource(PictureSource):
 
     kind = C.PICTURE_SPLIT
 
-    def __init__(self, screen, camera):
+    def __init__(self, screen, camera, edge=None):
         self.screen = screen
         self.camera = camera
+        #: The line round the inset, in the brand's accent colour so it reads
+        #: as part of the look rather than as a default nobody chose.
+        self.edge = tuple(edge or C.CARD_ACCENT)
         self.error = ""
         #: Whether the last frame really had the camera in it. describe() used
         #: to ask the camera to describe itself, which a camera handing back
@@ -454,7 +463,7 @@ class SplitSource(PictureSource):
         edge = C.SPLIT_INSET_BORDER
         canvas[max(0, top - edge):top + box_h + edge,
                max(0, left - edge):left + box_w + edge] = np.asarray(
-                   C.CARD_ACCENT, dtype=np.uint8)
+                   self.edge, dtype=np.uint8)
         canvas[top:top + box_h, left:left + box_w] = picture
         return canvas
 

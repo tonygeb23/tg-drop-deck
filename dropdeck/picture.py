@@ -30,6 +30,7 @@ import time
 
 import numpy as np
 
+from . import colours
 from . import constants as C
 
 try:
@@ -274,7 +275,7 @@ class CardSource(PictureSource):
             # height instead put the rule through the middle of the name,
             # which is exactly where a descender lives.
             rule_y = name_y + box[3] + max(6, height // 50)
-            rule_h = max(2, height // 240)
+            rule_h = colours.even(height // 240)
             pen.rectangle([margin, rule_y, width - margin, rule_y + rule_h],
                           fill=tuple(self.accent))
 
@@ -312,7 +313,7 @@ class CardSource(PictureSource):
 
         # A rule under it, which is the whole of the decoration.
         rule_y = name_y + GLYPH_H * name_scale + max(4, height // 60)
-        rule_h = max(2, height // 240)
+        rule_h = colours.even(height // 240)
         canvas[rule_y:rule_y + rule_h,
                margin:width - margin] = np.asarray(self.accent, dtype=np.uint8)
 
@@ -517,6 +518,20 @@ def _shorten_real(pen, text, face, room):
     return (cut + "...") if cut else "..."
 
 
+def brand(settings):
+    """The three brand colours out of a settings dict, as RGB triples.
+
+    One place, so the card, the letterbox bars, the overlay and the split's
+    edge cannot drift apart. Names in, numbers out: the user only ever sees
+    the names, and colours.py explains why.
+    """
+    from . import colours
+    return (colours.rgb(settings.get("colour_background")
+                        or C.COLOUR_BACKGROUND),
+            colours.rgb(settings.get("colour_text") or C.COLOUR_TEXT),
+            colours.rgb(settings.get("colour_accent") or C.COLOUR_ACCENT))
+
+
 def build(settings, on_fallback=None):
     """The picture source one station's settings ask for.
 
@@ -524,16 +539,18 @@ def build(settings, on_fallback=None):
     camera that is unplugged or a file that has been moved must not be the end
     of a broadcast. The card alone needs no such thing: it cannot fail.
     """
+    back, ink, accent = brand(settings)
     card = CardSource(name=settings.get("name") or settings.get("stream_name")
                       or "TG Drop Deck",
                       title=settings.get("title", ""),
-                      clock=bool(settings.get("picture_clock", False)))
+                      clock=bool(settings.get("picture_clock", False)),
+                      background=back, foreground=ink, accent=accent)
     kind = settings.get("picture", C.PICTURE_CARD)
     width = settings.get("video_width")
     height = settings.get("video_height")
     fps = settings.get("video_fps")
     if kind == C.PICTURE_IMAGE:
-        primary = ImageSource(settings.get("picture_file", ""))
+        primary = ImageSource(settings.get("picture_file", ""), background=back)
     elif kind == C.PICTURE_CAMERA:
         primary = _camera(settings, width, height, fps)
     elif kind == C.PICTURE_SCREEN:
@@ -544,7 +561,8 @@ def build(settings, on_fallback=None):
         # and goes on with the screen, which is still a show.
         from .screen import SplitSource
         primary = SplitSource(_screen(settings, width, height, fps),
-                              _camera(settings, width, height, fps))
+                              _camera(settings, width, height, fps),
+                              edge=accent)
     else:
         return card
     return FallbackSource(primary, card, on_fallback)
@@ -554,10 +572,11 @@ def _camera(settings, width, height, fps):
     # Imported here rather than at the top: picture.py is what camera.py
     # imports, and the other way round as well would be a cycle.
     from .camera import CameraSource
-    return CameraSource(settings.get("camera", ""), width, height, fps)
+    return CameraSource(settings.get("camera", ""), width, height, fps,
+                        bars=brand(settings)[0])
 
 
 def _screen(settings, width, height, fps):
     from .screen import ScreenSource
     return ScreenSource(settings.get("screen", "") or C.SCREEN_ALL,
-                        width, height, fps)
+                        width, height, fps, bars=brand(settings)[0])

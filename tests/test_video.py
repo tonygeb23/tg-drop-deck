@@ -1154,8 +1154,16 @@ check("which needs nal-hrd, not merely minrate and maxrate",
       "nal-hrd=cbr" in streamout._video_options("libx264", 30, 2500)
       .get("x264-params", ""),
       streamout._video_options("libx264", 30, 2500).get("x264-params"))
+# Asserted as "no CBR options" rather than "no x264-params at all", which is
+# what it used to say. The colour tags added on 8 September 2026 live in
+# x264-params too and go out on every stream, bitrate or not, because an FLV
+# has nowhere else to carry them. Absence of the key was only ever a proxy
+# for the thing actually meant here.
+_no_rate = streamout._video_options("libx264", 30).get("x264-params", "")
 check("and no CBR options are forced when no bitrate is known",
-      "x264-params" not in streamout._video_options("libx264", 30))
+      "nal-hrd" not in _no_rate and "filler" not in _no_rate, _no_rate)
+check("though the colour tags still go, having nowhere else to travel",
+      "colormatrix=bt709" in _no_rate, _no_rate)
 
 
 # ---------------------------------------------------------------------------

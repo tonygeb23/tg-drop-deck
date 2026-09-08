@@ -927,6 +927,16 @@ RTMP_VIDEO_ENCODERS = ("libx264", "h264_amf", "h264_nvenc", "h264_qsv")
 #: How much the rate may swing, as a fraction of a second. One second let a
 #: cut from card to camera dip to 1016 kbps and peak at 4210, either side of
 #: what Facebook publishes for 720p30. Half a second holds it tighter.
+#: The matrix the picture is converted with, and the one it is tagged as.
+#: BT.709 is what every player assumes for 720p and above; swscale's default
+#: is BT.601, which is a standard definition matrix on a high definition
+#: picture. Measured 8 September 2026.
+#: Who can be asked to look at the shot, and who is asked by default.
+#: Names rather than numbers, for the same reason the colours are names.
+VISION_PROVIDERS = ("anthropic", "openai", "google")
+VISION_PROVIDER = "anthropic"
+
+RTMP_COLOURSPACE = "ITU709"
 RTMP_VBV_SECONDS = 0.5
 
 #: What each platform publishes for video bitrate, in kbps, by resolution.
@@ -1043,6 +1053,15 @@ TEXT_DESCRIPTIONS = {
     TEXT_FILE: ("A text file, re-read a second after it changes. Any other "
                 "program that writes a text file can drive this."),
 }
+
+#: The brand, as names from colours.NAMED. Three is the whole of it: what
+#: sits underneath, what the words are, and the one that draws a rule or an
+#: edge. More than three and nobody can hold the look in their head, which
+#: matters more here than anywhere because nobody can glance at it.
+COLOUR_BACKGROUND = "near black"
+COLOUR_TEXT = "off white"
+COLOUR_ACCENT = "light blue"
+
 
 #: The panel behind the words, and the words. Dark with a light face, high
 #: contrast, because a stream sits in a dark player and somebody sighted is

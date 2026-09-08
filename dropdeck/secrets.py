@@ -77,23 +77,31 @@ def available():
     return _advapi() is not None
 
 
-def target_for(station):
-    return TARGET_PREFIX + (station or "the current station")
+#: The other kind of secret this app keeps. A vision key is not a stream key
+#: and must not be filed as one: the whole point of using the credential
+#: store is that somebody can open Credential Manager and see what is there
+#: without taking this app's word for it, and a label that lies defeats that.
+#: It is also billable, which a stream key is not.
+VISION_PREFIX = "TG Drop Deck vision key: "
 
 
-def store(station, key):
+def target_for(station, prefix=TARGET_PREFIX):
+    return prefix + (station or "the current station")
+
+
+def store(station, key, prefix=TARGET_PREFIX):
     """Keep a key. True when it really went into the credential store."""
     dll = _advapi()
     if dll is None:
         return False
     if not key:
-        return forget(station)
+        return forget(station, prefix)
     blob = key.encode("utf-16-le")
     buffer = (ctypes.c_byte * len(blob)).from_buffer_copy(blob)
     credential = _CREDENTIAL()
     credential.Flags = 0
     credential.Type = _CRED_TYPE_GENERIC
-    credential.TargetName = target_for(station)
+    credential.TargetName = target_for(station, prefix)
     credential.Comment = "A live stream key. Safe to delete."
     credential.CredentialBlobSize = len(blob)
     credential.CredentialBlob = ctypes.cast(
@@ -111,7 +119,7 @@ def store(station, key):
         return False
 
 
-def fetch(station):
+def fetch(station, prefix=TARGET_PREFIX):
     """The key for one station, or an empty string. Never raises."""
     dll = _advapi()
     if dll is None:
@@ -122,7 +130,7 @@ def fetch(station):
                                   wintypes.DWORD,
                                   ctypes.POINTER(ctypes.POINTER(_CREDENTIAL))]
         dll.CredReadW.restype = wintypes.BOOL
-        ok = dll.CredReadW(target_for(station), _CRED_TYPE_GENERIC, 0,
+        ok = dll.CredReadW(target_for(station, prefix), _CRED_TYPE_GENERIC, 0,
                            ctypes.byref(pointer))
         if not ok or not pointer:
             return ""
@@ -143,7 +151,7 @@ def fetch(station):
         return ""
 
 
-def forget(station):
+def forget(station, prefix=TARGET_PREFIX):
     """Remove a station's key. True when there is no longer one there."""
     dll = _advapi()
     if dll is None:
@@ -152,7 +160,7 @@ def forget(station):
         dll.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
                                     wintypes.DWORD]
         dll.CredDeleteW.restype = wintypes.BOOL
-        dll.CredDeleteW(target_for(station), _CRED_TYPE_GENERIC, 0)
+        dll.CredDeleteW(target_for(station, prefix), _CRED_TYPE_GENERIC, 0)
     except Exception:
         return False
     # Deleting something that was never there is a success, not a failure:

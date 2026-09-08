@@ -246,6 +246,89 @@ And specific to this one:
   one, so "the download barely grew" was measured against a build
   with the feature missing. **A size taken from a build you have not
   proved is a size for a different program.**
+- **A colour is chosen by NAME and judged by NUMBER, never by a swatch.**
+  `colours.py` offers a short list of named colours and scores every pair
+  with the WCAG contrast ratio, and the picker says the score as you arrow:
+  "gold, easy to read, 8.6 to 1". A colour wheel is not an answer for
+  somebody who cannot see it, it is the question restated.
+  **The number happens to be the right one for video too, and that was
+  measured rather than assumed.** 4:2:0 stores colour at half the resolution
+  of brightness, so a pair whose contrast is carried by HUE has nothing left
+  after encoding: measured 8 September 2026 through the real encoder, the
+  pure primaries red and blue have a greyscale edge of 0.0 before encoding,
+  and the palette's own red on blue has one twentieth of a good pair's and
+  comes back as chroma bleed. WCAG contrast is a brightness ratio, so it
+  condemns exactly those pairs without knowing anything about video.
+  `tests/test_colours.py` runs the real encoder to prove it, and asserts
+  every shipped preset clears the target. **A preset that ships unreadable
+  is worse than no presets**, because somebody who cannot check it has no
+  reason to doubt it.
+- **The picture goes out as BT.709, limited range, and SAYS SO.** Both
+  halves were wrong until 8 September 2026 and neither raised anything.
+  Measured: `frame.reformat(format="yuv420p")` converts with the **BT.601**
+  matrix, so pure red left this app as Y=81 and pure blue as Y=41, where
+  BT.709 wants 63 and 32. Every player assumes BT.709 for anything 720p or
+  larger, so the app was sending standard definition colour weights on a
+  high definition picture. And nothing was tagged, which is the failure that
+  actually reaches a viewer: a player that has to guess the range guesses
+  wrong, and that is what "washed out" and "crushed" look like.
+  `dst_colorspace=C.RTMP_COLOURSPACE` fixes the conversion and `_tag_colour`
+  plus the x264 parameters fix the label. **The x264 parameters are not belt
+  and braces: an FLV carries no colour metadata of its own, so for an RTMP
+  stream the H.264 sequence header is the only place a tag can travel.**
+  `tests/test_colours.py` encodes a real FLV, reads the tags back and checks
+  white, red and blue land on 235, 63 and 32.
+- **Contrast and fraying are two questions, and one number answers one of
+  them.** The first version of this said the WCAG ratio caught "both the
+  unreadable and the unencodable", and that was too strong. Contrast is a
+  brightness ratio and brightness is the half of the picture 4:2:0 keeps
+  intact, so it does predict what a viewer can READ. It is blind to the
+  edges: a strongly coloured letter keeps its shape and frays at its border
+  however good its ratio, and measured at 1 Mbps and 6 Mbps the error on a
+  red letter was **the same**, because subsampling and not bitrate is what
+  does it. So `fringing()` is a second score with a different repair. Gold on
+  navy is the case that proves they are separate: 8.6 to 1, easy to read,
+  and 83 per cent saturated. The picker shows them in two columns for that
+  reason, and **no shipped preset uses a fraying colour for the WORDS**,
+  which is asserted rather than intended.
+- **A coloured rule is an even number of pixels high.** Colour is stored one
+  sample per two by two block, so an odd-height coloured line straddles two
+  of them and shares each with whatever is beside it. Measured: a one pixel
+  red rule lost 57 levels of colour, two pixels lost 12, and **three pixels
+  lost 17, worse than two**. `height // 240` is 3 at 720p, so the app was
+  drawing the worst case at the commonest size. `colours.even()` now rounds
+  it, and never below 2.
+- **The shot check ASKS; everything else here MEASURES. It is a second
+  opinion and it is never load bearing.** `vision.py` sends one still of the
+  picture going out to Claude, ChatGPT or Gemini on the user's own key and
+  reads the answer back. Three rules, and all three are checks in
+  `tests/test_shotcheck.py`. **It is never on the path to air**: it has its
+  own key, its own thread, and `toggle_stream` and `start_stream` do not
+  mention it, which is asserted by reading their source. **It never raises**,
+  because somebody who cannot see the screen cannot debug a traceback in a
+  status bar, so every failure is a sentence naming the thing to go and
+  change and an HTTP code is never shown. **And a screen is never sent
+  without asking, EVERY time.** Not once, not remembered: a yes given about
+  one screen is not a yes about the next one, and the person answering
+  cannot look at the frame to see what is in it. That asymmetry, that the
+  reason the feature exists is the reason its user cannot vet what it
+  uploads, is the whole argument for the repeated prompt. Tony chose it on
+  8 September 2026 when it was put to him.
+  **The key goes in Credential Manager under its own prefix**, never in
+  `board.json`: a vision key is billable, so a board sent to somebody else
+  would hand them a bill. **The picture described is the one GOING OUT**,
+  overlay and all, rather than the camera queried separately, which is
+  simpler and more honest: it catches the card still being on air when you
+  thought the camera was.
+  **Speed is part of the model choice and was measured**, not assumed. Same
+  picture, same prompt: `gemini-flash-latest` 66.8 seconds,
+  `gemini-3.6-flash` 3.2, `gemini-flash-lite-latest` 1.1, all three usable.
+  The slowest was better written and not sixty seconds better. **Defaults are
+  moving aliases where a provider publishes one**, because `gemini-2.0-flash`
+  was already a 404 and `gemini-2.5-flash` answered "no longer available to
+  new users" on a live key the day this was written. And a thinking model
+  spends `maxOutputTokens` on thinking FIRST: without a ceiling one returned
+  the eighteen characters "There is no camera" and stopped mid sentence.
 - **Named places, never a canvas.** `overlay.py` offers four fixed spots that
   cannot overlap, and there is no way to put something at an arbitrary
   position. That is not a shortcut, it is the feature: the research in
@@ -359,6 +442,8 @@ dropdeck/
   preflight.py   what Ctrl+B is about to do, and what is wrong with it
   screen.py      the desktop as a picture source, and the camera in its corner
   overlay.py     four named places on top of the picture, and what is in them
+  vision.py      asking a model that can see what the shot looks like
+  colours.py     the brand, by name, and whether a pair can actually be read
   health.py      noticing the picture has gone black or frozen, and saying so
 tools/
   audiopost.py       levels and seamless loops for generated audio

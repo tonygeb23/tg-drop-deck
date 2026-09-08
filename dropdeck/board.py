@@ -29,9 +29,21 @@ STATION_FIELDS = (
     # station needs them and the Icecast station on the same board does not.
     "video_server", "video_host", "video_key", "live_to",
     "picture", "picture_file", "picture_clock", "camera", "screen",
-    "text_places",
+    "text_places", "colour_background", "colour_text", "colour_accent",
     "video_width", "video_height", "video_fps", "video_bitrate",
 )
+
+
+def _colour(raw, fallback):
+    """A colour NAME out of a board file, whitelisted like everything else.
+
+    An unknown name becomes the default rather than being carried forward as
+    a string nothing will ever draw. A board written by a later version with
+    more colours in it therefore opens and looks ordinary, instead of opening
+    and drawing nothing.
+    """
+    from . import colours
+    return raw if raw in colours.BY_NAME else fallback
 
 
 def _text_places(raw):
@@ -303,6 +315,28 @@ class Board:
         #: Which screen goes out when the picture is the screen. Not a
         #: monitor number: see C.SCREEN_CHOICES for why.
         self.screen = C.SCREEN_ALL
+
+        #: The brand, as three NAMES rather than three numbers, because a
+        #: name can be read out and a hex triplet cannot. See colours.py for
+        #: why the app scores every pair rather than showing a swatch.
+        self.colour_background = C.COLOUR_BACKGROUND
+        self.colour_text = C.COLOUR_TEXT
+        self.colour_accent = C.COLOUR_ACCENT
+
+        #: The shot check: which model looks at the picture before a show.
+        #: **Not a STATION field.** Everything above about the picture
+        #: belongs to a station because a YouTube station and an Icecast one
+        #: want different answers. Who describes the shot does not change
+        #: with where the show goes, and putting it in a station would mean
+        #: setting it up again for every one.
+        #:
+        #: **And the KEY IS NOT HERE.** It goes in Windows Credential
+        #: Manager through secrets.py, under its own prefix, for the reason
+        #: that module already gives about stream keys, and one more: a
+        #: vision key is billable, so a board file passed to somebody else
+        #: would be handing them a bill.
+        self.vision_provider = C.VISION_PROVIDER
+        self.vision_model = ""
 
         #: What sits on top of the picture. One entry per named place: what
         #: it is showing, the words when that is "my own words", and the file
@@ -624,6 +658,11 @@ class Board:
             "camera": self.camera,
             "screen": self.screen,
             "text_places": {k: dict(v) for k, v in self.text_places.items()},
+            "colour_background": self.colour_background,
+            "colour_text": self.colour_text,
+            "colour_accent": self.colour_accent,
+            "vision_provider": self.vision_provider,
+            "vision_model": self.vision_model,
             "video_width": int(self.video_width),
             "video_height": int(self.video_height),
             "video_fps": int(self.video_fps),
@@ -751,6 +790,23 @@ class Board:
         screen = data.get("screen")
         board.screen = screen if screen in C.SCREEN_CHOICES else C.SCREEN_ALL
         board.text_places = _text_places(data.get("text_places"))
+        board.colour_background = _colour(data.get("colour_background"),
+                                          C.COLOUR_BACKGROUND)
+        board.colour_text = _colour(data.get("colour_text"), C.COLOUR_TEXT)
+        board.colour_accent = _colour(data.get("colour_accent"),
+                                      C.COLOUR_ACCENT)
+        # Whitelisted the same way a colour name is: a board file is plain
+        # JSON that a user can write, and this one ends up in a URL.
+        provider = data.get("vision_provider")
+        if provider not in C.VISION_PROVIDERS:
+            # Nobody has chosen. Take the one that has a key on this machine
+            # rather than the first in the list, so a board saved before this
+            # feature existed opens on something that will actually work.
+            from . import vision as _vision
+            provider = _vision.best_provider(C.VISION_PROVIDER)
+        board.vision_provider = provider
+        model = data.get("vision_model")
+        board.vision_model = model.strip()[:80] if isinstance(model, str) else ""
         board.video_width = _video_number(data.get("video_width"),
                                           C.RTMP_WIDTH, 160, 3840)
         board.video_height = _video_number(data.get("video_height"),

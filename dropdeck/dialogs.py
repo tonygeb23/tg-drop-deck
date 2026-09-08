@@ -23,11 +23,13 @@ from . import feedback
 from . import dsp
 from . import camera
 from . import framing
+from . import colours
 from . import overlay
 from . import preflight
 from . import proccapture
 from . import screen
 from . import secrets
+from . import vision
 from . import sources
 from . import streamhelp
 from . import streamout
@@ -670,7 +672,8 @@ class SettingsDialog(wx.Dialog):
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
     (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
-     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH) = range(9)
+     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH,
+     PAGE_SHOT) = range(10)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -692,6 +695,7 @@ class SettingsDialog(wx.Dialog):
         self._build_picture_tab()
         self._build_record_tab()
         self._build_speech_tab()
+        self._build_shot_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
 
         self.status = wx.StaticText(self, label=self._status_text())
@@ -737,7 +741,8 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_STREAM: self.stream_server,
                 self.PAGE_VIDEO: self.video_server,
                 self.PAGE_RECORD: self.record_format,
-                self.PAGE_SPEECH: self.speech_choice}.get(
+                self.PAGE_SPEECH: self.speech_choice,
+                self.PAGE_SHOT: self.vision_provider}.get(
                     self.tabs.GetSelection())
 
     # ---------------------------------------------------------- the tabs ----
@@ -2460,6 +2465,101 @@ class SettingsDialog(wx.Dialog):
     @property
     def record_folder_path(self):
         return self.record_folder.GetValue().strip()
+
+    def _build_shot_tab(self):
+        """Who looks at the picture, and the key that lets them.
+
+        **The key is never put back into the box once it is saved.** The box
+        shows whether one is set and how it ends, the same as the stream key
+        page, because reading a secret back onto a screen is how it ends up
+        in a screenshot or a support log. Blanking the box leaves the stored
+        key alone; clearing it is its own button, so it cannot happen by
+        accident while somebody is tabbing through.
+        """
+        panel, sizer = self._page("Shot check")
+
+        self._note(panel, sizer,
+                   "Before you go live, Alt+Shift+D asks a model that can\n"
+                   "see to describe the picture going out: your framing, the\n"
+                   "lighting, what is behind you, and anything private on a\n"
+                   "screen you are sharing.\n\n"
+                   "This is never needed to go live and going live never\n"
+                   "waits for it. It uses your own account with one of these\n"
+                   "three, so you pay them directly and nothing goes through\n"
+                   "TG Studios.")
+
+        self._label(panel, sizer, "&Who to ask")
+        self.vision_provider = wx.Choice(
+            panel, choices=[vision.PROVIDER_NAMES[p]
+                            for p in vision.PROVIDERS])
+        self.vision_provider.SetName("Who to ask")
+        current = self.board.vision_provider
+        self.vision_provider.SetSelection(
+            vision.PROVIDERS.index(current)
+            if current in vision.PROVIDERS else 0)
+        self.vision_provider.Bind(wx.EVT_CHOICE, self._on_vision_provider)
+        sizer.Add(self.vision_provider, 0, wx.EXPAND | wx.ALL, 10)
+
+        self._label(panel, sizer, "Their &key")
+        self.vision_key = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.vision_key.SetName("Their key")
+        sizer.Add(self.vision_key, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        self.vision_key_state = wx.StaticText(panel, label="")
+        sizer.Add(self.vision_key_state, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.vision_forget = wx.Button(panel, label="&Remove this key")
+        self.vision_forget.Bind(wx.EVT_BUTTON, self._on_vision_forget)
+        row.Add(self.vision_forget, 0, wx.RIGHT, 8)
+        sizer.Add(row, 0, wx.ALL, 10)
+
+        self._label(panel, sizer, "&Model, if you want a particular one")
+        self.vision_model = wx.TextCtrl(panel)
+        self.vision_model.SetName("Model")
+        self.vision_model.SetValue(self.board.vision_model or "")
+        sizer.Add(self.vision_model, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        self.vision_model_note = wx.StaticText(panel, label="")
+        sizer.Add(self.vision_model_note, 0, wx.ALL, 10)
+
+        self._note(panel, sizer,
+                   "The key is kept in Windows Credential Manager, not in\n"
+                   "your board file, so a board you send to somebody else\n"
+                   "does not carry it. You can see and remove it yourself\n"
+                   "under " + secrets.VISION_PREFIX.strip() + " there.")
+        self._refresh_vision()
+
+    def _on_vision_provider(self, _event=None):
+        self._refresh_vision()
+
+    def _vision_chosen(self):
+        at = self.vision_provider.GetSelection()
+        return vision.PROVIDERS[at] if 0 <= at < len(vision.PROVIDERS) else \
+            vision.PROVIDERS[0]
+
+    def _refresh_vision(self):
+        """Say whether a key is set, without ever showing it."""
+        who = self._vision_chosen()
+        held = secrets.fetch(who, secrets.VISION_PREFIX)
+        self.vision_key.SetValue("")
+        self.vision_key_state.SetLabel(
+            "A key for %s is %s. Leave the box empty to keep it."
+            % (vision.PROVIDER_NAMES[who], secrets.redact(held)))
+        self.vision_forget.Enable(bool(held))
+        self.vision_model_note.SetLabel(
+            "Leave empty for %s, which is the quick one."
+            % vision.DEFAULT_MODELS.get(who, "the usual model"))
+
+    def _on_vision_forget(self, _event=None):
+        who = self._vision_chosen()
+        secrets.forget(who, secrets.VISION_PREFIX)
+        self._refresh_vision()
+
+    @property
+    def vision_settings(self):
+        """What the frame should write back, key included but not stored yet."""
+        return {"provider": self._vision_chosen(),
+                "model": self.vision_model.GetValue().strip()[:80],
+                "key": self.vision_key.GetValue().strip()}
 
     def _build_speech_tab(self):
         panel, sizer = self._page("Speech")
@@ -4876,3 +4976,485 @@ class ScreenTextDialog(wx.Dialog):
         speaker = getattr(self.frame, "announce", None)
         if speaker is not None:
             speaker(text)
+
+
+class ShotCheckDialog(wx.Dialog):
+    """What a sighted person would see, said out loud.
+
+    Everything else in this app measures. This asks. The two are different
+    tools and this one is deliberately the second opinion: it is opened by
+    its own key, it never blocks going live, and if it fails the show is
+    unaffected and it says so.
+
+    **The picture described is the one that is GOING OUT**, overlay and all,
+    rather than a camera queried separately. That is simpler and it is also
+    more honest: it is what a viewer would see, including the card if the
+    camera is not really running, which is a fault worth being told about
+    and one this app could not otherwise report.
+
+    **The screen asks every time.** Not once, not a remembered preference.
+    See vision.needs_consent for why, and note that the person answering
+    cannot look at the frame to check what is in it.
+    """
+
+    def __init__(self, parent, frame):
+        super().__init__(parent, title="Check my shot",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = frame
+        self._busy = False
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        self.what = wx.StaticText(self, label=self._what_line())
+        outer.Add(self.what, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&What it looks like"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        # Read only and multiline, so a screen reader can be arrowed through
+        # it line by line. The answer is written as short lines for exactly
+        # that reason, and the prompt asks for them.
+        self.answer = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+            size=(560, 240))
+        self.answer.SetName("What it looks like")
+        self.answer.SetValue("Nothing has been checked yet. Choose Check the "
+                             "shot.")
+        outer.Add(self.answer, 1, wx.EXPAND | wx.ALL, 10)
+
+        row = wx.StdDialogButtonSizer()
+        self.go = wx.Button(self, wx.ID_OK, "&Check the shot")
+        self.go.SetDefault()
+        row.AddButton(self.go)
+        shut = wx.Button(self, wx.ID_CANCEL, "&Close")
+        row.AddButton(shut)
+        row.Realize()
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 10)
+
+        self.go.Bind(wx.EVT_BUTTON, self._on_go)
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.answer.SetFocus()
+
+    # -- what is going out -------------------------------------------------
+
+    def _kind(self):
+        """Camera or screen, decided by what the picture source really is."""
+        source = getattr(self.frame, "video_source", None)
+        for name in ("ScreenSource", "SplitSource"):
+            if type(source).__name__ == name:
+                return "screen"
+        return "camera"
+
+    def _what_line(self):
+        who = vision.PROVIDER_NAMES.get(self.frame.board.vision_provider,
+                                        self.frame.board.vision_provider)
+        if self._kind() == "screen":
+            return ("This describes the picture going out, which right now "
+                    "includes your screen. %s is asked." % who)
+        return ("This describes the picture going out, camera and anything "
+                "on top of it. %s is asked." % who)
+
+    def _picture(self):
+        source = getattr(self.frame, "video_source", None)
+        if source is None:
+            return None
+        try:
+            return source.frame(self.frame.board.video_width,
+                                self.frame.board.video_height)
+        except Exception:
+            return None
+
+    # -- doing it ----------------------------------------------------------
+
+    def _on_go(self, _event=None):
+        if self._busy:
+            return
+        board = self.frame.board
+        key = secrets.fetch(board.vision_provider, secrets.VISION_PREFIX)
+        if not key:
+            self._show("No key has been set up yet. Open Preferences, Shot "
+                       "check, and put in a key for the service you want to "
+                       "use.")
+            return
+        picture_ = self._picture()
+        if picture_ is None:
+            self._show("There is no picture to look at yet. Start streaming, "
+                       "or set a picture source first.")
+            return
+        kind = self._kind()
+        if vision.needs_consent(kind):
+            # Every time. A remembered yes would be a yes given about a
+            # different screen.
+            asking = wx.MessageBox(vision.consent_question(kind,
+                                                           board.vision_provider),
+                                   "Send a picture of your screen?",
+                                   wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                                   self)
+            if asking != wx.YES:
+                self._show("Nothing was sent.")
+                return
+        self._busy = True
+        self.go.Enable(False)
+        self._show("Looking at the picture. This usually takes a second or "
+                   "two.")
+        provider, model = board.vision_provider, board.vision_model
+
+        def work():
+            ok, text = vision.describe(picture_, kind, provider, key, model)
+            wx.CallAfter(self._done, ok, text)
+
+        # Its own thread, always. This is the same rule as the screen grab
+        # and the camera: nothing that can block for seconds may sit on a
+        # thread that carries audio, and the UI thread carries the keyboard.
+        threading.Thread(target=work, name="dropdeck-shotcheck",
+                         daemon=True).start()
+
+    def _done(self, ok, text):
+        self._busy = False
+        try:
+            self.go.Enable(True)
+            self._show(text)
+            self.frame.announce("Shot check: " + text.splitlines()[0]
+                                if text else "Shot check finished")
+        except RuntimeError:
+            # The dialog was closed while the answer was in the air. Not a
+            # fault: the show does not depend on this.
+            pass
+
+    def _show(self, text):
+        self.answer.SetValue(text)
+        self.answer.SetInsertionPoint(0)
+
+
+class ColourChoiceDialog(wx.Dialog):
+    """Pick one named colour, and hear how it will read against another.
+
+    This is the accessible colour picker, and the thing that makes it one is
+    the last column. Every colour is scored against whatever it will sit on
+    or under, and the score is said as you arrow onto it: "gold, readable,
+    8.6 to 1". Nobody is asked to imagine a swatch.
+
+    The scoring is not decoration. Measured through the real encoder on
+    8 September 2026, the pairs that H.264 destroys are exactly the pairs
+    with poor contrast, because video stores colour at half resolution and
+    keeps brightness: contrast carried by hue evaporates.
+
+    **There are two scores, not one, and that was a correction.** Contrast
+    says what can be READ and is blind to what frays at the EDGES: a strongly
+    coloured letter keeps its shape and loses its border however good its
+    ratio, and no bitrate mends it. Gold on navy is the case that proves they
+    are separate questions, reading easily at 8.6 to 1 and fraying at 83 per
+    cent. Two columns, because the two faults have two different repairs.
+    See colours.py.
+    """
+
+    def __init__(self, parent, title, current, against, against_name,
+                 role="text"):
+        super().__init__(parent, title=title,
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = getattr(parent, "frame", parent)
+        self.against = against
+        self.against_name = against_name
+        self.role = role
+        self.chosen = current
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label="Every colour says how it will read against %s."
+                        % against_name)
+        note.Wrap(self.FromDIP(520))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Colours"), 0, wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(620, 260))
+        self.list.SetName("Colours")
+        self.list.InsertColumn(0, "Colour", width=150)
+        self.list.InsertColumn(1, "How it reads", width=230)
+        self.list.InsertColumn(2, "Contrast", width=100)
+        self.list.InsertColumn(3, "On video", width=110)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _e: self._say())
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _e: self._take())
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.StdDialogButtonSizer()
+        row.AddButton(wx.Button(self, wx.ID_OK, "&Use this one"))
+        row.AddButton(wx.Button(self, wx.ID_CANCEL, "&Cancel"))
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self._fill(current)
+        self.list.SetFocus()
+
+    def _fill(self, current):
+        at_current = 0
+        for at, name in enumerate(colours.NAMES):
+            ratio, said = colours.verdict(colours.rgb(name), self.against)
+            _level, frays = colours.fringing(colours.rgb(name))
+            self.list.InsertItem(at, name)
+            # Two faults, two columns, because they have two different
+            # repairs: contrast wants a different pair, and fraying wants a
+            # weaker colour. A column that mixed them would be a column
+            # nobody could act on.
+            self.list.SetItem(at, 1, said)
+            self.list.SetItem(at, 2, "%.1f to 1" % ratio)
+            self.list.SetItem(at, 3, "frays a little" if frays else "clean")
+            if name == current:
+                at_current = at
+        if self.list.GetItemCount():
+            self.list.Select(at_current)
+            self.list.Focus(at_current)
+        self._say()
+
+    def _selected(self):
+        at = self.list.GetFirstSelected()
+        return colours.NAMES[at] if 0 <= at < len(colours.NAMES) else ""
+
+    def _say(self):
+        name = self._selected()
+        if not name:
+            self.doing.SetLabel("")
+            return
+        self.chosen = name
+        ratio, said = colours.verdict(colours.rgb(name), self.against)
+        _level, frays = colours.fringing(colours.rgb(name))
+        line = ("%s on %s: %s, %.1f to 1."
+                % (name.capitalize(), self.against_name, said, ratio))
+        if frays:
+            line += (" Strong enough that its edges will fray a little once "
+                     "the video is encoded, which suits a rule or a heading "
+                     "better than small print.")
+        self.doing.SetLabel(line)
+        self.doing.Wrap(self.FromDIP(520))
+
+    def _take(self):
+        self.chosen = self._selected() or self.chosen
+        self.EndModal(wx.ID_OK)
+
+    def _on_key(self, event):
+        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._take()
+            return
+        event.Skip()
+
+
+class ColoursDialog(wx.Dialog):
+    """The brand: what sits underneath, what the words are, and the accent.
+
+    Three colours, because more than three is a look nobody can hold in their
+    head, and that matters more here than anywhere: there is no glancing at
+    it to remember.
+
+    Ready-made schemes are first, and every one of them was checked against
+    the contrast numbers rather than chosen by eye. `tests/test_colours.py`
+    asserts that, so a preset can never ship unreadable.
+    """
+
+    ROWS = [
+        ("scheme", "Ready-made look"),
+        ("background", "Background, under everything"),
+        ("text", "Words"),
+        ("accent", "Accent, the rule and the edges"),
+    ]
+
+    def __init__(self, parent, board, live=False):
+        super().__init__(parent, title="Colours",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = parent
+        self.board = board
+        self.live = bool(live)
+        self.changed = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label="Up and down read them. Enter changes one. Every "
+                        "choice says how it will read.")
+        note.Wrap(self.FromDIP(560))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Brand"), 0, wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(580, 150))
+        self.list.SetName("Brand")
+        self.list.InsertColumn(0, "What", width=250)
+        self.list.InsertColumn(1, "Now", width=140)
+        self.list.InsertColumn(2, "How it reads", width=180)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _e: self._describe())
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _e: self._change())
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.change = wx.Button(self, label="C&hange...")
+        self.change.Bind(wx.EVT_BUTTON, lambda _e: self._change())
+        row.Add(self.change, 0, wx.RIGHT, 8)
+        self.reset = wx.Button(self, label="Back to de&fault")
+        self.reset.Bind(wx.EVT_BUTTON, lambda _e: self._reset())
+        row.Add(self.reset, 0)
+        row.AddStretchSpacer()
+        row.Add(wx.Button(self, wx.ID_CANCEL, "&Close"), 0)
+        outer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.refresh(0)
+        self.list.SetFocus()
+
+    # --------------------------------------------------------------- rows --
+    def _current(self, key):
+        return {"background": self.board.colour_background,
+                "text": self.board.colour_text,
+                "accent": self.board.colour_accent}.get(key, "")
+
+    def refresh(self, keep=None):
+        if keep is None:
+            keep = max(0, self.list.GetFirstSelected())
+        self.list.DeleteAllItems()
+        back = colours.rgb(self.board.colour_background)
+        for at, (key, label) in enumerate(self.ROWS):
+            self.list.InsertItem(at, label)
+            if key == "scheme":
+                self.list.SetItem(at, 1, self._matching_scheme())
+                self.list.SetItem(at, 2, "")
+                continue
+            name = self._current(key)
+            self.list.SetItem(at, 1, name)
+            if key == "background":
+                ratio, said = colours.verdict(
+                    colours.rgb(self.board.colour_text), back)
+                self.list.SetItem(at, 2, "words %s" % said)
+            else:
+                ratio, said = colours.verdict(colours.rgb(name), back)
+                self.list.SetItem(at, 2, "%s, %.1f to 1" % (said, ratio))
+        if self.list.GetItemCount():
+            keep = max(0, min(keep, self.list.GetItemCount() - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+        self._describe()
+
+    def _matching_scheme(self):
+        """The ready-made look this is, if it is one of them."""
+        now = (self.board.colour_background, self.board.colour_text,
+               self.board.colour_accent)
+        for name in colours.SCHEME_NAMES:
+            if colours.scheme(name) == now:
+                return name
+        return "your own"
+
+    def _selected(self):
+        at = self.list.GetFirstSelected()
+        return self.ROWS[at][0] if 0 <= at < len(self.ROWS) else ""
+
+    def _describe(self):
+        key = self._selected()
+        if not key:
+            self.doing.SetLabel("")
+            return
+        if key == "scheme":
+            got = self._matching_scheme()
+            said = (colours.describe_scheme(got)
+                    if got in colours.SCHEME_NAMES
+                    else "Your own mix. %s" % colours.describe_pair(
+                        self.board.colour_text, self.board.colour_background))
+        elif key == "background":
+            said = ("Everything sits on this: the card, the bars either side "
+                    "of a camera that does not fill the frame, and the panels "
+                    "behind the words. " + colours.describe_pair(
+                        self.board.colour_text, self.board.colour_background))
+        elif key == "text":
+            said = colours.describe_pair(self.board.colour_text,
+                                         self.board.colour_background)
+        else:
+            said = ("The rule under the station name, and the line round the "
+                    "camera in the corner. " + colours.describe_pair(
+                        self.board.colour_accent,
+                        self.board.colour_background))
+        self.doing.SetLabel(said)
+        self.doing.Wrap(self.FromDIP(580))
+
+    # ---------------------------------------------------------------- keys --
+    def _on_key(self, event):
+        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER,
+                                  wx.WXK_SPACE):
+            self._change()
+            return
+        event.Skip()
+
+    # ------------------------------------------------------------- editing --
+    def _change(self):
+        key = self._selected()
+        if not key:
+            return
+        if key == "scheme":
+            self._pick_scheme()
+            return
+        back = colours.rgb(self.board.colour_background)
+        if key == "background":
+            # A background is judged by what the WORDS will look like on it,
+            # which is the only question anybody actually has about it.
+            against = colours.rgb(self.board.colour_text)
+            against_name = "your words, %s" % self.board.colour_text
+        else:
+            against = back
+            against_name = "the background, %s" % self.board.colour_background
+        titles = {"background": "Background", "text": "Words",
+                  "accent": "Accent"}
+        with ColourChoiceDialog(self, titles[key], self._current(key),
+                                against, against_name, role=key) as box:
+            if box.ShowModal() != wx.ID_OK:
+                return
+            picked = box.chosen
+        setattr(self.board, "colour_%s" % key, picked)
+        self._apply("%s is %s now. %s" % (titles[key], picked,
+                                          self._how_it_reads()))
+
+    def _pick_scheme(self):
+        names = list(colours.SCHEME_NAMES)
+        with wx.SingleChoiceDialog(self, "Which look?", "Ready-made look",
+                                   names) as box:
+            got = self._matching_scheme()
+            if got in names:
+                box.SetSelection(names.index(got))
+            if box.ShowModal() != wx.ID_OK:
+                return
+            chosen = names[box.GetSelection()]
+        back, text, accent = colours.scheme(chosen)
+        self.board.colour_background = back
+        self.board.colour_text = text
+        self.board.colour_accent = accent
+        self._apply(colours.describe_scheme(chosen))
+
+    def _reset(self):
+        self.board.colour_background = C.COLOUR_BACKGROUND
+        self.board.colour_text = C.COLOUR_TEXT
+        self.board.colour_accent = C.COLOUR_ACCENT
+        self._apply("Back to the default look. "
+                    + colours.describe_pair(C.COLOUR_TEXT, C.COLOUR_BACKGROUND))
+
+    def _how_it_reads(self):
+        return colours.describe_pair(self.board.colour_text,
+                                     self.board.colour_background)
+
+    def _apply(self, said):
+        self.changed = True
+        self.frame._touch()
+        try:
+            self.frame.refresh_brand()
+        except Exception:
+            pass
+        at = self.list.GetFirstSelected()
+        self.refresh(at)
+        self.list.SetFocus()
+        speaker = getattr(self.frame, "announce", None)
+        if speaker is not None:
+            speaker(said)

@@ -29,7 +29,10 @@ import wx
 from dropdeck import constants as C
 from dropdeck import preflight
 from dropdeck.board import Board
-from dropdeck.dialogs import (GoLiveDialog, ScreenTextDialog,
+from dropdeck import colours
+from dropdeck.dialogs import (ColourChoiceDialog, ColoursDialog,
+                              ShotCheckDialog,
+                              GoLiveDialog, ScreenTextDialog,
                               SourceControlDialog, VideoSourceDialog)
 from dropdeck.ui import DropDeckFrame
 from shot_settings import capture, OUT
@@ -113,6 +116,14 @@ def main():
     report = preflight.check(settings, board)
 
     for title, build, name in (
+            ("Shot check",
+             lambda: ShotCheckDialog(frame, frame), "shot-check.png"),
+            ("Colours", lambda: ColoursDialog(frame, board), "colours.png"),
+            ("Colour picker",
+             lambda: ColourChoiceDialog(
+                 frame, "Words", "off white", colours.rgb("near black"),
+                 "near black"),
+             "colour-picker.png"),
             ("Screen text",
              lambda: ScreenTextDialog(frame, board, live=True),
              "screen-text.png"),
@@ -124,6 +135,13 @@ def main():
              "video-source.png")):
         window = build()
         window.Show()
+        app.Yield()
+        # A second pass, and an explicit paint. One Yield is enough for a
+        # dialog of plain controls and NOT enough for one carrying a
+        # multiline text control: the Shot check window photographed as a
+        # solid black rectangle, which looks exactly like a broken dialog
+        # rather than an unpainted one.
+        window.Update()
         app.Yield()
         audit(title, window)
         try:

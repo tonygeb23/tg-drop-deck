@@ -45,6 +45,77 @@ people have asked for it on their forums for years.
 **Going live checks the text fits.** A title too long for the lower third is
 said before you connect rather than discovered by somebody watching.
 
+**Check my shot: ask something that can see.**
+
+`Alt+Shift+D`, or On air, Check my shot. It sends one still of the picture
+going out to Claude, ChatGPT or Gemini, on **your own account**, and reads
+back what a sighted person would have noticed. Framing, whether the top of
+your head is cut off, whether the light behind you is brighter than your
+face, whether your shirt blends into the wall, what is behind you, and
+whether the words on screen are sitting across your chin.
+
+It answers with a verdict first, then the details worst first, then one line
+saying the single most useful thing to change.
+
+**On a screen share it looks for anything private**: an inbox, a password
+manager, a notification, somebody's address. It says where it is so you can
+close it.
+
+Three things it deliberately does not do. **It is never needed to go live,
+and going live never waits for it.** **It never sends a picture of your
+screen without asking, and it asks every single time**, because a yes about
+one screen is not a yes about the next. **And it never fails loudly**: if
+the service is down or the key is wrong it says so in a sentence and the
+show carries on regardless.
+
+Set it up in Preferences, Shot check: choose who to ask and paste your key.
+The key is kept in Windows Credential Manager, not in your board file, so a
+board you send to somebody else does not carry it.
+
+**And your own colours, chosen without having to see them.**
+
+`Alt+Shift+C`, or On air, Colours. Three things: the **background everything
+sits on**, the **words**, and an **accent** for the rule under your station
+name and the line round the camera inset. Ten ready-made looks are offered
+first, and every one was checked against the numbers rather than picked by
+eye.
+
+**Every colour tells you how it will read.** Arrow through the list and each
+one says what it does against what it will sit on: "gold, easy to read, 8.6
+to 1", or "light green, too close together to read, 2.2 to 1". Nobody is
+asked to imagine a swatch.
+
+That number is not decoration, and it turns out to matter more for video than
+for anything else. Measured through the real encoder: **the colour pairs that
+H.264 destroys are exactly the pairs that score badly.** Video stores colour
+at half the resolution of brightness, so a pair whose difference is all hue
+has nothing left after encoding. Red on blue came back as coloured mush, and
+it had no brightness difference to begin with. One number catches both the
+unreadable and the unencodable.
+
+**The background really does sit under everything**: the card, the panels
+behind the words, and the bars either side of a camera or a screen that does
+not fill the frame. Those bars were a fixed dark grey before, which is the
+difference between a letterboxed shot looking deliberate and looking broken.
+
+**And a colour fault that has been going out on every stream.**
+
+Two things were wrong in how the picture was converted and labelled, and
+neither of them raised anything. The picture was being converted with the
+**standard definition** colour formula and then sent at high definition, so
+reds and blues were shifted from what they should have been. And it carried
+no label saying what it was, which left every viewer's player to guess. A
+wrong guess is what makes a stream look washed out, or too dark and heavy.
+
+Both are fixed and both are now checked by encoding a real stream and reading
+the colours back out of it. **Nothing needs to be set. Streams will simply
+look right**, and closer to what the colours above promise.
+
+**Coloured lines are drawn a touch differently too.** A coloured line an odd
+number of pixels high straddles the blocks video stores colour in, and loses
+about a third more of its colour than an even one. The rule under your
+station name was landing on the worst case at the commonest picture size.
+
 **And the card got real letters.** It was drawn in a hand-made font of five by
 seven blocks, capitals only, because that needed no font file. It is Roboto
 now, and so is everything above.

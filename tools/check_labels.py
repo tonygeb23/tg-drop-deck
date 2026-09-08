@@ -264,7 +264,8 @@ def main():
     app = wx.App(redirect=False)
     from dropdeck.dialogs import (AssignHotkeyDialog, DonateDialog,
                                   DropsLibraryDialog, FeedbackDialog,
-                                  GoLiveDialog, ScreenTextDialog,
+                                  ColoursDialog, GoLiveDialog,
+                                  ScreenTextDialog,
                                   SearchDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
                                   SourceControlDialog, SourcesDialog,
@@ -323,6 +324,7 @@ def main():
         ("Source control", lambda: SourceControlDialog(frame)),
         ("Video source", lambda: VideoSourceDialog(frame, frame.board)),
         ("Screen text", lambda: ScreenTextDialog(frame, frame.board)),
+        ("Colours", lambda: ColoursDialog(frame, frame.board)),
         # Built from a real pre-flight, and one with something wrong in it,
         # because the warnings box and the Put it right button only exist
         # when there is something to say. The clean case has fewer controls

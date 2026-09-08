@@ -205,6 +205,27 @@ def selftest():  # noqa: C901
     except Exception as exc:
         problems.append("screen text raised in this build: %r" % exc)
     try:
+        # The shot check needs Pillow's JPEG ENCODER, which is a different
+        # native module from the FreeType one the text check above proves.
+        # Same lesson as 3.5.0's first build: prove a bundled library WORKS,
+        # never that it imports, because Pillow imports perfectly well with
+        # none of its native modules present and simply answers None.
+        import numpy as _np4
+        from dropdeck import vision as _vision
+        _shot = _np4.zeros((64, 96, 3), dtype=_np4.uint8)
+        _shot[:, :] = (30, 60, 120)
+        _jpeg = _vision.as_jpeg(_shot)
+        if not _jpeg or _jpeg[:2] != bytes((0xFF, 0xD8)):
+            problems.append("the shot check cannot turn a frame into a JPEG "
+                            "in this build, so it could never send one")
+        else:
+            _who = _vision.providers_with_keys()
+            notes.append("shot check: encoder working, %s"
+                         % (", ".join(_who) + " set up" if _who
+                            else "no key set up yet"))
+    except Exception as exc:
+        problems.append("the shot check raised in this build: %r" % exc)
+    try:
         from dropdeck import screen as _screen
         if not _screen.available():
             problems.append("the screen cannot be captured in this build: %s"
