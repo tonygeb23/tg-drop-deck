@@ -4156,12 +4156,15 @@ class DropDeckFrame(wx.Frame):
             box.ShowModal()
 
     def live_to_labels(self):
-        """The two destinations, as the menu says them out loud.
+        """What each of the two destinations is set to, in that order.
 
-        Each one names the KIND first and the setting second, because the
-        kind is the decision and the address is the confirmation. An empty
-        one still appears: a choice you cannot see is the whole complaint,
-        and "not set up yet" is a more useful answer than an absent line.
+        The settings only. The menu adds "My radio station: " and "My video
+        platform: " itself, because the mnemonic has to live in the fixed
+        part of a label and never inside a name the user chose.
+
+        An unset one answers "not set up yet" rather than nothing. A choice
+        you cannot see is the whole complaint this menu exists to answer, so
+        an absent line would be the same fault in a smaller place.
         """
         station = (self.board.stream_name or self.board.stream_host
                    or "not set up yet")
