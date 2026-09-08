@@ -1,0 +1,24 @@
+The Mastodon announcement for 3.5.2, ready to post.
+
+492 characters as Mastodon counts it, which allows 500. It counts every link
+as 23 whatever its length, which is why the raw count is 501.
+
+It was not posted on 8 September because the token is not on the Mac. The
+existing script, Video production/Product shorts 2026-08-29/post_mastodon.py,
+reads MASTODON_INSTANCE and MASTODON_ACCESS_TOKEN from ~/mastodon/.env, and
+that file is on the PC. Put one there and it goes out, or post it by hand.
+
+The blog announcement went up instead:
+https://tonygebhard.me/2026/09/08/drop-deck-3-5-2-the-mac-copy-does-video-now/
+
+----------------------------------------------------------------------
+
+TG Drop Deck 3.5.2 is out, and the Mac copy does video now.
+
+YouTube, Facebook, Restream or any RTMP server. A card, your artwork, a camera, your screen, or your screen with the camera in a corner you pick.
+
+Command Shift V says what is on screen. Option Shift D asks a model what your shot really looks like: framing, lighting, what is behind you, anything private on a screen share.
+
+Nothing else in broadcasting tells a blind presenter what is in their own stream.
+
+https://tgstudios.app/drop-deck/
