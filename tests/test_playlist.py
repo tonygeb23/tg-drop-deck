@@ -1287,11 +1287,12 @@ from dropdeck.dialogs import SettingsDialog
 prefs = SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
                        page=SettingsDialog.PAGE_MIC)
 # Pinned by NAME and by COUNT so a tab cannot go missing in a refactor and
-# leave a setting unreachable. Shot check was added on 8 September 2026.
+# leave a setting unreachable. Shot check was added on 8 September 2026 and
+# Appearance on the 9th.
 _TABS = ["Output", "Sounds and beds", "Playlist", "Microphone", "Voice",
          "Audio streaming", "Video streaming", "Recording", "Speech",
-         "AI Provider"]
-check("Preferences has ten tabs",
+         "Appearance", "AI Provider"]
+check("Preferences has eleven tabs",
       prefs.tabs.GetPageCount() == len(_TABS), prefs.tabs.GetPageCount())
 check("named for what is on them",
       [prefs.tabs.GetPageText(i) for i in range(len(_TABS))] == _TABS,

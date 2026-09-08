@@ -19,6 +19,7 @@ import webbrowser
 
 from . import appicon
 from . import constants as C
+from . import darkmode
 from . import dsp
 from . import feedback
 from . import framing
@@ -477,6 +478,13 @@ def _pad_colours(slot, playing, hover):
     system palette and the accent bar is dropped. This app has never hardcoded
     a colour, which is exactly why high contrast works today; it is not going
     to start by breaking the one mode where getting it wrong is unreadable.
+
+    Dark mode is a third source, and it has to be asked separately.
+    `wx.SystemSettings` on wxWidgets 3.2 answers with the LIGHT system palette
+    however the machine is set, so the check below it cannot see dark mode at
+    all: without this branch eighty white cards would be painted on a dark
+    window. `darkmode.palette` is None unless dark styling is actually in
+    force, which covers high contrast and a missing library as well.
     """
     sys_get = wx.SystemSettings.GetColour
     window = sys_get(wx.SYS_COLOUR_WINDOW)
@@ -490,6 +498,23 @@ def _pad_colours(slot, playing, hover):
         if slot.is_missing:
             accent = sys_get(wx.SYS_COLOUR_HIGHLIGHT)
         return (face3d if hover else window), text, text, grey, accent
+
+    shades = darkmode.palette()
+    if shades is not None:
+        # The same shape as the branch above: one accent, and the loop and
+        # one shot colours are not attempted. Colour is never the only cue
+        # here, the state is a word in the label as well, and the theme's
+        # roles are the pairs it guarantees against WCAG AA. Inventing a
+        # green and a red to sit on #202020 would be guessing at exactly the
+        # numbers the library has already worked out.
+        accent = shades["accent"] if playing else None
+        if slot.is_missing:
+            accent = shades["error"]
+        return ((shades["surface_alt"] if hover else shades["window"]),
+                shades["error"] if slot.is_missing else shades["border"],
+                shades["text_disabled"] if not slot.is_assigned
+                else shades["text"],
+                shades["text_secondary"], accent)
 
     if slot.is_missing:
         return (wx.Colour("#fdf3f2"), wx.Colour("#c4a3a0"),
@@ -976,7 +1001,11 @@ class DropDeckFrame(wx.Frame):
 
         panel.SetSizer(outer)
 
-        self.status = self.CreateStatusBar(2)
+        # Not CreateStatusBar directly: a native Windows status bar draws its
+        # own text and ignores every colour, so under dark mode it came back
+        # black on near black. See darkmode.status_bar. In light mode this is
+        # exactly CreateStatusBar(2).
+        self.status = darkmode.status_bar(self, 2)
         # The announcement needs the room; the volume readout is short and
         # fixed. This was the other way round, so every message was cut.
         self.status.SetStatusWidths([-2, -5])
@@ -4990,6 +5019,24 @@ class DropDeckFrame(wx.Frame):
             return
         streamer.set_title(self._now_playing_title())
 
+    def _apply_appearance(self):
+        """Put board.appearance into force, now, on the open window.
+
+        Three things, and the middle one is the one that is easy to miss. The
+        library re-themes every native control by itself; the status bar is
+        not one it can recolour, so it is swapped for the other kind; and the
+        pads paint their own face, so they are asked to paint it again.
+
+        `Refresh` and not `SetLabel`: no accessible Name changes here, so a
+        screen reader reading a pad is not interrupted. That is the rule from
+        SoundButton.refresh, and it applies to a repaint just as much.
+        """
+        darkmode.set_mode(getattr(self.board, "appearance",
+                                  C.DEFAULT_APPEARANCE))
+        self.status = darkmode.restyle_status_bar(self, 2, [-2, -5])
+        self._update_status()
+        self.Refresh(True)
+
     def _on_settings(self, _event=None, page=None):
         """Preferences. One window, five tabs, two keys into it.
 
@@ -5019,6 +5066,7 @@ class DropDeckFrame(wx.Frame):
             self.board.duck_db = float(dialog.duck_db.GetValue())
             self.board.announce_playback = dialog.announce_playback.GetValue()
             self.board.speech_level = dialog.speech_level
+            self.board.appearance = dialog.appearance
             self.board.bed_fade_in = dialog.bed_fade_in
             self.board.bed_fade_out = dialog.bed_fade_out
             self.board.warn_before_end = dialog.warn_before_end
@@ -5093,6 +5141,13 @@ class DropDeckFrame(wx.Frame):
                 chain.enabled = dialog.voice_on.GetValue()
                 self.board.voice_on = chain.enabled
                 self.board.voice_settings = chain.to_dict()
+
+        # Light or dark, applied now rather than at the next launch. A
+        # setting that needs the app restarted is a setting people report as
+        # broken, and this one is about how the window looks at somebody, so
+        # they have to be able to see the answer while the question is still
+        # in their head.
+        self._apply_appearance()
 
         self.mixer.ducking = self.board.ducking
         self.mixer.duck_db = self.board.duck_db

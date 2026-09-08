@@ -155,6 +155,13 @@ def build_executable():
         # what carries FreeType, so a bundle that misses it renders
         # nothing and says nothing about why.
         "--collect-all", "PIL",
+        # Dark mode. Pure Python, so PyInstaller would find most of it by
+        # walking imports, but wxdarkmode.policy and wxdarkmode.audit reach
+        # optional wx submodules through __import__ and a missing one of
+        # those is a widget type that quietly stays light. Tiny, so collect
+        # the lot rather than work out which. The selftest themes a real
+        # window, because a build that loses this raises nothing at all.
+        "--collect-all", "wxdarkmode",
         # The face detection model, at the path framing.model_path expects.
         # It is inside the bundle rather than beside it, unlike the demo
         # pack: nobody has any reason to replace it.
