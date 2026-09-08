@@ -1,5 +1,95 @@
 # Changelog
 
+## 3.5.2 for Mac, 8 September 2026
+
+**The Mac catches up. Everything Windows gained between 3.4.0 and 3.5.2
+arrives at once, and the two copies share a version number again.**
+
+**Your show goes out on YouTube, Facebook, Restream or any RTMP server.**
+Pick a platform on the new Video streaming page, paste your stream key, press
+`Command+B`. Your radio station is still on its own page and `Command+B` goes
+to whichever one you tick, which you can now see and change on the On air
+menu under Streaming location.
+
+**Something has to be on the screen**, because YouTube will not take sound on
+its own. A card with your station name and whatever is playing is the default.
+Your own artwork, a camera, your screen, and your screen with the camera in
+the corner are the others. `Option+Shift+V` changes it, on air, without
+dropping the stream, and the camera corner is yours to choose.
+
+**Things can go on top of the picture.** `Option+Shift+T` gives you four
+named places: a top strip, a corner, a lower third and a clock. Each can show
+nothing, your station name, what is playing, the time, your own words, or a
+text file that is re-read a second after it changes, so anything else on this
+Mac that writes a text file can drive your screen.
+
+There is no canvas and there are no coordinates, and that is the point. Four
+places that are already the right size and cannot land on top of each other
+can be checked without looking, because the answer to "what is on screen" is
+four lines long.
+
+**`Command+Shift+V` says what is on screen.** The picture, and everything on
+top of it, in words. On air or off.
+
+**`Command+Shift+F` says what the camera can see.** In shot or not, centred,
+close enough, lit. It says changes rather than states, so it is not a running
+commentary, and it answers whether or not the announcements are turned on.
+
+**`Option+Shift+D` asks something that can see.** One still of the picture
+going out, to Claude, ChatGPT or Gemini, on your own account, and it reads
+back what a sighted person would have noticed: framing, whether the top of
+your head is cut off, whether the light behind you is brighter than your face,
+what is behind you, and whether the words on screen are sitting across your
+chin. There is a question box under the answer, and it remembers the
+conversation.
+
+On a screen share it looks for anything private, and says where it is.
+
+Three things it does not do. **It is never needed to go live, and going live
+never waits for it. It never sends a picture of your screen without asking,
+and it asks every single time.** And it never fails loudly.
+
+**`Option+Shift+C` is your own colours, chosen without having to see them.**
+The background, the words, and an accent for the rule and the edges. Ten
+ready-made looks, every one checked against the numbers rather than picked by
+eye, and every colour says how it will read: "gold, easy to read, 8.6 to 1".
+Nobody is asked to imagine a swatch.
+
+There is also a **This look** box that says the whole brand at once, and a
+button that asks a model what your branding actually looks like to a sighted
+viewer. That is the only question in this app that arithmetic genuinely
+cannot answer.
+
+**`Command+B` says what it is about to do, and waits.** Where the show is
+going, what it is sending, what will be on the screen, and whether your
+microphone is on the air. Then Return puts you live. It also checks, and that
+is the half worth having: a microphone left off the air, a picture file you
+have moved, no camera chosen, a bitrate the platform will refuse, track
+titles turned off, or the wrong one of the two destinations ticked. A box
+turns the asking off for good, and Preferences turns it back on.
+
+**Source control works the way a Mac works.** Muted and Solo are check boxes,
+Rename and Remove are buttons, and the old left and right mode is gone.
+
+**Your stream key is kept in your keychain**, not in the board file. Anybody
+holding a YouTube key can broadcast to your channel, and a board file is
+plain JSON that people send each other.
+
+**Two faults found and fixed while building this, both of which shipped in
+3.3.2.** Renaming a source was broken: the source control panel went on
+claiming the keyboard while its own rename box was open, so a digit typed
+into a name jumped the list behind it and Space opened a second box, which
+meant a name with a space in it could not be typed at all. And Return did
+nothing in every panel that puts your focus on what it has to say, which
+includes the update panel, where Return was supposed to mean Update.
+
+**The download grew by about one megabyte**, which is the two font files. The
+picture, the camera, the screen, the encoder and the face detection are all
+macOS itself. For contrast, OBS is 390 MB.
+
+Nothing about the soundboard, the running order, the keyboard or your radio
+station streaming has changed. The digit map is untouched.
+
 ## 3.5.2, 8 September 2026
 
 **The camera can go in any corner.** When your screen is what is going out,

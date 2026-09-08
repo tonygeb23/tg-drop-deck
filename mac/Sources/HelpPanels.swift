@@ -21,6 +21,24 @@ final class TabbingTextView: NSTextView {
             else { window?.selectNextKeyView(nil) }
             return
         }
+        // **A read only text view SWALLOWS Return**, and that is measured
+        // rather than assumed: a real Return delivered to a panel whose focus
+        // is in one of these left the window standing and never reached the
+        // default button. `insertNewline` on a view that cannot be edited does
+        // nothing at all, and the event is used up by then.
+        //
+        // That matters because every panel in this app that has something to
+        // say puts focus on the SAYING rather than on a button, which is what
+        // makes it reviewable. So Return, the key somebody presses when they
+        // have finished reading, did nothing: on the update panel it did not
+        // update, and it would not have gone live or checked a shot either.
+        // Shipped that way in 3.3.2 and found on 8 September 2026.
+        if event.keyCode == 36, !isEditable,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           let button = window?.defaultButtonCell {
+            button.performClick(nil)
+            return
+        }
         super.keyDown(with: event)
     }
 }

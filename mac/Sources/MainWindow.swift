@@ -32,6 +32,11 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     var sourceMonitor: SourceMonitor!
     let recorder = Recorder()
     let streamer = Streamer()
+    /// The video half. A second streamer rather than a mode on the first,
+    /// because Icecast and RTMP divide the work differently: one makes bytes
+    /// and something else owns the socket, the other is a session that owns
+    /// its own. Command B goes to one or the other, never both.
+    let videoStreamer = VideoStreamer()
     var hotkeys: GlobalHotkeys!
     enum View { case board, playlist }
     private(set) var currentView: View = .board

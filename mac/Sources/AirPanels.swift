@@ -74,7 +74,8 @@ final class HotkeyPanel {
         // Claimed rather than monitored, so the digit map cannot fire a pad
         // while somebody is pressing the very combination they want to bind.
         var response: NSApplication.ModalResponse = .cancel
-        ModalKeys.claim({ [weak self] event in self?.capture(event) ?? false }) {
+        ModalKeys.claim({ [weak self] event in self?.capture(event) ?? false },
+                        window: alert.window) {
             response = alert.runModal()
         }
 
@@ -390,23 +391,33 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     func tableViewSelectionDidChange(_ notification: Notification) { loadSelection() }
 }
 
+
 // -------------------------------------------------------- source control ---
 
-/// Mute, solo, rename or remove, mid show, from a list you drive with the
-/// arrow keys.
+/// Mute, solo, rename or remove, mid show.
 ///
-/// Two axes: up and down choose a source, left and right choose an action,
-/// Space does it. A digit jumps straight to that source and zero is the
-/// microphone, because during a link you do not want to arrow anywhere.
+/// **A STATE is a check box and an ACTION is a button.** Until 3.5.2 left and
+/// right cycled mute, solo, rename and remove, and Space did whichever you had
+/// landed on. That is a mode: something to remember, and something the window
+/// had to keep announcing because nothing on screen said which of the four you
+/// were on. Tony asked for the mode on 5 September and asked for it to go on
+/// the 8th, and he was right both times. A check box says what it is the
+/// moment focus lands on it, and Space toggles it the way Space toggles every
+/// check box anywhere.
+///
+/// The digits stay, because during a link you do not want to arrow anywhere.
 final class SourceControlPanel: NSObject {
 
     private let group: SourceGroup
     private let mic: MicInput
     private let speaker: Speaker
     private var table: NSTableView!
-    private var actionLabel: NSTextField!
-    private var action = 0
-    private static let actions = ["mute", "solo", "rename", "remove"]
+    private var mutedBox: NSButton!
+    private var soloBox: NSButton!
+    private var doing: NSTextField!
+    private var renameButton: NSButton!
+    private var removeButton: NSButton!
+    private var alert: NSAlert!
 
     init(group: SourceGroup, mic: MicInput, speaker: Speaker) {
         self.group = group
@@ -428,21 +439,23 @@ final class SourceControlPanel: NSObject {
     }
 
     func run(over parent: NSWindow?) {
-        let alert = NSAlert()
+        alert = NSAlert()
         alert.messageText = "Source control"
-        alert.informativeText = "Up and down choose a source. Left and right choose what "
-            + "Space will do. A digit jumps straight to a source, and zero is the microphone."
+        alert.informativeText = "Up and down choose a source. Tab to the boxes and "
+            + "buttons for what to do with it. A digit jumps straight to a source, "
+            + "and zero is the microphone."
         alert.addButton(withTitle: "Close")
 
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 280))
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 30, width: 560, height: 250))
+        let width: CGFloat = 620
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 340))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 110, width: width, height: 220))
         table = NSTableView(frame: scroll.bounds)
-        for (id, title, width) in [("n", "Number", 70), ("name", "Source", 220),
-                                   ("muted", "Muted", 70), ("solo", "Solo", 70),
-                                   ("air", "On air", 80)] {
+        for (id, title, w) in [("n", "Number", 70), ("name", "Source", 200),
+                               ("muted", "Muted", 80), ("solo", "Solo", 80),
+                               ("air", "On air", 80)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
-            column.width = CGFloat(width)
+            column.width = CGFloat(w)
             table.addTableColumn(column)
         }
         table.dataSource = self
@@ -453,149 +466,242 @@ final class SourceControlPanel: NSObject {
         scroll.borderType = .bezelBorder
         box.addSubview(scroll)
 
-        actionLabel = NSTextField(labelWithString: "")
-        actionLabel.frame = NSRect(x: 0, y: 4, width: 560, height: 20)
-        actionLabel.setAccessibilityLabel("What Space will do")
-        box.addSubview(actionLabel)
+        // The labels are "Muted" and "Solo" and they NEVER change. The tick
+        // carries the value; a control's accessible name must not be rewritten
+        // when its value moves.
+        mutedBox = NSButton(checkboxWithTitle: "Muted", target: self,
+                            action: #selector(mutedToggled))
+        mutedBox.frame = NSRect(x: 0, y: 76, width: 200, height: 24)
+        mutedBox.setAccessibilityLabel("Muted")
+        mutedBox.toolTip = "This source stops going out, and stops being recorded. "
+                         + "You go on hearing everything else."
+        box.addSubview(mutedBox)
+
+        soloBox = NSButton(checkboxWithTitle: "Solo", target: self,
+                           action: #selector(soloToggled))
+        soloBox.frame = NSRect(x: 210, y: 76, width: 200, height: 24)
+        soloBox.setAccessibilityLabel("Solo")
+        soloBox.toolTip = "Only the soloed sources go out. Everything else is silent "
+                        + "until nothing is soloed."
+        box.addSubview(soloBox)
+
+        doing = NSTextField(wrappingLabelWithString: "")
+        doing.frame = NSRect(x: 0, y: 40, width: width, height: 30)
+        doing.setAccessibilityLabel("What this does")
+        box.addSubview(doing)
+
+        renameButton = NSButton(title: "Rename...", target: self,
+                                action: #selector(renamePressed))
+        renameButton.frame = NSRect(x: 0, y: 4, width: 130, height: 30)
+        renameButton.setAccessibilityLabel("Rename")
+        box.addSubview(renameButton)
+
+        removeButton = NSButton(title: "Remove...", target: self,
+                                action: #selector(removePressed))
+        removeButton.frame = NSRect(x: 140, y: 4, width: 130, height: 30)
+        removeButton.setAccessibilityLabel("Remove")
+        box.addSubview(removeButton)
 
         alert.accessoryView = box
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        describe()
+        alert.window.initialFirstResponder = table
+        loadSelection()
 
-        // The keys are claimed rather than monitored. See ModalKeys: a second
-        // local monitor raced the window's own and the digits, which are the
-        // whole point of this panel mid link, sometimes fired pads instead.
-        ModalKeys.claim({ [weak self] event in self?.handle(event) ?? false }) {
+        // The digits are claimed rather than monitored: a second local monitor
+        // raced the window's own and sometimes fired pads instead. The window
+        // is named so a nested rename box takes the keyboard back while it is
+        // up; see ModalKeys.owner for what went wrong without it.
+        ModalKeys.claim({ [weak self] event in self?.handle(event) ?? false },
+                        window: alert.window) {
             alert.runModal()
         }
     }
 
-    private func describe() {
-        let row = max(0, table.selectedRow)
-        guard row < rows.count else { return }
-        let entry = rows[row]
-        let verb = SourceControlPanel.actions[action]
-        let state = entry.muted ? "muted" : "not muted"
-        actionLabel.stringValue = "Space will \(verb) \(entry.label), \(state)"
-        speaker.announceAnswer(actionLabel.stringValue)
-    }
-
     private func handle(_ event: NSEvent) -> Bool {
+        guard NSApp.keyWindow === alert.window else { return false }
+        guard !(alert.window.firstResponder is NSTextView) else { return false }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         guard mods.isEmpty else { return false }
-        switch event.keyCode {
-        case UInt16(kVK_LeftArrow):
-            action = (action + SourceControlPanel.actions.count - 1)
-                % SourceControlPanel.actions.count
-            describe()
+        if event.keyCode == 53 {                           // Escape
+            NSApp.stopModal(withCode: .alertFirstButtonReturn)
             return true
-        case UInt16(kVK_RightArrow):
-            action = (action + 1) % SourceControlPanel.actions.count
-            describe()
+        }
+        // The boxes and buttons want their own keys. Only act on a key while
+        // the LIST has focus.
+        guard alert.window.firstResponder === table else { return false }
+        if event.charactersIgnoringModifiers == String(UnicodeScalar(NSF2FunctionKey)!) {
+            rename()
             return true
-        case UInt16(kVK_Space), UInt16(kVK_Return):
-            perform()
+        }
+        if event.charactersIgnoringModifiers == String(UnicodeScalar(NSDeleteFunctionKey)!)
+            || event.charactersIgnoringModifiers == "\u{8}" {
+            remove()
             return true
-        default: break
         }
         // A digit jumps to that source. Its NUMBER is its position, not its
         // name, so renaming never renumbers anything.
         if let chars = event.charactersIgnoringModifiers, let digit = Int(chars),
            digit >= 0, digit < rows.count {
             table.selectRowIndexes(IndexSet(integer: digit), byExtendingSelection: false)
-            describe()
+            loadSelection()
             return true
         }
         return false
     }
 
-    private func perform() {
+    private func selected() -> (id: String, label: String, muted: Bool, solo: Bool, air: Bool)? {
         let row = max(0, table.selectedRow)
-        guard row < rows.count else { return }
-        let entry = rows[row]
-        let isMic = entry.id == micDuckKey
+        let all = rows
+        return row < all.count ? all[row] : nil
+    }
 
-        switch SourceControlPanel.actions[action] {
-        case "mute":
-            if isMic {
-                speaker.announceAnswer("The microphone is turned off with Command M, "
-                                       + "not muted here")
-                return
-            }
-            if let source = group.source(id: entry.id) {
-                source.config.muted.toggle()
-                speaker.announceAnswer("\(entry.label) \(source.config.muted ? "muted" : "unmuted")")
-            }
-        case "solo":
-            if group.soloed == entry.id {
-                group.soloed = nil
-                speaker.announceAnswer("\(entry.label) no longer soloed. Everything is back")
-            } else {
-                group.soloed = entry.id
-                speaker.announceAnswer("\(entry.label) soloed. Everything else is silent.")
-            }
-        case "rename":
-            if isMic {
-                speaker.announceAnswer("The microphone is always called the microphone")
-                return
-            }
-            guard let source = group.source(id: entry.id) else { return }
-            let alert = NSAlert()
-            alert.messageText = "Rename \(source.config.name)"
-            alert.addButton(withTitle: "Rename")
-            alert.addButton(withTitle: "Cancel")
-            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-            field.stringValue = source.config.name
-            field.setAccessibilityLabel("Name")
-            alert.accessoryView = field
-            alert.window.initialFirstResponder = field
-            if alert.runModal() == .alertFirstButtonReturn {
-                let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty {
-                    source.config.name = name
-                    speaker.announceAnswer("Renamed to \(name)")
-                } else {
-                    speaker.announceAnswer("Left as \(source.config.name)")
-                }
-            } else {
-                speaker.announceAnswer("Kept")
-            }
-        default:
-            if isMic {
-                speaker.announceAnswer("The microphone cannot be removed. "
-                                       + "Command M turns it off.")
-                return
-            }
-            if let source = group.source(id: entry.id) {
-                source.stop()
-                source.config.onAir = false
-                speaker.announceAnswer("Removed \(entry.label)")
-            }
+    /// Put the boxes where the selected row is.
+    ///
+    /// **Deliberately not the same path as applying a change.** In wx, setting
+    /// a check box raises its own event, so arrowing down the list wrote the
+    /// displayed value straight back onto every source it passed and silently
+    /// muted them, and Windows carries a `_syncing` guard because of it.
+    /// Setting `NSButton.state` sends no action here, so the guard is not
+    /// needed. Keeping the two paths apart is what makes sure it stays that
+    /// way.
+    private func loadSelection() {
+        guard let entry = selected() else { return }
+        let isMic = entry.id == micDuckKey
+        mutedBox.state = entry.muted ? .on : .off
+        soloBox.state = entry.solo ? .on : .off
+        mutedBox.isEnabled = !isMic
+        renameButton.isEnabled = !isMic
+        removeButton.isEnabled = !isMic
+        // A disabled control leaves the Tab loop, so the reason has to be
+        // somewhere a Tab user will pass. Here.
+        doing.stringValue = isMic
+            ? "The microphone. It cannot be renamed or removed; Command M turns it off."
+            : "\(entry.label). The boxes and buttons below act on this one."
+    }
+
+    @objc private func mutedToggled() {
+        guard let entry = selected(), entry.id != micDuckKey,
+              let source = group.source(id: entry.id) else {
+            mutedBox.state = .off
+            speaker.announceAnswer("The microphone is turned off with Command M, "
+                                 + "not muted here")
+            return
         }
+        source.config.muted = mutedBox.state == .on
+        refresh()
+        speaker.announceState("\(entry.label) \(source.config.muted ? "muted" : "unmuted")")
+    }
+
+    @objc private func soloToggled() {
+        guard let entry = selected() else { return }
+        if soloBox.state == .on {
+            group.soloed = entry.id
+            speaker.announceState("\(entry.label) soloed. Everything else is silent.")
+        } else {
+            group.soloed = nil
+            speaker.announceState("\(entry.label) no longer soloed. Everything is back")
+        }
+        refresh()
+    }
+
+    @objc private func renamePressed() { rename() }
+    @objc private func removePressed() { remove() }
+
+    private func rename() {
+        guard let entry = selected() else { return }
+        if entry.id == micDuckKey {
+            speaker.announceAnswer("The microphone is always called the microphone")
+            return
+        }
+        guard let source = group.source(id: entry.id) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename \(source.config.name)"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = source.config.name
+        field.setAccessibilityLabel("Name")
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        field.currentEditor()?.selectAll(nil)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty && name != source.config.name {
+                source.config.name = name
+                speaker.announceAnswer("Renamed to \(name)")
+            } else {
+                speaker.announceAnswer("Left as \(source.config.name)")
+            }
+        } else {
+            speaker.announceAnswer("Kept")
+        }
+        refresh()
+    }
+
+    private func remove() {
+        guard let entry = selected() else { return }
+        if entry.id == micDuckKey {
+            speaker.announceAnswer("The microphone cannot be removed. "
+                                 + "Command M turns it off.")
+            return
+        }
+        let confirm = NSAlert()
+        confirm.messageText = "Remove \(entry.label)?"
+        confirm.informativeText = "It stops going out and its settings are forgotten."
+        // The safe answer is the default.
+        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: "Remove")
+        guard confirm.runModal() == .alertSecondButtonReturn else {
+            speaker.announceAnswer("Kept")
+            return
+        }
+        let row = max(0, table.selectedRow)
+        if let source = group.source(id: entry.id) {
+            source.stop()
+            source.config.onAir = false
+        }
+        speaker.announceAnswer("Removed \(entry.label)")
+        table.reloadData()
+        // The cursor lands on the row that took its place rather than off the
+        // end of the list.
+        let next = min(row, max(0, rows.count - 1))
+        table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
+        loadSelection()
+    }
+
+    private func refresh() {
+        let row = max(0, table.selectedRow)
         table.reloadData()
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        loadSelection()
     }
 }
 
 extension SourceControlPanel: NSTableViewDataSource, NSTableViewDelegate {
+
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
                    row: Int) -> NSView? {
-        guard let tableColumn, row < rows.count else { return nil }
-        let entry = rows[row]
+        let all = rows
+        guard row < all.count, let column = tableColumn else { return nil }
+        let entry = all[row]
         let text: String
-        switch tableColumn.identifier.rawValue {
-        case "n": text = "\(row)"
+        switch column.identifier.rawValue {
+        case "n": text = row == 0 ? "Mic" : String(row)
         case "name": text = entry.label
         case "muted": text = entry.muted ? "yes" : "no"
         case "solo": text = entry.solo ? "yes" : "no"
         default: text = entry.air ? "yes" : "no"
         }
-        let field = NSTextField(labelWithString: text)
-        field.setAccessibilityLabel(text)
-        return field
+        let cell = NSTextField(labelWithString: text)
+        cell.setAccessibilityLabel(text)
+        return cell
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) { describe() }
+    /// Nothing is spoken on arrow. The row already carries the number, the
+    /// name, muted, solo and on air. The old sentence existed only because the
+    /// mode had to be announced, and with the mode gone it would be the row
+    /// read twice.
+    func tableViewSelectionDidChange(_ notification: Notification) { loadSelection() }
 }

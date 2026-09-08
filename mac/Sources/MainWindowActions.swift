@@ -26,8 +26,14 @@ extension MainWindow {
         return nil
     }
 
+    /// A one line prompt.
+    ///
+    /// `fieldLabel` is what VoiceOver calls the box. It defaults to the title,
+    /// which is right when the window and the field are asking the same
+    /// question, and wrong when the title names a PLACE and the box wants the
+    /// words to put in it: "Top strip" is not what that box is called.
     func ask(title: String, message: String, value: String = "",
-             okTitle: String = "OK") -> String? {
+             okTitle: String = "OK", fieldLabel: String? = nil) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
@@ -35,7 +41,7 @@ extension MainWindow {
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.stringValue = value
-        field.setAccessibilityLabel(title)
+        field.setAccessibilityLabel(fieldLabel ?? title)
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         field.currentEditor()?.selectAll(nil)

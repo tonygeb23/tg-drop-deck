@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.3.2</string>
+	<string>3.5.2</string>
 	<key>CFBundleVersion</key>
-	<string>3.3.2</string>
+	<string>3.5.2</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
@@ -31,6 +31,8 @@
 	<string>TG Drop Deck uses this only to close a running copy of itself when you install a new version.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>TG Drop Deck can put the audio of another program on the air, including your screen reader, when you add it as a source.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>TG Drop Deck opens your camera only when you choose it as what the stream shows, so your picture can go out and so it can tell you what the camera can see.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

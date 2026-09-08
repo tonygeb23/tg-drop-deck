@@ -45,12 +45,46 @@ enum ModalKeys {
     /// cleared on the way out, and never left set.
     static var current: ((NSEvent) -> Bool)?
 
+    /// Which window the claim belongs to.
+    ///
+    /// **This is the whole of the fix for a bug that shipped in 3.3.2.** A
+    /// claim used to apply to every window, and the source control panel opens
+    /// a NESTED alert to rename a source. While that rename box was up, the
+    /// panel behind it was still getting every key first, before the monitor
+    /// had even worked out that somebody was typing. So a digit typed into the
+    /// name jumped the list behind it and never reached the field, and Space
+    /// re-entered the panel's own Space handler and opened a SECOND rename
+    /// box. A source whose name has a space in it could not be typed at all.
+    ///
+    /// A claim now only fires while the window that made it is the one running
+    /// modally, so a nested box takes the keyboard back for as long as it is
+    /// up and hands it over again when it closes.
+    static var owner: NSWindow?
+
+    /// Whether the claim should see this key at all.
+    static func active() -> Bool {
+        guard current != nil else { return false }
+        guard let owner else { return true }
+        // Nothing modal in front, or the front one is ours.
+        guard let front = NSApp.modalWindow else { return true }
+        return front === owner
+    }
+
     /// Claim the keyboard for the length of one modal panel.
-    static func claim(_ handler: @escaping (NSEvent) -> Bool, during body: () -> Void) {
-        let previous = current
+    ///
+    /// `window` is the panel's own window, and passing it is what keeps a
+    /// nested box working. It is optional only so a caller that genuinely
+    /// wants every key, wherever it lands, can still say so by leaving it out.
+    static func claim(_ handler: @escaping (NSEvent) -> Bool,
+                      window: NSWindow? = nil,
+                      during body: () -> Void) {
+        let previousHandler = current
+        let previousOwner = owner
         current = handler
+        owner = window
         body()
-        current = previous
+        current = previousHandler
+        owner = previousOwner
     }
 }
 
@@ -81,6 +115,9 @@ enum Command: String, CaseIterable {
     case micToggle, micSettings
     case streamToggle, streamStatus, streamStats, streamSetup
     case record, recordFolder, sources, sourceControl, muteSources, soloMic
+    // The video half, 3.5.2.
+    case videoSource, screenText, shotCheck, colours, cameraCheck, sayScreen
+    case streamingLocation
     case shortcuts, userGuide, checkUpdates, feedback, donate, about
     case keyboardCheck, globalHotkeysToggle
 }
@@ -298,6 +335,17 @@ enum KeyMap {
         // the Windows combination stays on as an alias where the system leaves
         // it free. `SelfTest` now refuses a build with two commands on one key.
         .sources:       [Binding("s", [.option, .shift])],
+        // The Option Shift family. Windows uses Alt Shift for all of these and
+        // Option is what Alt is called here, so the whole family carries
+        // across unchanged: S for sources, and then V, T, D and C.
+        .videoSource:   [Binding("v", [.option, .shift])],
+        .screenText:    [Binding("t", [.option, .shift])],
+        .shotCheck:     [Binding("d", [.option, .shift])],
+        .colours:       [Binding("c", [.option, .shift])],
+        // Windows has these on Ctrl Shift, which is Command Shift here for the
+        // same reason every other Ctrl moved: VoiceOver owns Control Option.
+        .cameraCheck:   [Binding("f", [.command, .shift])],
+        .sayScreen:     [Binding("v", [.command, .shift])],
         .sourceControl: [Binding("c", [.option, .command]),
                          Binding("s", [.option, .control, .shift], primary: false)],
         .muteSources:   [Binding("m", [.option, .command])],

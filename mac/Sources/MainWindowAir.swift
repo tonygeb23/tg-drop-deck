@@ -111,13 +111,49 @@ extension MainWindow {
     // ------------------------------------------------------------- the air ---
 
     /// Command B. Nothing goes out until this is pressed.
+    ///
+    /// **The asking lives here and never in `startStream`.** That is load
+    /// bearing rather than tidy: this is called by a person pressing a key,
+    /// and only a person can answer a question. A panel inside the starting
+    /// code would hang every check that goes live, for ever, on a window
+    /// nothing can click.
     func toggleStream() {
-        if streamer.isOn {
-            streamer.stop(group: group)
+        if streamer.isOn || videoStreamer.isOn {
+            if streamer.isOn { streamer.stop(group: group) }
+            if videoStreamer.isOn { videoStreamer.stop(group: group) }
             speaker.announceState("Off air")
             updateStatusLine()
+            updateAirMenu()
             return
         }
+        // What is about to happen, said before it happens, and checked.
+        // Nearly every way of getting a broadcast wrong survives the
+        // connection and ruins the show quietly.
+        if board.askBeforeLive {
+            let report = preflight()
+            switch GoLivePanel(report: report, board: board).run(over: window) {
+            case .stayOff:
+                speaker.announceState("Still off air")
+                return
+            case .putItRight(let page):
+                showPreferences(tab: page == C.fixVideo ? "Video streaming" : "Streaming")
+                return
+            case .goLive:
+                break
+            }
+        } else {
+            // The asking is off, so the checking still happens and only the
+            // things that would stop it are said.
+            let report = preflight()
+            if report.blocked {
+                speaker.announceState(report.stops.map { $0.text }.joined(separator: ". "))
+                return
+            }
+        }
+        if board.liveTo == C.liveToVideo { startVideoStream() } else { startAudioStream() }
+    }
+
+    private func startAudioStream() {
         guard !board.stream.host.isEmpty else {
             speaker.announceState("There is no server set up yet. "
                              + "Set up streaming is on the On air menu")
@@ -143,8 +179,52 @@ extension MainWindow {
         updateStatusLine()
     }
 
+    private func startVideoStream() {
+        videoStreamer.onState = { [weak self] state, detail in
+            guard let self else { return }
+            self.updateStatusLine()
+            self.updateAirMenu()
+            switch state {
+            case .live:
+                var line = "On air to \(StreamServers.serverLabel(self.board.videoServer))"
+                if self.mic.isOpen, let warning = self.micOffAirNote { line += ". \(warning)" }
+                self.speaker.announceState(line)
+            case .failed: self.speaker.announceState("Could not go on air. \(detail)")
+            case .retrying: self.speaker.announceState("Off air, trying again. \(detail)")
+            default: break
+            }
+        }
+        // The picture and the health of it are said out loud as they happen,
+        // because there is no preview to glance at.
+        videoStreamer.onSay = { [weak self] text in self?.speaker.announce(text) }
+        mic.onAir = board.stream.sendMic
+        guard videoStreamer.start(group: group, settings: videoStreamSettings()) else {
+            speaker.announceState("Could not go on air. \(videoStreamer.detail)")
+            return
+        }
+        // Built after the connection is asked for, on its own queue, so a
+        // camera opening does not hold the keyboard.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            self.videoStreamer.setPicture(self.pictureSettings())
+            self.videoStreamer.setTitle(self.nowPlayingTitle)
+        }
+        speaker.announceState("Connecting to "
+                            + StreamServers.serverLabel(board.videoServer))
+        updateStatusLine()
+    }
+
     /// Command Shift B. An answer, so it speaks at every level.
     func streamStatus() {
+        // **Whichever destination Command B would use.** Windows read the
+        // radio station's address whichever was ticked until 3.4.1, so a board
+        // set up for YouTube and nothing else answered "Off air, and no server
+        // is set up yet" while Command B would have gone live perfectly well.
+        // It is the one question this key exists to answer.
+        if videoStreamer.isOn || (board.liveTo == C.liveToVideo && !streamer.isOn) {
+            speaker.announceAnswer(videoStreamer.statusLine())
+            return
+        }
         speaker.announceAnswer(streamer.statusLine())
     }
 

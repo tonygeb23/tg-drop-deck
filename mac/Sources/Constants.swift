@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.3.2"
+    static let appVersion = "3.5.2"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -302,6 +302,24 @@ enum C {
     ]
     static let defaultStreamFormat = streamFormatMP3
 
+    /// The SHORT name, which is a different job from the labels above.
+    ///
+    /// Those are a sentence each, for a Preferences list where somebody is
+    /// choosing between four things they may never have heard of. On the way
+    /// to air the pre-flight says "128 kbps MP3", and the sentence would read
+    /// as "128 kbps MP3, which every server and every player takes", which is
+    /// nine words of sales copy in the middle of a going live announcement.
+    ///
+    /// These are Windows' own `FORMATS[key]["label"]` values, verbatim, so the
+    /// two copies say the same line. WAV is the Mac's own addition and Windows
+    /// has no entry for it.
+    static let streamFormatShortLabels: [String: String] = [
+        streamFormatMP3: "MP3",
+        streamFormatAAC: "AAC",
+        streamFormatOpus: "Ogg Opus",
+        streamFormatWAV: "WAV",
+    ]
+
     /// A format named on a board written somewhere else, moved to the nearest
     /// thing this build can really send. An Ogg mount wants an Ogg stream, so
     /// Vorbis becomes Opus rather than AAC.
@@ -318,8 +336,13 @@ enum C {
     static let streamServerIcecast = "icecast"
     static let streamServerShoutcast = "shoutcast"
     static let streamServers = [streamServerIcecast, streamServerShoutcast]
+    /// The wording is Windows' own, to the letter. The Mac read "Icecast, or
+    /// a Liquidsoap harbor" from 3.2.2 until 3.5.2, which is better English
+    /// and was still drift: the pre-flight builds a spoken line out of this
+    /// string, so the two copies were saying different sentences on the way to
+    /// air. Caught by mac/tools/cross_check.py, which is what it is for.
     static let streamServerLabels: [String: String] = [
-        streamServerIcecast: "Icecast, or a Liquidsoap harbor",
+        streamServerIcecast: "Icecast, or Liquidsoap harbor",
         streamServerShoutcast: "SHOUTcast",
     ]
 
@@ -362,6 +385,443 @@ enum C {
     static let defaultRecordFormat = "wav"
     static let defaultRecordBitrate = 192
 
+    // ================================================================ video ===
+    //
+    // Everything below mirrors dropdeck/constants.py. These numbers were
+    // argued for one at a time on the Windows side, most of them with a
+    // measurement, and the reason is kept with each one because a bare number
+    // invites somebody to round it off. A Mac that quietly disagrees with one
+    // of them is a bug, not a preference: see docs/MAC-VIDEO-PLAN.md.
+
+    /// The video side of the server list. Same shape as the audio one,
+    /// different page.
+    static let videoServerOrder = ["youtube", "facebook", "restream", "rtmp"]
+
+    /// Which of the two Command+B sends the show to. One at a time: sending to
+    /// both means two encoders and twice the upload, and it is not built.
+    static let liveToAudio = "audio"
+    static let liveToVideo = "video"
+    static let liveTo = [liveToAudio, liveToVideo]
+    static let liveToLabels: [String: String] = [
+        liveToAudio: "my radio station",
+        liveToVideo: "my video platform",
+    ]
+
+    /// The ingest addresses, without the key. The key is a credential and is
+    /// kept apart from these everywhere except the moment the URL is built.
+    ///
+    /// BOTH ARE RTMPS, AND THAT IS NOT A PREFERENCE. Facebook has refused
+    /// unencrypted RTMP since 2018, and YouTube asks for RTMPS. Facebook's is
+    /// on port 443 deliberately: it gets through firewalls that block 1935.
+    static let rtmpIngest: [String: String] = [
+        "youtube": "rtmps://a.rtmps.youtube.com/live2",
+        "facebook": "rtmps://live-api-s.facebook.com:443/rtmp",
+        // Restream is a STARTING POINT here, not the answer, which is why its
+        // address stays editable while the other two do not. Restream tells
+        // you to create an RTMP stream in your account and then copy the URL
+        // and key IT gives you, and that URL can differ by account and by
+        // region.
+        "restream": "rtmp://live.restream.io/live",
+    ]
+
+    /// The platforms whose address is fixed and must not be typed by hand.
+    /// There is exactly one ingest for each and getting it wrong is not a
+    /// thing a user should be able to do. Restream is deliberately not here:
+    /// it hands out the URL along with the key, and it is theirs to change.
+    static let rtmpFixedAddress = ["youtube", "facebook"]
+
+    /// Where a user goes to fetch their key. Opened for them, because hunting
+    /// for it in a video web app is the worst part of setting this up with a
+    /// screen reader, and it is the ONE part the app can make easy.
+    static let rtmpKeyPage: [String: String] = [
+        // youtube.com/live_dashboard rather than a studio.youtube.com URL: it
+        // is a 301 that YouTube maintains, it resolves to whichever channel is
+        // signed in, and it survives Studio moving its own pages around.
+        "youtube": "https://www.youtube.com/live_dashboard",
+        "facebook": "https://www.facebook.com/live/create",
+        "restream": "https://restream.io/settings/streaming-setup",
+    ]
+
+    /// The backup ingest each platform publishes, for when the primary is
+    /// refusing connections. Not used automatically: switching hosts mid show
+    /// is its own decision and this is here so the address is not guessed.
+    static let rtmpIngestBackup: [String: String] = [
+        "youtube": "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
+    ]
+
+    /// WHAT HAPPENS WHEN YOU CONNECT, which is not the same on the two
+    /// platforms and is the most important thing about this feature.
+    ///
+    /// YouTube: pushing to the Stream tab key STARTS A PUBLIC BROADCAST. A
+    /// watch page is created, subscribers are notified, and the stream is
+    /// archived when you stop. There is no preview and nothing to confirm.
+    ///
+    /// Facebook: nothing is posted. Streaming software gets a preview in Live
+    /// Producer and the broadcast starts only when somebody clicks Go Live Now.
+    ///
+    /// Restream is a third answer, which is why it is nil rather than false:
+    /// it goes live wherever YOU have switched channels on in your Restream
+    /// account, so with every channel off it goes nowhere at all. That makes
+    /// it the one place a full end to end test can run without touching
+    /// anybody's real audience.
+    static let rtmpGoesLiveAtOnce: [String: Bool?] = [
+        "youtube": true, "facebook": false, "restream": nil, "rtmp": false,
+    ]
+
+    /// What the picture is, when there is no camera. YouTube refuses an audio
+    /// only ingest, so a radio show still has to send something, and a still
+    /// card costs about 64 kbps: measured 7 September 2026, not estimated.
+    static let rtmpWidth = 1280
+    static let rtmpHeight = 720
+    static let rtmpFPS = 30
+    static let rtmpVideoBitrate = 2500
+
+    /// Two seconds. YouTube asks for two and will not take more than four, and
+    /// Facebook is the same. This is the number that decides whether a stream
+    /// that connects is then called unhealthy, so it is not a knob.
+    static let rtmpKeyframeSeconds = 2
+
+    /// The most frames that may be sent in one go when catching up.
+    /// Deliberately tiny. Measured 7 September 2026 on Windows: with the pump
+    /// running once a quarter of a second, video left in bursts of eight and
+    /// the gaps between bursts reached 234 ms, which is what "choppy" looks
+    /// like from the sending end even though the AVERAGE frame gap was a
+    /// perfect 33 ms. An average is the wrong thing to look at here.
+    static let rtmpCatchupFrames = 2
+
+    /// How much the rate may swing, as a fraction of a second. One second let
+    /// a cut from card to camera dip to 1016 kbps and peak at 4210, either
+    /// side of what Facebook publishes for 720p30. Half a second holds it
+    /// tighter.
+    static let rtmpVBVSeconds = 0.5
+
+    /// The matrix the picture is converted with, and the one it is tagged as.
+    /// BT.709 is what every player assumes for 720p and above.
+    ///
+    /// On Windows this had to be forced, because swscale's default is BT.601,
+    /// a standard definition matrix on a high definition picture, and the
+    /// stream carried no tag at all so every player guessed. Here it is three
+    /// VideoToolbox properties on the compression session, so the fault
+    /// 3.5.0 had to correct cannot arise. It is named anyway, because the
+    /// value has to agree with what Windows sends.
+    static let rtmpColourspace = "ITU709"
+
+    /// What each platform publishes for video bitrate, in kbps, by resolution.
+    /// Used to tell somebody their settings are outside the range BEFORE they
+    /// go live rather than after. Facebook gives real lower bounds; YouTube
+    /// gives one recommended figure for H.264 and no bounds at all.
+    static let facebookBitrates: [VideoSize: (low: Int, high: Int)] = [
+        VideoSize(1920, 1080, 60): (4500, 9000),
+        VideoSize(1920, 1080, 30): (3000, 6000),
+        VideoSize(1280, 720, 60): (2250, 6000),
+        VideoSize(1280, 720, 30): (1500, 4000),
+        VideoSize(854, 480, 30): (600, 2000),
+        VideoSize(640, 360, 30): (400, 1000),
+    ]
+    static let youtubeRecommended: [VideoSize: Int] = [
+        VideoSize(1280, 720, 30): 4000, VideoSize(1280, 720, 60): 6000,
+        VideoSize(1920, 1080, 30): 10000, VideoSize(1920, 1080, 60): 12000,
+    ]
+
+    /// Facebook ends a broadcast at eight hours. Worth saying rather than
+    /// letting somebody find out at the end of a long show.
+    static let facebookMaxHours = 8
+
+    /// The bitrates the Video streaming page offers, in kbps.
+    static let rtmpVideoBitrates = [500, 1000, 1500, 2500, 4000, 6000]
+
+    // --------------------------------------------------------- the picture ---
+
+    /// What the picture can be. A camera is only one of them, and it is not
+    /// the default: most of this app's users are running a radio show and have
+    /// no reason to be on camera.
+    static let pictureCard = "card"
+    static let pictureImage = "image"
+    static let pictureCamera = "camera"
+    static let pictureScreen = "screen"
+    static let pictureSplit = "split"
+    static let pictureSources = [pictureCard, pictureImage, pictureCamera,
+                                 pictureScreen, pictureSplit]
+
+    /// What each is called on screen. Said as what it does, not as what it is.
+    static let pictureLabels: [String: String] = [
+        pictureCard: "A card with my station name on it",
+        pictureImage: "A picture of my own",
+        pictureCamera: "A camera",
+        pictureScreen: "What is on my screen",
+        pictureSplit: "My screen, with the camera in the corner",
+    ]
+
+    /// A sentence each, for the list that Option+Shift+V puts up. The label
+    /// above says what it is; this says what the audience would see and what
+    /// it costs, which is the part a presenter cannot look at a preview to
+    /// find out.
+    ///
+    /// The camera line names the Mac's key rather than the Windows one, which
+    /// is the same rule the bank hints follow: a hint that names a key the
+    /// user does not have is worse than no hint.
+    static let pictureDescriptions: [String: String] = [
+        pictureCard: "Your station name and whatever is playing. Costs almost "
+                   + "nothing to send and never fails.",
+        pictureImage: "Your own artwork, scaled to fit with the edges filled in.",
+        pictureCamera: "Your camera, filling the frame. Command Shift F says "
+                     + "what it can see.",
+        pictureScreen: "Everything on your screen, so the audience sees what "
+                     + "you are doing. Remember they can read it.",
+        pictureSplit: "Your screen filling the frame with the camera small in "
+                    + "the bottom corner. The screen stays readable this way.",
+    ]
+
+    /// Which sources need a camera, and which need the screen. Used to work
+    /// out what to warn about before going live, and what to restart when the
+    /// picture is changed on air.
+    static let pictureNeedsCamera = [pictureCamera, pictureSplit]
+    static let pictureNeedsScreen = [pictureScreen, pictureSplit]
+
+    // ---------------------------------------- things on top of the picture ---
+
+    /// The four named places. Deliberately few, and deliberately unable to
+    /// overlap: two things in one spot is the confusion that not being able to
+    /// look at the screen makes unrecoverable.
+    static let placeTop = "top"
+    static let placeCorner = "corner"
+    static let placeLower = "lower"
+    static let placeClock = "clock"
+    static let placesOrder = [placeTop, placeCorner, placeLower, placeClock]
+
+    /// Said before the name when describing a place, so "top left lower third"
+    /// never happens and somebody can picture it.
+    static let placeWhere: [String: String] = [
+        placeTop: "across the top,",
+        placeCorner: "top right,",
+        placeLower: "bottom left,",
+        placeClock: "bottom right,",
+    ]
+
+    /// What a place can be showing.
+    static let textNone = "none"
+    static let textStation = "station"
+    static let textPlaying = "playing"
+    static let textTime = "time"
+    static let textWords = "words"
+    static let textFile = "file"
+    static let textKinds = [textNone, textStation, textPlaying, textTime,
+                            textWords, textFile]
+
+    static let textLabels: [String: String] = [
+        textNone: "Nothing",
+        textStation: "My station name",
+        textPlaying: "What is playing",
+        textTime: "The time",
+        textWords: "My own words",
+        textFile: "A text file",
+    ]
+
+    static let textDescriptions: [String: String] = [
+        textNone: "This place stays empty.",
+        textStation: "The station name from your streaming settings.",
+        textPlaying: "Whatever the running order is playing, changing as it does.",
+        textTime: "A clock. The digits do not wobble, the font is chosen for it.",
+        textWords: "Something you type here, and it stays until you change it.",
+        textFile: "A text file, re-read a second after it changes. Any other "
+                + "program that writes a text file can drive this.",
+    ]
+
+    /// A text file is re-read this long after it changes, which is what OBS
+    /// does, so anything else on the machine that writes a text file can drive
+    /// the screen.
+    /// What a tile is drawn in when no brand has been chosen. The brand
+    /// replaces both when one is set.
+    static let overlayBackground = RGB(14, 18, 28)
+    static let overlayForeground = RGB(240, 242, 248)
+
+    /// The panel is translucent, so a little of the picture shows through and
+    /// the words still read.
+    static let overlayAlpha = 210
+
+    static let overlayFilePoll = 1.0
+    static let overlayFileMax = 4096
+    static let overlayClockFormat = "HH:mm"
+
+    // ------------------------------------------------------------- colours ---
+
+    /// The brand, as names from Colours.named. Three is the whole of it: what
+    /// sits underneath, what the words are, and the one that draws a rule or
+    /// an edge. More than three and nobody can hold the look in their head,
+    /// which matters more here than anywhere because nobody can glance at it.
+    static let colourBackground = "near black"
+    static let colourText = "off white"
+    static let colourAccent = "light blue"
+
+    // ------------------------------------------------- who can be asked ---
+
+    /// Who can be asked to look at the shot, and who is asked by default.
+    /// Names rather than numbers, for the same reason the colours are names.
+    static let visionProviders = ["anthropic", "openai", "google"]
+    static let visionProvider = "anthropic"
+
+    // -------------------------------------------------- which page to open ---
+
+    /// Where a pre-flight note sends somebody who wants to put it right.
+    static let fixAudio = "audio"
+    static let fixVideo = "video"
+
+    // ------------------------------------------------------------- fonts ---
+
+    /// Bundled rather than taken from the system so a card looks the same on
+    /// every machine, and because the digits have to be tabular. Roboto is
+    /// Apache 2.0, compatible with this app's MIT licence, and it is the SAME
+    /// pair of files the Windows copy ships in assets/fonts: a card made on a
+    /// Mac and a card made on a PC have to be the same card.
+    static let fontRegular = "Roboto-Regular.ttf"
+    static let fontBold = "Roboto-Bold.ttf"
+
+    // ----------------------------------------------- the screen and camera ---
+
+    /// Per monitor choices are deliberately not offered. Somebody who cannot
+    /// see the screens cannot be asked to pick between "monitor 2" and
+    /// "monitor 3".
+    static let screenAll = "all"
+    static let screenMain = "main"
+    static let screenChoices = [screenAll, screenMain]
+
+    /// Generous, and short enough that a presenter is not left wondering.
+    static let screenOpenTimeout = 3.0
+    static let screenStopTimeout = 2.0
+
+    /// Past this the last capture is a photograph rather than the screen, and
+    /// the card takes over. The same rule and reason as cameraStaleSeconds.
+    static let screenStaleSeconds = 2.0
+
+    /// How many refusals in a row before it is called a failure rather than a
+    /// blink. A capture can miss a single frame while a screen is switching
+    /// mode or a session is locking, and one of those is not a broken capture.
+    static let screenRefusedLimit = 15
+
+    /// How wide the camera is in the corner of a shared screen, as a fraction
+    /// of the frame. A quarter of 1280 is 320 across, which is a recognisable
+    /// head and shoulders and still leaves the screen behind it readable.
+    static let splitInsetWidth = 0.25
+
+    /// How far the inset sits from the edge, and how thick the line round it
+    /// is. The line is there so the inset does not read as part of the screen
+    /// behind it, which matters when the corner of a window happens to be pale.
+    static let splitInsetMargin = 0.025
+    static let splitInsetBorder = 2
+
+    /// Which corner the camera goes in. Named rather than numbered, because
+    /// the name is what gets read out and what somebody says to themselves.
+    /// Bottom right first, being the default and where a webcam has sat in
+    /// every broadcast anybody has watched.
+    static let splitCorners = ["bottom right", "bottom left", "top right", "top left"]
+    static let splitCorner = "bottom right"
+
+    /// What the card is drawn in when no brand has been chosen. Dark with a
+    /// light face, because a stream sits in a dark player on most sites, and
+    /// high contrast because somebody sighted is reading it on a phone.
+    static let cardBackground = RGB(14, 18, 28)
+    static let cardForeground = RGB(240, 242, 248)
+    static let cardAccent = RGB(110, 170, 255)
+
+    /// How long to wait for a camera's first frame. Measured 7 September 2026
+    /// on Windows against a real webcam: 0.58 seconds from open to first
+    /// frame. Five is generous and still short enough that a presenter is not
+    /// left wondering.
+    static let cameraOpenTimeout = 5.0
+    static let cameraStopTimeout = 3.0
+
+    /// Past this, the last frame is a photograph rather than a camera feed,
+    /// and anything that reports on the shot should say it does not know.
+    static let cameraStaleSeconds = 2.0
+
+    /// How often a picture source that has fallen back to the card tries its
+    /// real source again. Often enough that a camera coming back is noticed
+    /// within a song, rare enough that a dead one is not hammered.
+    static let pictureRetrySeconds = 5.0
+
+    // ------------------------------- knowing what the camera can see ---
+    //
+    // Mirrors dropdeck/constants.py. Windows detects faces with a YuNet model
+    // through OpenCV, and pays a wheel for it. The Vision framework is in the
+    // process here, so the Mac pays nothing and there is no model file to
+    // ship. The BANDS below are what turn a box into a sentence, and they are
+    // the same numbers on both platforms.
+
+    /// The face has to be at least this sure before it counts.
+    static let faceConfidence = 0.6
+
+    /// How often the shot is looked at. Often enough to catch somebody
+    /// leaning out of frame, rare enough to be free.
+    static let faceCheckSeconds = 0.35
+
+    /// Where the middle is, as a fraction of the frame. Wider than a
+    /// photographer would draw it, because the answer is a sentence and not a
+    /// crosshair: somebody a little off centre does not need telling.
+    static let faceLeftEdge = 0.35
+    static let faceRightEdge = 0.65
+    static let faceTopEdge = 0.28
+    static let faceBottomEdge = 0.70
+
+    /// How wide the face is, as a fraction of the frame. Below the first is a
+    /// speck, above the second is a nose.
+    static let faceFarBelow = 0.07
+    static let faceCloseAbove = 0.30
+
+    /// Coming out of a state needs this much more than going in did. Without
+    /// it a face resting on a boundary changes the answer several times a
+    /// second, and the announcement floor then hides real changes behind fake
+    /// ones.
+    static let faceHysteresis = 0.04
+    static let faceSizeHysteresis = 0.02
+
+    /// Below this mean level, out of 255, the picture is dark.
+    static let faceDarkBelow = 60.0
+
+    /// The least time between two announcements. Six seconds in front of a
+    /// camera produced one sentence at the most talkative setting, which is
+    /// the point: this is not a running commentary.
+    static let faceSayFloor = 4.0
+
+    /// How talkative the framing announcements are.
+    static let framingOff = "off"
+    static let framingProblems = "problems"
+    static let framingEverything = "everything"
+    static let framingLevels = [framingOff, framingProblems, framingEverything]
+
+    /// What the three are called on the page. Said as what they do.
+    static let framingLevelLabels: [String: String] = [
+        framingOff: "Do not tell me about the shot",
+        framingProblems: "Tell me when something is wrong",
+        framingEverything: "Tell me about every change",
+    ]
+
+    // ------------------------------------------- the picture's own health ---
+    //
+    // Mirrors dropdeck/constants.py. Noticing a camera has unplugged or a
+    // capture has frozen, and saying so once rather than nagging. See
+    // Health.swift for why it is patient rather than eager.
+
+    /// Below this mean level, out of 255, the frame is black rather than dark.
+    /// A legitimately dark card sits well above it.
+    static let healthBlackBelow = 6.0
+
+    /// Below this mean absolute difference between one subsampled frame and
+    /// the last, nothing is moving. Sensor noise alone clears it comfortably,
+    /// which is what stops a live camera pointed at a still wall reading as
+    /// frozen.
+    static let healthFrozenBelow = 0.35
+
+    /// How long a fault has to last before it is worth saying. A camera
+    /// blinks. A dead camera does not come back.
+    static let healthPatience = 4.0
+
+    /// And how long before saying the same thing again.
+    static let healthRepeat = 45.0
+
+    static let healthBlackSaid = "The picture has gone black. Your viewers are seeing nothing"
+    static let healthFrozenSaid = "The picture has frozen. It is stuck on one frame"
+    static let healthBack = "The picture is back"
+
     // ------------------------------------------------------- bank hints ---
     //
     // Spoken once per bank per session. A screen reader already announces the
@@ -378,5 +838,16 @@ enum C {
             bankBeds: "\(KeyMap.bank3Spoken) toggle beds 1 to 10. Add Shift for beds 11 to 20. Beds loop by default. Control click to turn looping off. Bed volume is F5 and F6.",
             bankMisc: "Control click any button to assign a sound file and a custom hotkey of your own. F2 renames.",
         ]
+    }
+}
+
+/// A resolution and a frame rate together, so the platforms' published
+/// bitrate tables can be looked up the way Python looks up a tuple.
+struct VideoSize: Hashable {
+    let width: Int
+    let height: Int
+    let fps: Int
+    init(_ width: Int, _ height: Int, _ fps: Int) {
+        self.width = width; self.height = height; self.fps = fps
     }
 }

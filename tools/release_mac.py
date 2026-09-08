@@ -162,6 +162,21 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.5.2": ("Video. The Mac copy now goes out on YouTube, Facebook, Restream "
+              "or any RTMP server, with everything Windows gained between 3.4.0 "
+              "and 3.5.2 arriving at once. A card, your own artwork, a camera, "
+              "your screen, or your screen with the camera in a corner you "
+              "choose. Four named places on top of the picture, driven by your "
+              "own words or by a text file anything else can write. Your own "
+              "colours, chosen by name and judged by contrast rather than by "
+              "eye. Command B says what it is about to do and checks it first. "
+              "Command Shift F says what the camera can see, Command Shift V "
+              "says what is on screen, and Option Shift D asks Claude, ChatGPT "
+              "or Gemini on your own account what the shot actually looks like. "
+              "Source control is check boxes and buttons now, and the mode is "
+              "gone. Nothing about the soundboard, the running order or your "
+              "radio station streaming has changed, and the digit map is "
+              "untouched."),
     "3.3.2": ("The app now tells you when your microphone is not reaching the "
               "air. Put the microphone on the air, on the Streaming tab, is on "
               "by default and always has been, but turning it off was invisible: "

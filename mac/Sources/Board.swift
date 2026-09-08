@@ -79,6 +79,57 @@ final class Board {
     var streamStations: [[String: Any]] = []
     var playlistMonitorOnly = true
 
+    // ------------------------------------------------------------- the video ---
+    //
+    // Mirrors the keys dropdeck/board.py added in 3.4.0 through 3.5.2, with
+    // the SAME defaults: the two copies read and write one board.json, so a
+    // default that differs is the same file behaving two ways. Every one of
+    // these is whitelisted on the way in the way the audio settings already
+    // are, because a board file is plain JSON a user can write and some of
+    // these end up in a URL.
+    /// Whether Command B asks what it is about to do before it does it.
+    ///
+    /// A Windows key since 3.4.1 and one the Mac had no use for until video
+    /// arrived, because there was nothing much to be wrong about. It travels
+    /// in the same board file, so it is read and written here whether or not
+    /// this build acts on it.
+    var askBeforeLive = true
+
+    var videoServer = "youtube"
+    var videoHost = C.rtmpIngest["youtube"] ?? ""
+    /// Kept only so a board written by an older build round trips. The key
+    /// itself belongs in the keychain: see Secrets.swift.
+    var videoKey = ""
+    /// Which of the two Command+B sends the show to.
+    var liveTo = C.liveToAudio
+    var picture = C.pictureCard
+    var pictureFile = ""
+    var pictureClock = false
+    var camera = ""
+    var screen = C.screenAll
+    var splitCorner = C.splitCorner
+    var textPlaces: [String: [String: String]] = Board.emptyTextPlaces()
+    var colourBackground = C.colourBackground
+    var colourText = C.colourText
+    var colourAccent = C.colourAccent
+    var visionProvider = C.visionProvider
+    var visionModel = ""
+    var videoWidth = C.rtmpWidth
+    var videoHeight = C.rtmpHeight
+    var videoFPS = C.rtmpFPS
+    var videoBitrate = C.rtmpVideoBitrate
+    var framingLevel = "problems"
+
+    /// The four places, all empty. A separate function because it is needed
+    /// both as the default and as the floor `textPlaces(from:)` builds on.
+    static func emptyTextPlaces() -> [String: [String: String]] {
+        var out: [String: [String: String]] = [:]
+        for key in C.placesOrder {
+            out[key] = ["kind": C.textNone, "words": "", "file": ""]
+        }
+        return out
+    }
+
     // -------------------------------------------------------------- sources ---
     var sources: [SourceConfig] = []
     var globalHotkeysOn = false
@@ -126,6 +177,50 @@ final class Board {
             return fallback
         }
         return min(C.maxBedFade, max(0.0, d))
+    }
+
+    /// A number out of a board file, clamped, or the default.
+    ///
+    /// Same shape as the port and bitrate helpers. A picture size of nought or
+    /// a frame rate of a million is a crash at the moment somebody goes live,
+    /// which is the worst moment this app has.
+    static func videoNumber(_ value: Any?, _ fallback: Int, _ low: Int, _ high: Int) -> Int {
+        var number: Int
+        if let i = value as? Int { number = i }
+        else if let d = value as? Double, d.isFinite { number = Int(d) }
+        else if let s = value as? String, let i = Int(s) { number = i }
+        else { return fallback }
+        return max(low, min(high, number))
+    }
+
+    /// A colour NAME out of a board file, whitelisted like everything else.
+    ///
+    /// An unknown name becomes the default rather than being carried forward
+    /// as a string nothing will ever draw. A board written by a later version
+    /// with more colours in it therefore opens and looks ordinary, instead of
+    /// opening and drawing nothing.
+    static func colour(_ raw: Any?, _ fallback: String) -> String {
+        guard let name = raw as? String, Colours.names.contains(name) else {
+            return fallback
+        }
+        return name
+    }
+
+    /// What is on top of the picture, whitelisted out of a board file.
+    ///
+    /// A place whose kind is not one this build knows becomes "nothing" rather
+    /// than being carried forward. Same rule as every other setting here.
+    static func textPlaces(from raw: Any?) -> [String: [String: String]] {
+        var out = emptyTextPlaces()
+        guard let dict = raw as? [String: Any] else { return out }
+        for (key, value) in dict {
+            guard out[key] != nil, let spot = value as? [String: Any] else { continue }
+            let kind = spot["kind"] as? String ?? ""
+            out[key]?["kind"] = C.textKinds.contains(kind) ? kind : C.textNone
+            out[key]?["words"] = String((spot["words"] as? String ?? "").prefix(200))
+            out[key]?["file"] = spot["file"] as? String ?? ""
+        }
+        return out
     }
 
     // ----------------------------------------------------------- where it is ---
@@ -189,6 +284,34 @@ final class Board {
         d["global_hotkeys_on"] = globalHotkeysOn
         d["playlist_monitor_only"] = playlistMonitorOnly
         d["sources"] = sources.map { $0.toDict() }
+
+        // The video half. Written whether or not this board has ever been on
+        // a video platform, because a Windows copy reading this file expects
+        // the keys to be there and falls back to ITS defaults when they are
+        // not, and its defaults are these.
+        d["ask_before_live"] = askBeforeLive
+        d["video_server"] = videoServer
+        d["video_host"] = videoHost
+        d["video_key"] = videoKey
+        d["live_to"] = liveTo
+        d["picture"] = picture
+        d["picture_file"] = pictureFile
+        d["picture_clock"] = pictureClock
+        d["camera"] = camera
+        d["screen"] = screen
+        d["split_corner"] = splitCorner
+        d["text_places"] = textPlaces
+        d["colour_background"] = colourBackground
+        d["colour_text"] = colourText
+        d["colour_accent"] = colourAccent
+        d["vision_provider"] = visionProvider
+        d["vision_model"] = visionModel
+        d["video_width"] = videoWidth
+        d["video_height"] = videoHeight
+        d["video_fps"] = videoFPS
+        d["video_bitrate"] = videoBitrate
+        d["framing_level"] = framingLevel
+
         d["stream_server"] = stream.server
         d["stream_host"] = stream.host
         d["stream_port"] = stream.port
@@ -279,6 +402,13 @@ final class Board {
             "stream_name", "stream_description", "stream_genre", "stream_url",
             "stream_stats_url", "stream_public", "stream_mic", "stream_titles",
             "stream_stations",
+            "ask_before_live",
+            "video_server", "video_host", "video_key", "live_to",
+            "picture", "picture_file", "picture_clock", "camera", "screen",
+            "split_corner", "text_places", "colour_background", "colour_text",
+            "colour_accent", "vision_provider", "vision_model",
+            "video_width", "video_height", "video_fps", "video_bitrate",
+            "framing_level",
         ]
         b.unknown = dict.filter { !known.contains($0.key) }
 
@@ -374,6 +504,71 @@ final class Board {
         b.stream.sendMic = dict["stream_mic"] as? Bool ?? true
         b.stream.sendTitles = dict["stream_titles"] as? Bool ?? true
         b.streamStations = cleanStations(dict["stream_stations"])
+
+        // ------------------------------------------------------- the video ---
+        //
+        // Whitelisted the same way the audio settings are, and for the same
+        // reason: a board file is plain JSON that a user can write, and some
+        // of these end up in a URL. An unknown value becomes the default
+        // rather than being carried forward as a string nothing will draw, so
+        // a board written by a LATER build with more choices in it opens and
+        // looks ordinary instead of opening and drawing nothing.
+        b.askBeforeLive = dict["ask_before_live"] as? Bool ?? true
+        let server = dict["video_server"] as? String ?? ""
+        b.videoServer = C.videoServerOrder.contains(server) ? server : "youtube"
+        b.videoHost = dict["video_host"] as? String ?? ""
+        b.videoKey = dict["video_key"] as? String ?? ""
+        let liveTo = dict["live_to"] as? String ?? ""
+        b.liveTo = C.liveTo.contains(liveTo) ? liveTo : C.liveToAudio
+
+        // A board written by the first build of this feature put the platform
+        // in stream_server, where the audio settings live. Move it, rather
+        // than leaving a board that says its radio station is "youtube" and
+        // then tries to open a mount point on it.
+        if let stray = dict["stream_server"] as? String,
+           C.videoServerOrder.contains(stray) {
+            b.videoServer = stray
+            b.videoHost = dict["stream_host"] as? String ?? ""
+            b.liveTo = C.liveToVideo
+            b.stream.server = C.streamServerIcecast
+            b.stream.host = ""
+        }
+        if b.videoHost.isEmpty {
+            b.videoHost = C.rtmpIngest[b.videoServer] ?? ""
+        }
+
+        let picture = dict["picture"] as? String ?? ""
+        b.picture = C.pictureSources.contains(picture) ? picture : C.pictureCard
+        b.pictureFile = dict["picture_file"] as? String ?? ""
+        b.pictureClock = dict["picture_clock"] as? Bool ?? false
+        b.camera = dict["camera"] as? String ?? ""
+        let screen = dict["screen"] as? String ?? ""
+        b.screen = C.screenChoices.contains(screen) ? screen : C.screenAll
+        let corner = dict["split_corner"] as? String ?? ""
+        b.splitCorner = C.splitCorners.contains(corner) ? corner : C.splitCorner
+        b.textPlaces = Board.textPlaces(from: dict["text_places"])
+        b.colourBackground = Board.colour(dict["colour_background"], C.colourBackground)
+        b.colourText = Board.colour(dict["colour_text"], C.colourText)
+        b.colourAccent = Board.colour(dict["colour_accent"], C.colourAccent)
+        let provider = dict["vision_provider"] as? String ?? ""
+        // Nobody has chosen: take the one that has a key on this machine
+        // rather than the first in the list, so a board saved before this
+        // feature existed opens on something that will actually work.
+        b.visionProvider = C.visionProviders.contains(provider)
+            ? provider : ShotCheck.bestProvider(fallback: C.visionProvider)
+        if let model = dict["vision_model"] as? String {
+            b.visionModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        .prefix(80))
+        } else {
+            b.visionModel = ""
+        }
+        b.videoWidth = Board.videoNumber(dict["video_width"], C.rtmpWidth, 160, 3840)
+        b.videoHeight = Board.videoNumber(dict["video_height"], C.rtmpHeight, 120, 2160)
+        b.videoFPS = Board.videoNumber(dict["video_fps"], C.rtmpFPS, 1, 60)
+        b.videoBitrate = Board.videoNumber(dict["video_bitrate"], C.rtmpVideoBitrate,
+                                           200, 20000)
+        let level = dict["framing_level"] as? String ?? ""
+        b.framingLevel = C.framingLevels.contains(level) ? level : C.framingProblems
 
         if let rows = dict["slots"] as? [[String: Any]] {
             for (i, row) in rows.enumerated() where i < C.totalSlots {

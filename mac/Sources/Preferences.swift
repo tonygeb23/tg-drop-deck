@@ -254,6 +254,7 @@ extension MainWindow {
         }
         fillStations()
         let stationControls = StationControls()
+        let videoControls = VideoControls()
         stationControls.onPick = { [weak self, board] in
             guard let self, let name = stationPopup.titleOfSelectedItem,
                   board.loadStation(name) else { return }
@@ -357,6 +358,216 @@ extension MainWindow {
         streamBox.addArrangedSubview(stationRow)
         add(tabs, "Streaming", streamBox)
 
+        // ---------------------------------------------------- video streaming --
+        //
+        // The video half. NOTHING IS HIDDEN, only made unavailable, and the
+        // reason is always in a line a Tab user will pass: a control that
+        // appears and disappears as you move moves everything under it, and a
+        // disabled control leaves the Tab loop, so a reason in a tooltip is a
+        // reason nobody meets.
+        let videoBox = stack()
+        let platformPopup = NSPopUpButton()
+        platformPopup.addItems(withTitles: C.videoServerOrder.map {
+            StreamServers.serverLabel($0) })
+        platformPopup.selectItem(at: C.videoServerOrder.firstIndex(of: board.videoServer) ?? 0)
+        platformPopup.setAccessibilityLabel("Platform")
+        videoBox.addArrangedSubview(field("Platform", platformPopup))
+
+        let videoHostField = text(board.videoHost, "Address")
+        videoBox.addArrangedSubview(field("Address", videoHostField))
+        videoBox.addArrangedSubview(note(
+            "YouTube and Facebook each have one address and it is filled in for you. "
+            + "Restream hands out its own along with the key, so paste theirs over "
+            + "this one if it differs."))
+
+        // The key is NOT in the board file. Anybody holding a YouTube key can
+        // broadcast to that channel, and a board is plain JSON that people
+        // send each other.
+        let keyStation = board.stream.name.isEmpty ? board.videoServer : board.stream.name
+        let keyField = NSSecureTextField(string: Secrets.fetch(station: keyStation))
+        keyField.setAccessibilityLabel("Stream key")
+        videoBox.addArrangedSubview(field("Stream key", keyField))
+        videoBox.addArrangedSubview(note(
+            "Kept in your keychain rather than in the board file, because a board "
+            + "is a plain file people send each other and anybody holding this key "
+            + "can broadcast to your channel."))
+
+        let getKeyButton = NSButton(title: "Get my stream key", target: videoControls,
+                                    action: #selector(VideoControls.getKey))
+        getKeyButton.bezelStyle = .rounded
+        let helpButton = NSButton(title: "How do I set this up?", target: videoControls,
+                                  action: #selector(VideoControls.help))
+        helpButton.bezelStyle = .rounded
+        let videoRow = NSStackView(views: [getKeyButton, helpButton])
+        videoRow.orientation = .horizontal
+        videoRow.spacing = 8
+        videoBox.addArrangedSubview(videoRow)
+
+        let showPopup = NSPopUpButton()
+        showPopup.addItems(withTitles: C.pictureSources.map { C.pictureLabels[$0] ?? $0 })
+        showPopup.selectItem(at: C.pictureSources.firstIndex(of: board.picture) ?? 0)
+        showPopup.setAccessibilityLabel("Show")
+        videoBox.addArrangedSubview(field("Show", showPopup))
+        videoBox.addArrangedSubview(note(
+            "Something has to be on the screen: YouTube will not take sound on its "
+            + "own. A card with your station name costs almost nothing to send."))
+
+        let cameraPopup = NSPopUpButton()
+        let cameras = Cameras.all()
+        cameraPopup.addItems(withTitles: cameras.isEmpty ? ["No camera found"] : cameras)
+        if let at = cameras.firstIndex(of: board.camera) { cameraPopup.selectItem(at: at) }
+        cameraPopup.setAccessibilityLabel("Camera")
+        videoBox.addArrangedSubview(field("Camera", cameraPopup))
+
+        let pictureField = text(board.pictureFile, "My own picture")
+        let browseButton = NSButton(title: "Browse...", target: videoControls,
+                                    action: #selector(VideoControls.browse))
+        browseButton.bezelStyle = .rounded
+        let pictureRow = NSStackView(views: [pictureField, browseButton])
+        pictureRow.orientation = .horizontal
+        pictureRow.spacing = 8
+        videoBox.addArrangedSubview(field("My own picture", pictureRow))
+
+        let sizePopup = NSPopUpButton()
+        let sizes = [(1280, 720), (1920, 1080), (854, 480), (640, 360)]
+        sizePopup.addItems(withTitles: sizes.map {
+            Cameras.describeSize($0.0, $0.1) })
+        sizePopup.selectItem(at: sizes.firstIndex(where: {
+            $0.0 == board.videoWidth && $0.1 == board.videoHeight }) ?? 0)
+        sizePopup.setAccessibilityLabel("Picture size")
+        videoBox.addArrangedSubview(field("Picture size", sizePopup))
+
+        let videoRatePopup = NSPopUpButton()
+        videoRatePopup.addItems(withTitles: C.rtmpVideoBitrates.map { "\($0) kbps" })
+        videoRatePopup.selectItem(at: C.rtmpVideoBitrates.firstIndex(
+            of: board.videoBitrate) ?? 3)
+        videoRatePopup.setAccessibilityLabel("Picture quality")
+        videoBox.addArrangedSubview(field("Picture quality", videoRatePopup))
+
+        let framingPopup = NSPopUpButton()
+        framingPopup.addItems(withTitles: C.framingLevels.map {
+            C.framingLevelLabels[$0] ?? $0 })
+        framingPopup.selectItem(at: C.framingLevels.firstIndex(
+            of: board.framingLevel) ?? 1)
+        framingPopup.setAccessibilityLabel("Tell me what the camera can see")
+        videoBox.addArrangedSubview(field("Tell me what the camera can see", framingPopup))
+        videoBox.addArrangedSubview(note(
+            "Command Shift F says what the camera can see whenever you ask, whatever "
+            + "this is set to."))
+
+        let liveHereBox = check("Go live here when I press Command B",
+                                board.liveTo == C.liveToVideo)
+        videoBox.addArrangedSubview(liveHereBox)
+        videoBox.addArrangedSubview(note(
+            "The same choice as On air, Streaming location. The two move together."))
+
+        // **What happens when you connect**, which is the most important thing
+        // on this page and the one a presenter cannot find out any other way.
+        // A focusable read only block rather than a label, because a label
+        // that changes says nothing to a screen reader.
+        let (whatScroll, whatText) = readOnlyText(
+            GoingLive.note(board.videoServer),
+            label: "What happens when you go live", width: 460, height: 70)
+        videoBox.addArrangedSubview(whatScroll)
+        add(tabs, "Video streaming", videoBox)
+
+        // --------------------------------------------------------- AI provider --
+        let aiBox = stack()
+        let providerPopup = NSPopUpButton()
+        providerPopup.addItems(withTitles: ShotCheck.providers.map {
+            ShotCheck.providerNames[$0] ?? $0 })
+        providerPopup.selectItem(at: ShotCheck.providers.firstIndex(
+            of: board.visionProvider) ?? 0)
+        providerPopup.setAccessibilityLabel("Who is asked")
+        aiBox.addArrangedSubview(field("Who is asked", providerPopup))
+
+        let visionKeyField = NSSecureTextField(string: Secrets.fetch(
+            station: board.visionProvider, prefix: Secrets.visionPrefix))
+        visionKeyField.setAccessibilityLabel("Key")
+        aiBox.addArrangedSubview(field("Key", visionKeyField))
+        aiBox.addArrangedSubview(note(
+            "Kept in your keychain, on your own account with that service, and it is "
+            + "billed to you. Nothing is ever sent without you asking for it."))
+
+        // A list you can arrow through rather than an empty box, because model
+        // names change faster than this app ships.
+        let modelBox = NSComboBox()
+        modelBox.addItems(withObjectValues: ShotCheck.knownModels[board.visionProvider] ?? [])
+        modelBox.stringValue = board.visionModel.isEmpty
+            ? (ShotCheck.defaultModels[board.visionProvider] ?? "") : board.visionModel
+        modelBox.setAccessibilityLabel("Model")
+        let listButton = NSButton(title: "Get the list", target: videoControls,
+                                  action: #selector(VideoControls.listModels))
+        listButton.bezelStyle = .rounded
+        let modelRow = NSStackView(views: [modelBox, listButton])
+        modelRow.orientation = .horizontal
+        modelRow.spacing = 8
+        aiBox.addArrangedSubview(field("Model", modelRow))
+        aiBox.addArrangedSubview(note(
+            "Get the list asks your service what it can really see, because model "
+            + "names change faster than this app ships."))
+        aiBox.addArrangedSubview(note(
+            "Option Shift D checks your shot. It is never needed to go live, going "
+            + "live never waits for it, and a picture of your screen is never sent "
+            + "without asking you first, every single time."))
+        add(tabs, "AI Provider", aiBox)
+
+        videoControls.onGetKey = { [weak self] in
+            let which = C.videoServerOrder[max(0, platformPopup.indexOfSelectedItem)]
+            guard let page = C.rtmpKeyPage[which], let url = URL(string: page) else {
+                self?.speaker.announce("There is no page to open for that server. "
+                                     + "Ask whoever runs it.")
+                return
+            }
+            NSWorkspace.shared.open(url)
+            self?.speaker.announce("Opened the page where your key is.")
+        }
+        videoControls.onHelp = { [weak self] in
+            guard let self else { return }
+            StreamHelpPanel(speaker: self.speaker).run(over: self.window)
+        }
+        videoControls.onBrowse = { [weak self] in
+            let open = NSOpenPanel()
+            open.allowedContentTypes = [.image]
+            open.message = "Which picture? It is fitted inside the frame without "
+                         + "being stretched out of shape."
+            let already = pictureField.stringValue
+            if !already.isEmpty {
+                open.directoryURL = URL(fileURLWithPath: already).deletingLastPathComponent()
+            }
+            guard open.runModal() == .OK, let url = open.url else { return }
+            pictureField.stringValue = url.path
+            self?.speaker.announceState("Picture set to \(url.lastPathComponent)")
+        }
+        videoControls.onListModels = { [weak self] in
+            guard let self else { return }
+            let which = ShotCheck.providers[max(0, providerPopup.indexOfSelectedItem)]
+            let key = visionKeyField.stringValue.isEmpty
+                ? Secrets.fetch(station: which, prefix: Secrets.visionPrefix)
+                : visionKeyField.stringValue
+            if key.isEmpty {
+                self.speaker.announce("Put a key in first, then ask for the list.")
+                return
+            }
+            self.speaker.announce("Asking what it can see.")
+            DispatchQueue.global(qos: .userInitiated).async {
+                let got = ShotCheck.listModels(provider: which, key: key)
+                DispatchQueue.main.async {
+                    guard got.ok else { self.speaker.announceAnswer(got.text); return }
+                    let chosen = modelBox.stringValue
+                    modelBox.removeAllItems()
+                    modelBox.addItems(withObjectValues: got.models)
+                    modelBox.stringValue = chosen
+                    self.speaker.announceAnswer("\(got.models.count) models. "
+                                              + "Arrow through the Model box to pick one.")
+                }
+            }
+        }
+        // The two ways of saying where Command B goes move together, because
+        // they are one answer.
+        platformPopup.target = videoControls
+        whatText.isEditable = false
+
         // --------------------------------------------------------- recording --
         let recordBox = stack()
         let formatPopup = NSPopUpButton()
@@ -452,6 +663,45 @@ extension MainWindow {
                 else { board.bankDevices.removeValue(forKey: bank) }
                 deviceChanged = true
             }
+        }
+
+        // ------------------------------------------------------------- video --
+        board.videoServer = C.videoServerOrder[max(0, platformPopup.indexOfSelectedItem)]
+        let typedHost = videoHostField.stringValue.trimmingCharacters(in: .whitespaces)
+        // YouTube and Facebook have one address each and it is not the user's
+        // to get wrong.
+        board.videoHost = C.rtmpFixedAddress.contains(board.videoServer)
+            ? (C.rtmpIngest[board.videoServer] ?? typedHost)
+            : (typedHost.isEmpty ? (C.rtmpIngest[board.videoServer] ?? "") : typedHost)
+        board.picture = C.pictureSources[max(0, showPopup.indexOfSelectedItem)]
+        if !cameras.isEmpty {
+            board.camera = cameras[max(0, min(cameras.count - 1,
+                                              cameraPopup.indexOfSelectedItem))]
+        }
+        board.pictureFile = pictureField.stringValue.trimmingCharacters(in: .whitespaces)
+        let size = sizes[max(0, min(sizes.count - 1, sizePopup.indexOfSelectedItem))]
+        board.videoWidth = size.0
+        board.videoHeight = size.1
+        board.videoBitrate = C.rtmpVideoBitrates[
+            max(0, min(C.rtmpVideoBitrates.count - 1, videoRatePopup.indexOfSelectedItem))]
+        board.framingLevel = C.framingLevels[
+            max(0, min(C.framingLevels.count - 1, framingPopup.indexOfSelectedItem))]
+        board.liveTo = liveHereBox.state == .on ? C.liveToVideo : C.liveToAudio
+        // The key goes to the keychain, never to the board file.
+        let station = board.stream.name.isEmpty ? board.videoServer : board.stream.name
+        let typedKey = keyField.stringValue.trimmingCharacters(in: .whitespaces)
+        if typedKey != Secrets.fetch(station: station) {
+            Secrets.store(station: station, key: typedKey)
+        }
+        board.visionProvider = ShotCheck.providers[
+            max(0, min(ShotCheck.providers.count - 1, providerPopup.indexOfSelectedItem))]
+        board.visionModel = String(modelBox.stringValue
+            .trimmingCharacters(in: .whitespaces).prefix(80))
+        let typedVisionKey = visionKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+        if typedVisionKey != Secrets.fetch(station: board.visionProvider,
+                                           prefix: Secrets.visionPrefix) {
+            Secrets.store(station: board.visionProvider, key: typedVisionKey,
+                          prefix: Secrets.visionPrefix)
         }
 
         board.duckDB = Float(duckSlider.doubleValue.rounded())
@@ -628,6 +878,47 @@ extension MainWindow {
         s.spacing = 2
         control.widthAnchor.constraint(greaterThanOrEqualToConstant: 420).isActive = true
         return s
+    }
+}
+
+// ------------------------------------------------------------ video buttons ---
+
+/// The buttons on the Video streaming and AI Provider pages need a target that
+/// outlives the click. Closures set by the window; nothing else.
+final class VideoControls: NSObject {
+    var onGetKey: (() -> Void)?
+    var onHelp: (() -> Void)?
+    var onBrowse: (() -> Void)?
+    var onListModels: (() -> Void)?
+    @objc func getKey() { onGetKey?() }
+    @objc func help() { onHelp?() }
+    @objc func browse() { onBrowse?() }
+    @objc func listModels() { onListModels?() }
+}
+
+enum GoingLive {
+    /// What the platform itself does the moment the stream connects.
+    ///
+    /// The two behave in opposite ways and both surprises are expensive. This
+    /// is the single most important fact on the page and, on Windows, it is
+    /// static text that is never spoken.
+    static func note(_ server: String) -> String {
+        switch server {
+        case "youtube":
+            return "YouTube puts you live the MOMENT you connect. It makes the watch "
+                 + "page, tells your subscribers and saves the video. Set the stream "
+                 + "to Private in YouTube Studio before your first try."
+        case "facebook":
+            return "Facebook shows you a preview and posts NOTHING until you press Go "
+                 + "Live Now on Facebook's own page, so going live here is safe to try."
+        case "restream":
+            return "Restream sends your show on to whichever channels you have switched "
+                 + "on there. Turn every channel off and the stream reaches Restream "
+                 + "and goes nowhere, which makes it the safe place to practise."
+        default:
+            return "What happens when you connect is up to whoever runs the server. "
+                 + "Ask them whether connecting puts you on the air."
+        }
     }
 }
 

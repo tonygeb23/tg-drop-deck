@@ -12,52 +12,77 @@ Read [../CLAUDE.md](../CLAUDE.md) first. Every design rule in it still holds,
 including the standing one about dashes. This file records only what is
 different on a Mac, and why.
 
-## Video, and why the Mac is deliberately behind
+## Video, which arrived on 8 September 2026
 
-**Tony, 8 September 2026: the Mac gets video once Windows is proven stable,
-and when it does it builds on what Windows established rather than inventing
-its own shape.** The two copies had shared a version number since 3.2.2 and
-this is where they part: Windows is on 3.4.x with video, the Mac stays on
-3.3.2 with none, and the download page says so in as many words.
+**The Mac was deliberately a release behind, and then it was not.** Tony's
+words on 8 September: the Mac gets video once Windows is proven stable, and
+when it does it builds on what Windows established rather than inventing its
+own shape. He took it off the shelf the same day, knowing Windows 3.5.2 had
+shipped hours earlier. That is on the record in `docs/MAC-VIDEO-PLAN.md`
+along with what the risk was and how it was mitigated.
 
-That is a decision, not a backlog. Video streaming shipped on Windows on
-7 September and had three fixes in the two days after it, two of which were
-faults nothing had noticed for days. Porting a design while it is still
-moving means porting the mistakes as well.
+Everything Windows gained between 3.4.0 and 3.5.2 is here, and the two copies
+share a version number again.
 
-**What Windows settled, and what the Mac should therefore copy rather than
-redesign.** Every one of these was argued out with a measurement behind it, so
-a Mac port that reaches a different answer needs a Mac measurement, not a
-preference:
+**What Windows settled, and what the Mac therefore copied rather than
+redesigned.** Every one of these was argued out with a measurement behind it:
 
 - **One picture source at a time**, chosen from a card the app draws, an
-  image, a camera, the screen, or the screen with the camera inset. No
-  scenes, no layers. `dropdeck/picture.py` and `dropdeck/screen.py`.
-- **Audio is the master clock and video is stamped against it.** Video PTS
-  counts frames encoded against the audio sample counter, never a wall clock
-  and never the camera's own timing. This is why a source can be swapped mid
-  stream without moving the timeline, and it is the single most important
-  thing to carry across.
+  image, a camera, the screen, or the screen with the camera inset. No scenes,
+  no layers. `Picture.swift` and `Screen.swift`.
+- **Audio is the master clock and video is stamped against it.** Video
+  timestamps count frames encoded against the audio sample counter, never a
+  wall clock and never the camera's own timing. `VideoStream.swift`. Measured
+  against the mock server: sound and picture finished 0 ms apart.
 - **Anything that blocks belongs on its own thread, and the caller takes the
-  last frame it finished.** A Windows desktop blit costs 16 to 33 ms, which
-  is the whole budget at 30 fps, on the thread carrying the audio. The Mac
-  equivalent is `CGDisplayStream` or `ScreenCaptureKit`, and the same rule
-  applies whatever its cost turns out to be: measure it before deciding.
+  last frame it finished.**
 - **The screen fills the frame and the camera goes in a corner**, because a
-  1920x1080 desktop rendered 640 wide is unreadable. That is a fact about
-  eyes and pixels, not about Windows, so it holds on a Mac.
-- **The pre-flight**, `dropdeck/preflight.py`, imports no wx and touches no
-  network on purpose. It is plain arithmetic over a settings dict, so it is
-  the one piece of the Windows video work that could be ported almost
-  literally, or reimplemented against the same list of warnings.
-- **Where Ctrl+B goes is a visible checked list**, not a hidden setting.
-  `Command+B` and the On air menu should match.
+  1920x1080 desktop rendered 640 wide is unreadable.
+- **The pre-flight** is plain arithmetic over a settings value, so it is
+  testable with nothing running. `Preflight.swift`.
+- **Where Command B goes is a visible checked list**, not a hidden setting.
 
-**What the Mac cannot copy.** `mac/` has no FFmpeg at all: `StreamOut.swift`
-writes Icecast and SHOUTcast by hand over `Network`. RTMP means an RTMP client
-and an FLV muxer in Swift, over TLS. VideoToolbox does H.264 and AVFoundation
-does cameras, both natively, so the video half is the easy half. Call it a
-fortnight, and it is not started until Windows has been quiet for a while.
+**What is genuinely different here, and it is less than expected.**
+
+`RTMP.swift` and `FLV.swift` are the only new protocol work: a handshake, a
+chunk layer, AMF0 and five commands, over TLS through `Network`. There is no
+FFmpeg and there does not need to be. Everything else is a system framework:
+VideoToolbox for H.264, AVFoundation for cameras, ScreenCaptureKit for the
+screen, Core Text for real letters and Vision for face detection. **The Mac
+therefore ships none of what Windows pays for**: no Pillow, no OpenCV, no
+model file. The download grew by about a megabyte, which is the two Roboto
+files, and those are shipped for a reason: a card made on a Mac and a card
+made on a PC have to be the same card.
+
+**Three measurements that changed the code, all made on this Mac on
+8 September 2026.** `docs/MAC-VIDEO-PIPELINE.md` has the rest.
+
+1. **`ConstantBitRate`, and never `AverageBitRate` or `DataRateLimits`.** On a
+   static card at a 2500 kbps target, average gave 329 kbps and data rate
+   limits gave 244; constant gave 2375. Both platforms publish bitrate FLOORS,
+   so this is the same fault Windows chased down, reached by another road.
+   `EnableLowLatencyRateControl` silently dropped 85 per cent of frames.
+2. **ScreenCaptureKit sends no frame when the screen is not changing.** Six
+   seconds of a static desktop gave 46 complete frames and 142 idle ones.
+   Copying `screenStaleSeconds` across without a second clock would have
+   declared a presenter's static slide dead mid show and put the card out
+   instead. An idle frame is a HEARTBEAT: see `Screen.swift`.
+3. **A screen capture that has not been allowed comes back BLACK**, not as an
+   error, and `CGPreflightScreenCaptureAccess` still answers yes. Measured
+   with a Developer ID signed build. The opening frames are looked at once and
+   an all black start is called what it almost always is, because a silent
+   black broadcast is the exact failure this app exists to prevent.
+
+**The BT.709 tags are set and never touched.** VideoToolbox converts at 709
+whatever they say, so it writes the tag only and the Windows fault cannot
+happen. The opposite one can: setting the matrix to 601 would ship 709 pixels
+labelled 601, which is invisible from the sending end.
+
+**Two faults in the SHIPPED 3.3.2 were found while building this.** A modal
+key claim reached past a box opened on top of it, so a source name with a
+space in it could not be typed; and a read only text view swallowed Return, so
+every panel that puts focus on what it has to say had a dead Return, including
+the update panel. Both are fixed and both have checks.
 
 ## Why not the Python
 
@@ -568,6 +593,14 @@ itself is quarantined.
 
 ## Still to do
 
+- **A real broadcast to YouTube and Facebook.** The RTMP client is proved end
+  to end against `tools/mock_rtmp.py`, which decodes what arrived frame by
+  frame, and it has not yet been pointed at a real platform. Restream with
+  every channel switched off is the place to start: the stream reaches
+  Restream and goes nowhere.
+- **The camera has not been opened by the real app yet.** Enumeration is
+  proved and the permission is in the Info.plist, but nothing has yet shown
+  Tony the system prompt, which is his to answer.
 - **Hosting Audio Units in the voice chain**, the Mac's answer to the Windows
   VST3 hosting. The entitlement for it is already in place
   (`disable-library-validation`), the parameter list the chain uses is the

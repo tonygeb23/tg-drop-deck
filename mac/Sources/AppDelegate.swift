@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var soundsMenu: NSMenu!
     /// The saved stations, rebuilt every time the menu opens.
     private var stationMenu: NSMenu!
+    private var liveToMenu: NSMenu!
 
     private func trace(_ s: String) {
         guard ProcessInfo.processInfo.environment["DROPDECK_TRACE"] != nil else { return }
@@ -153,7 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // fire in an order AppKit does not promise, which is why the source
             // control panel's own digits were sometimes firing pads instead of
             // choosing a source.
-            if let claim = ModalKeys.current, claim(event) { return nil }
+            if ModalKeys.active(), let claim = ModalKeys.current, claim(event) {
+                return nil
+            }
 
             // Somebody is typing. The field editor is an NSTextView whatever
             // control it belongs to, so this one check covers every text field,
@@ -414,6 +417,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(soloItem)
         air.addItem(item("Audio sources...", .sources, #selector(showSources)))
         air.addItem(.separator())
+        // The video half, 3.5.2. Video source sits beside Audio sources on
+        // purpose: they answer the same question about the two halves of what
+        // goes out.
+        air.addItem(item("Video source...", .videoSource, #selector(videoSource)))
+        air.addItem(item("Screen text...", .screenText, #selector(screenText)))
+        air.addItem(item("Colours...", .colours, #selector(colours)))
+        air.addItem(item("Check my shot...", .shotCheck, #selector(shotCheck)))
+        air.addItem(item("What the camera can see", .cameraCheck, #selector(cameraCheck)))
+        air.addItem(item("What is on screen", .sayScreen, #selector(sayScreen)))
+        // Where Command B sends the show, which should have been here the day
+        // video arrived: until 3.4.2 the choice lived on the page for one of
+        // the two answers, so a board with a radio station and a YouTube
+        // channel both set up gave no sign anywhere that there was a choice.
+        liveToMenu = NSMenu(title: "Streaming location")
+        liveToMenu.delegate = self
+        let liveToItem = NSMenuItem(title: "Streaming location", action: nil,
+                                    keyEquivalent: "")
+        liveToItem.submenu = liveToMenu
+        air.addItem(liveToItem)
+        rebuildLiveToMenu()
+        air.addItem(.separator())
         air.addItem(plain("Set up streaming...", #selector(streamSetup)))
         // Switching station without going through Preferences, because on a
         // show night that is one dialog too many.
@@ -445,6 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Help
         let helpItem = NSMenuItem()
         let help = NSMenu(title: "Help")
+        help.addItem(plain("Setting up streaming...", #selector(streamHelp)))
         help.addItem(item("Keyboard shortcuts", .shortcuts, #selector(showShortcuts)))
         help.addItem(plain("User manual...", #selector(openManual)))
         help.addItem(.separator())
@@ -518,6 +543,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The saved stations, with a tick beside the one that is loaded. With none
     /// saved it offers the thing somebody with no stations actually wants,
     /// rather than a dead "none yet" line.
+    /// Both places the show can go, with a dot beside the one Command B will
+    /// use. A visible checked list rather than a hidden setting.
+    func rebuildLiveToMenu() {
+        guard liveToMenu != nil else { return }
+        liveToMenu.removeAllItems()
+        for which in C.liveTo {
+            let name = C.liveToLabels[which] ?? which
+            var label = name.prefix(1).uppercased() + name.dropFirst()
+            if which == C.liveToAudio {
+                let station = main.board.stream.name
+                let where_ = station.isEmpty ? main.board.stream.host : station
+                if !where_.isEmpty { label += ", \(where_)" }
+            } else {
+                label += ", \(StreamServers.serverLabel(main.board.videoServer))"
+            }
+            let entry = NSMenuItem(title: label, action: #selector(pickLiveTo(_:)),
+                                   keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = which
+            entry.state = main.board.liveTo == which ? .on : .off
+            liveToMenu.addItem(entry)
+        }
+    }
+
     private func rebuildStationMenu() {
         guard let menu = stationMenu, main != nil else { return }
         menu.removeAllItems()
@@ -557,6 +606,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleRecording() { main.toggleRecording(); refreshAirMenu() }
     @objc func openRecordings() { main.openRecordingsFolder() }
     @objc func sourceControl() { main.showSourceControl() }
+    @objc func videoSource() { main.showVideoSource() }
+    @objc func screenText() { main.showScreenText() }
+    @objc func colours() { main.showColours() }
+    @objc func shotCheck() { main.showShotCheck() }
+    @objc func cameraCheck() { main.sayWhatTheCameraSees() }
+    @objc func sayScreen() { main.sayWhatIsOnScreen() }
+    @objc func streamHelp() { main.showStreamHelp() }
+    @objc func pickLiveTo(_ sender: NSMenuItem) {
+        main.setLiveTo(sender.representedObject as? String ?? C.liveToAudio)
+    }
     @objc func showSources() { main.showSources() }
     @objc func streamSetup() { main.showPreferences(tab: "Streaming") }
     @objc func assignHotkey() { main.assignCustomHotkey() }
@@ -602,6 +661,8 @@ extension AppDelegate: NSMenuDelegate {
             loopItem.state = (slot?.isBed == true && slot?.loop == true) ? .on : .off
         } else if menu === stationMenu {
             rebuildStationMenu()
+        } else if menu === liveToMenu {
+            rebuildLiveToMenu()
         }
     }
 }

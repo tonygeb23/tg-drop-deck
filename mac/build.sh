@@ -38,10 +38,30 @@ swiftc -O \
   -framework UniformTypeIdentifiers \
   -framework Network \
   -framework Carbon \
+  -framework Security \
+  -framework CoreText \
+  -framework CoreGraphics \
+  -framework CoreMedia \
+  -framework CoreVideo \
+  -framework CoreImage \
+  -framework VideoToolbox \
+  -framework ScreenCaptureKit \
+  -framework Vision \
+  -framework ImageIO \
   -o "${CONTENTS}/MacOS/${BINARY}" \
   Sources/*.swift
 
 cp Resources/Info.plist "${CONTENTS}/Info.plist"
+
+# Roboto, for the card and for anything drawn on top of the picture. Bundled
+# rather than taken from the system so a card made on a Mac and a card made on
+# a PC are the same card, and because the digits have to be tabular so a clock
+# does not wobble. These are byte for byte the SAME two files the Windows copy
+# ships in assets/fonts. Apache 2.0, and the licence travels with them.
+mkdir -p "${CONTENTS}/Resources/fonts"
+cp Resources/fonts/Roboto-Regular.ttf "${CONTENTS}/Resources/fonts/"
+cp Resources/fonts/Roboto-Bold.ttf "${CONTENTS}/Resources/fonts/"
+cp Resources/fonts/LICENSE-Roboto.txt "${CONTENTS}/Resources/fonts/"
 
 # LAME goes in beside the binary, with its licence where a person can find it.
 # It is signed separately below, because notarization refuses a bundle with

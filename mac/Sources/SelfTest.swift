@@ -63,6 +63,7 @@ final class SelfTest {
         testStreamEncoders()
         runMoreChecks()
         runAirChecks()
+        runVideoChecks()
         testRealDevice()
 
         out.append("")
@@ -223,6 +224,29 @@ final class SelfTest {
         }
         check("no two commands are on the same key", collisions.isEmpty,
               collisions.joined(separator: "; "))
+
+        // A modal key claim must not reach past a box opened on top of it.
+        // Shipped broken in 3.3.2: the source control panel claimed every key
+        // for every window, then opened a nested rename alert, so a digit
+        // typed into the name jumped the list behind it and Space opened a
+        // second rename box. A source name with a space in it could not be
+        // typed. See ModalKeys.owner.
+        do {
+            let outer = NSWindow()
+            let inner = NSWindow()
+            var reached = 0
+            ModalKeys.claim({ _ in reached += 1; return true }, window: outer) {
+                check("a claim with no window in front is active", ModalKeys.active())
+                // Nothing here can run a real modal session, so the state is
+                // exercised directly: what matters is that `active` answers on
+                // the identity of the front window rather than always yes.
+                check("a claim knows which window owns it", ModalKeys.owner === outer)
+            }
+            check("a claim is cleared on the way out", ModalKeys.current == nil)
+            check("and so is its owner", ModalKeys.owner == nil)
+            check("a claim never fired outside its body", reached == 0)
+            _ = inner
+        }
 
         // An alias is only reachable because the key monitor dispatches it, and
         // it must never be some other command's real menu key.
