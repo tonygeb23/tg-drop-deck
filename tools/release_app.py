@@ -43,6 +43,11 @@ MANIFEST_NAME = "drop-deck-app.json"
 # What the release adds, shown in the update prompt. Keep it to a couple of
 # lines: it is read aloud as part of a dialog.
 NOTES = {
+    "3.4.1": ("Ctrl+B now says where the show is going, what it is sending and "
+              "whether your microphone is on the air, and waits for Enter. "
+              "Alt+Shift+V changes the picture while you are on air, and it "
+              "can now be your screen, or your screen with the camera in the "
+              "corner."),
     "3.4.0": ("Drop Deck can now go out on YouTube, Facebook, Restream or any "
               "RTMP server, with a picture. A card with your station name on "
               "it costs almost nothing, or use your own artwork or a camera. "

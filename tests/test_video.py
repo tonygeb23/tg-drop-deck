@@ -645,8 +645,10 @@ try:
 
     check("the picture settings are on the video page",
           hasattr(_dialog, "picture_kind"))
-    check("it offers a card, a picture and a camera",
-          len(_dialog.picture_kind.GetStrings()) == 3,
+    # Every source the app knows about, rather than a number that has to be
+    # edited each time one is added. 3.4.1 added the screen and the split.
+    check("it offers every picture source",
+          len(_dialog.picture_kind.GetStrings()) == len(C.PICTURE_SOURCES),
           _dialog.picture_kind.GetStrings())
     check("and a card is the default, not a camera",
           _dialog.picture_settings["picture"] == C.PICTURE_CARD)

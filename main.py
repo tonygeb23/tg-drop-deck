@@ -179,6 +179,30 @@ def selftest():  # noqa: C901
         problems.append("the video encoder does not work in this build: %r"
                         % exc)
     try:
+        from dropdeck import screen as _screen
+        if not _screen.available():
+            problems.append("the screen cannot be captured in this build: %s"
+                            % _screen.why_unavailable())
+        else:
+            # Actually take one, rather than only checking the DLLs loaded.
+            # It is all ctypes, so a wrong argument type fails at the call
+            # and not at the import, which is exactly the failure a frozen
+            # build would hide.
+            shot = _screen.ScreenSource(_C.SCREEN_ALL, 320, 180, 5)
+            shot.start()
+            got = shot.wait_ready(4.0)
+            frame = shot.frame(320, 180) if got else None
+            shot.close()
+            if frame is None:
+                problems.append("the screen would not be captured: %s"
+                                % (shot.error or "no picture came back"))
+            else:
+                offered = len(_screen.screens())
+                notes.append("screen capture: working, %d choice%s offered"
+                             % (offered, "" if offered == 1 else "s"))
+    except Exception as exc:
+        problems.append("screen capture raised in this build: %r" % exc)
+    try:
         from dropdeck import framing
         if framing.available():
             watcher = framing.Framer(level=framing.FRAMING_OFF)

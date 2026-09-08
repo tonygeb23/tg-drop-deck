@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.4.0"
+APP_VERSION = "3.4.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -472,6 +472,18 @@ RECORDING THE SHOW
   the folder. WAV if it is going into an editor; MP3 for everything else.
   Closing the app finishes the file first, so a recording always opens.
 
+WHAT THE STREAM IS SHOWING
+  Alt+Shift+V, or the On air menu, Video source. Up and down read the
+  choices, Enter puts one out. It works while you are on air and the sound
+  does not break.
+  A CARD with your station name and whatever is playing. It costs almost
+  nothing to send and cannot fail, which is why it is the default.
+  YOUR SCREEN, so the audience sees what you are doing. Remember they can
+  read it.
+  YOUR SCREEN WITH THE CAMERA in the bottom corner. The screen fills the
+  frame rather than sharing it, because at half the width the text on it
+  would not be readable.
+
 OTHER THINGS ON THE AIR
   Alt+Shift+S, or the On air menu, Audio sources. Anything Windows offers as
   an input can go out with you: a second microphone, a hardware mixer, or one
@@ -591,6 +603,10 @@ PUTTING THE SHOW ON THE INTERNET
                             playing. Works off air too
   Alt+Shift+S               Set up other inputs besides your microphone: a
                             card, a cable, or one program
+  Alt+Shift+V               Change what the stream is showing. Works while
+                            you are on air: a card, your artwork, a camera,
+                            your screen, or your screen with the camera in
+                            the corner
   Alt+Ctrl+Shift+S          Source control, for while you are on air: mute,
                             solo, rename or remove, without leaving the
                             keyboard
@@ -940,14 +956,83 @@ FACEBOOK_MAX_HOURS = 8
 PICTURE_CARD = "card"
 PICTURE_IMAGE = "image"
 PICTURE_CAMERA = "camera"
-PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA)
+PICTURE_SCREEN = "screen"
+PICTURE_SPLIT = "split"
+PICTURE_SOURCES = (PICTURE_CARD, PICTURE_IMAGE, PICTURE_CAMERA,
+                   PICTURE_SCREEN, PICTURE_SPLIT)
 
 #: What each is called on screen. Said as what it does, not as what it is.
 PICTURE_LABELS = {
     PICTURE_CARD: "A card with my station name on it",
     PICTURE_IMAGE: "A picture of my own",
     PICTURE_CAMERA: "A camera",
+    PICTURE_SCREEN: "What is on my screen",
+    PICTURE_SPLIT: "My screen, with the camera in the corner",
 }
+
+#: A sentence each, for the list that Alt+Shift+V puts up. The label above
+#: says what it is; this says what the audience would see and what it costs,
+#: which is the part a presenter cannot look at the preview to find out.
+PICTURE_DESCRIPTIONS = {
+    PICTURE_CARD: ("Your station name and whatever is playing. Costs almost "
+                   "nothing to send and never fails."),
+    PICTURE_IMAGE: "Your own artwork, scaled to fit with the edges filled in.",
+    PICTURE_CAMERA: ("Your camera, filling the frame. Ctrl+Shift+F says what "
+                     "it can see."),
+    PICTURE_SCREEN: ("Everything on your screen, so the audience sees what "
+                     "you are doing. Remember they can read it."),
+    PICTURE_SPLIT: ("Your screen filling the frame with the camera small in "
+                    "the bottom corner. The screen stays readable this way."),
+}
+
+#: Which sources need a camera, and which need the screen. Used to work out
+#: what to warn about before going live, and what to restart when the picture
+#: is changed on air.
+PICTURE_NEEDS_CAMERA = (PICTURE_CAMERA, PICTURE_SPLIT)
+PICTURE_NEEDS_SCREEN = (PICTURE_SCREEN, PICTURE_SPLIT)
+
+
+# ---------------------------------------------------------------------------
+# Sending the screen
+# ---------------------------------------------------------------------------
+
+#: Per monitor choices are deliberately not offered. Somebody who cannot see
+#: the screens cannot be asked to pick between "monitor 2" and "monitor 3".
+#: Which settings page puts a problem right. Named here rather than as the
+#: dialog's own page numbers so `preflight.py` can point at one without
+#: importing wx, which is what keeps it testable with no display.
+FIX_AUDIO = "audio"
+FIX_VIDEO = "video"
+
+SCREEN_ALL = "all"
+SCREEN_MAIN = "main"
+SCREEN_CHOICES = (SCREEN_ALL, SCREEN_MAIN)
+
+#: A desktop blit is paced by the Desktop Window Manager, so the first one is
+#: no slower than the rest. Generous anyway, and short enough that a presenter
+#: is not left wondering.
+SCREEN_OPEN_TIMEOUT = 3.0
+SCREEN_STOP_TIMEOUT = 2.0
+
+#: Past this the last capture is a photograph rather than the screen, and the
+#: card takes over. The same rule and the same reason as CAMERA_STALE_SECONDS.
+SCREEN_STALE_SECONDS = 2.0
+
+#: How many refusals in a row before it is called a failure rather than a
+#: blink. Windows can refuse a single blit while a screen is switching mode
+#: or a session is locking, and one of those is not a broken capture.
+SCREEN_REFUSED_LIMIT = 15
+
+#: How wide the camera is in the corner of a shared screen, as a fraction of
+#: the frame. A quarter of 1280 is 320 across, which is a recognisable head
+#: and shoulders and still leaves the screen behind it readable.
+SPLIT_INSET_WIDTH = 0.25
+
+#: How far the inset sits from the edge, and how thick the line round it is.
+#: The line is there so the inset does not read as part of the screen behind
+#: it, which matters when the corner of a window happens to be pale.
+SPLIT_INSET_MARGIN = 0.025
+SPLIT_INSET_BORDER = 2
 
 #: What the Picture page offers. A card needs almost none of this and a
 #: camera at 720p wants 2500 or more.

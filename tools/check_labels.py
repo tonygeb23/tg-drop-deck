@@ -187,6 +187,18 @@ def all_children(window):
     return found
 
 
+def _blocked_report(frame):
+    """A pre-flight with a problem in it, so the whole window is built."""
+    from dropdeck import constants as C
+    from dropdeck import preflight
+    frame.board.live_to = C.LIVE_TO_VIDEO
+    frame.board.video_server = "youtube"
+    frame.board.video_host = C.RTMP_INGEST["youtube"]
+    settings = dict(frame._stream_settings())
+    settings["password"] = ""
+    return preflight.check(settings, frame.board)
+
+
 def audit(title, window):
     controls = tab_order(window)
     say("%s: has controls to tab through" % title, bool(controls), len(controls))
@@ -252,11 +264,12 @@ def main():
     app = wx.App(redirect=False)
     from dropdeck.dialogs import (AssignHotkeyDialog, DonateDialog,
                                   DropsLibraryDialog, FeedbackDialog,
-                                  SearchDialog, SettingsDialog,
+                                  GoLiveDialog, SearchDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
                                   SourceControlDialog, SourcesDialog,
                                   StreamStatsDialog,
-                                  TrackCrossfadeDialog, TrimDialog)
+                                  TrackCrossfadeDialog, TrimDialog,
+                                  VideoSourceDialog)
     from dropdeck.playlist import Track
     from dropdeck.ui import DropDeckFrame
 
@@ -307,6 +320,12 @@ def main():
          lambda: SourcesDialog(frame, [{"name": "A source",
                                         "device_name": "", "on_air": True}])),
         ("Source control", lambda: SourceControlDialog(frame)),
+        ("Video source", lambda: VideoSourceDialog(frame, frame.board)),
+        # Built from a real pre-flight, and one with something wrong in it,
+        # because the warnings box and the Put it right button only exist
+        # when there is something to say. The clean case has fewer controls
+        # to get wrong, not more.
+        ("Go live", lambda: GoLiveDialog(frame, _blocked_report(frame))),
     ]:
         try:
             dialog = build()

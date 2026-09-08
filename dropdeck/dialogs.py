@@ -23,7 +23,9 @@ from . import feedback
 from . import dsp
 from . import camera
 from . import framing
+from . import preflight
 from . import proccapture
+from . import screen
 from . import secrets
 from . import sources
 from . import streamhelp
@@ -1476,6 +1478,19 @@ class SettingsDialog(wx.Dialog):
             "monitoring, which is the normal way to work on speakers.")
         sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
+        # The dialog itself carries a "do not ask again", so without this
+        # that would be a one way door: no way back to the summary short of
+        # editing the board file.
+        self.ask_before_live = wx.CheckBox(
+            panel, label="S&ay what is going out before Ctrl+B goes live")
+        self.ask_before_live.SetValue(bool(self.board.ask_before_live))
+        self.ask_before_live.SetToolTip(
+            "Ctrl+B says where the show is going, what it is sending and "
+            "whether your microphone is on the air, and waits for Enter. "
+            "Turn it off and Ctrl+B goes straight on the air; Ctrl+Shift+B "
+            "still answers at any time.")
+        sizer.Add(self.ask_before_live, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
         self.stream_titles = wx.CheckBox(
             panel, label="Send the track &title to the server")
         self.stream_titles.SetValue(bool(self.board.stream_titles))
@@ -2056,6 +2071,17 @@ class SettingsDialog(wx.Dialog):
             "Camera",
             "Which camera to use. The list is whatever Windows can see.")
 
+        self._screens = screen.screens()
+        self.screen_choice = field(
+            "&Which screen",
+            lambda: wx.Choice(panel, choices=(
+                [label for _v, label, _w, _h in self._screens]
+                or ["No screen can be captured"])),
+            "Which screen",
+            "What goes out when the picture is your screen. Everything on "
+            "your screens sends all of them side by side; the main screen "
+            "sends only the one Windows calls the main one.")
+
         self._sizes = [(1280, 720), (1920, 1080), (854, 480), (640, 360)]
         self.video_size = field(
             "Si&ze",
@@ -2075,7 +2101,7 @@ class SettingsDialog(wx.Dialog):
 
         self._framing_levels = list(framing.FRAMING_LEVELS)
         self.framing_level = field(
-            "Tell me about the s&hot",
+            "&Tell me about the shot",
             lambda: wx.Choice(panel, choices=[
                 framing.FRAMING_LEVEL_LABELS[k]
                 for k in self._framing_levels]),
@@ -2097,7 +2123,7 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.live_to_video, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.picture_clock = wx.CheckBox(
-            panel, label="Put a cloc&k on the card")
+            panel, label="Put a clock &on the card")
         self.picture_clock.SetValue(bool(self.board.picture_clock))
         sizer.Add(self.picture_clock, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
@@ -2106,7 +2132,7 @@ class SettingsDialog(wx.Dialog):
         # for it, which is the worst part of setting this up with a screen
         # reader and the one part the app can make easy. It is also the ONLY
         # part: everything else is one paste and then never again.
-        howto = wx.Button(panel, label="&How do I set this up?")
+        howto = wx.Button(panel, label="How do I set this &up?")
         howto.SetToolTip(
             "Step by step for whichever platform is picked above, without "
             "leaving the app.")
@@ -2171,7 +2197,15 @@ class SettingsDialog(wx.Dialog):
             self.camera_choice.SetSelection(
                 self._cameras.index(self.board.camera))
         self._fill_video_size()
+        self._fill_screens()
         self._on_picture_kind(None)
+
+    def _fill_screens(self):
+        values = [value for value, _l, _w, _h in self._screens]
+        if self.board.screen in values:
+            self.screen_choice.SetSelection(values.index(self.board.screen))
+        elif values:
+            self.screen_choice.SetSelection(0)
 
     def _fill_video_size(self):
         want = (int(self.board.video_width), int(self.board.video_height))
@@ -2220,8 +2254,12 @@ class SettingsDialog(wx.Dialog):
             event.Skip()
         kind = self._picture_kinds[max(0, self.picture_kind.GetSelection())]
         self.picture_file.Enable(kind == C.PICTURE_IMAGE)
-        self.camera_choice.Enable(kind == C.PICTURE_CAMERA)
-        self.framing_level.Enable(kind == C.PICTURE_CAMERA)
+        # The split wants both a camera and a screen, so it is not the
+        # same test as "is this the camera source" any more.
+        self.camera_choice.Enable(kind in C.PICTURE_NEEDS_CAMERA)
+        self.framing_level.Enable(kind in C.PICTURE_NEEDS_CAMERA)
+        self.screen_choice.Enable(kind in C.PICTURE_NEEDS_SCREEN
+                                  and bool(self._screens))
         self.picture_clock.Enable(kind == C.PICTURE_CARD)
 
     #: The video page has one result box and two things that report into it,
@@ -2305,6 +2343,9 @@ class SettingsDialog(wx.Dialog):
             "picture_file": self.picture_file.GetValue().strip(),
             "picture_clock": bool(self.picture_clock.GetValue()),
             "camera": chosen if chosen in self._cameras else "",
+            "screen": (self._screens[self.screen_choice.GetSelection()][0]
+                       if 0 <= self.screen_choice.GetSelection()
+                       < len(self._screens) else C.SCREEN_ALL),
             "video_width": width,
             "video_height": height,
             "video_fps": int(self.board.video_fps or C.RTMP_FPS),
@@ -4267,3 +4308,277 @@ class StreamHelpDialog(wx.Dialog):
         else:
             self.text.SetValue(streamhelp.as_text(self._platforms[index]))
         self.text.SetInsertionPoint(0)
+
+
+# ---------------------------------------------------------------------------
+# Going live, and knowing what that means
+# ---------------------------------------------------------------------------
+
+class GoLiveDialog(wx.Dialog):
+    """What Ctrl+B is about to send, shown before it sends it.
+
+    Tony, 8 September 2026: "I think it's a little confusing when pressing
+    ctrl B to start streaming, how do we know what is currently live."
+
+    The honest answer was that you could not. The app connected and told you
+    afterwards, so the one moment a presenter could still change their mind
+    was the one moment it said nothing. A sighted broadcaster glances at a
+    rack of settings; there is no glance here, so the app has to say it.
+
+    **Ctrl+B then Enter is still the whole gesture.** Go live is the default
+    button, so the muscle memory costs one extra keypress and the presenter
+    hears the destination, the format, the picture and whether their own
+    microphone is on the air on the way past. Somebody who does not want it
+    ticks the box and gets the old behaviour back for ever.
+
+    A problem that would stop the broadcast disables Go live rather than
+    hiding it, and Put it right opens the page that fixes it, because the
+    alternative is a disabled button and no route onward.
+    """
+
+    def __init__(self, parent, report):
+        super().__init__(parent, title="Go live",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.report = report
+        self.fix = ""
+        self.remember = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # The label is built before the control, always: MSAA gives a screen
+        # reader the static text preceding a control in CREATION order.
+        outer.Add(wx.StaticText(self, label="&What will go out"), 0,
+                  wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        summary = "\r\n".join("%s: %s" % (label, value)
+                              for label, value in report.lines)
+        self.what = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_MULTILINE,
+                                size=(560, 96), value=summary)
+        self.what.SetName("What will go out")
+        outer.Add(self.what, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        if report.notes:
+            outer.Add(wx.StaticText(self, label="Worth &knowing first"), 0,
+                      wx.LEFT | wx.RIGHT | wx.TOP, 10)
+            # Whatever is STOPPING the broadcast goes at the top, whatever
+            # order the checks happened to run in. Reading two warnings
+            # before the one sentence that says why Go live is greyed out is
+            # the wrong way round, and it is the first line somebody hears.
+            trouble = "\r\n".join(
+                ("%s %s" % ("Stop:" if note.level == preflight.STOP
+                            else "Warning:", note.text))
+                for note in report.stops + report.warnings)
+            self.trouble = wx.TextCtrl(
+                self, style=wx.TE_READONLY | wx.TE_MULTILINE,
+                size=(560, 84), value=trouble)
+            self.trouble.SetName("Worth knowing first")
+            outer.Add(self.trouble, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        else:
+            self.trouble = None
+
+        self.again = wx.CheckBox(
+            self, label="&Do not ask again, just go live")
+        self.again.SetToolTip("Ctrl+B goes straight on the air. Ctrl+Shift+B "
+                              "still says what is going out, and you can turn "
+                              "this back on in Preferences.")
+        outer.Add(self.again, 0, wx.ALL, 10)
+
+        row = wx.StdDialogButtonSizer()
+        self.go = wx.Button(self, wx.ID_OK, "&Go live")
+        row.AddButton(self.go)
+        cancel = wx.Button(self, wx.ID_CANCEL, "&Stay off air")
+        row.AddButton(cancel)
+        row.Realize()
+        # Outside the standard sizer: it is not an OK or a Cancel, and adding
+        # it to a StdDialogButtonSizer moves it somewhere Windows chooses.
+        fixes = [note for note in report.notes if note.fix]
+        if fixes:
+            self.putright = wx.Button(self, label="&Put it right...")
+            self.putright.Bind(wx.EVT_BUTTON,
+                               lambda _e: self._on_fix(fixes[0].fix))
+            outer.Add(self.putright, 0, wx.LEFT | wx.BOTTOM, 10)
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        if report.blocked:
+            self.go.Enable(False)
+            self.go.SetToolTip("Something below has to be put right first.")
+            cancel.SetDefault()
+        else:
+            self.go.SetDefault()
+        # Focus lands on the summary, not the button. It is the thing this
+        # window exists to say, and a screen reader reads a read only edit box
+        # when focus arrives on it. Landing on Go live would announce the
+        # button and leave the answer unread.
+        self.what.SetFocus()
+        self.what.SetInsertionPoint(0)
+
+    def _on_fix(self, page):
+        self.fix = page
+        self.EndModal(wx.ID_APPLY)
+
+    def EndModal(self, code):
+        # Read before the window goes, because the checkbox is gone by the
+        # time the caller looks.
+        try:
+            self.remember = bool(self.again.GetValue())
+        except Exception:
+            pass
+        super().EndModal(code)
+
+
+class VideoSourceDialog(wx.Dialog):
+    """What the stream is showing, and what to show instead. Alt+Shift+V.
+
+    Tony, 8 September 2026: "what if we want to switch to a different source
+    while live on air... a way to go from camera feed, to, picture, or ...
+    show full screen of what's on the computer screen, or even better ... a
+    split screen."
+
+    So this is a switcher rather than a settings page, and the difference is
+    that it applies at once. Up and down read the choices, Enter or Space puts
+    one on the air. There is no OK: a list you have to arrow through and then
+    Tab out of to confirm is not something anybody uses mid link.
+
+    On air, the change reaches the encoder without touching the connection.
+    Off air, it is remembered for the next time. Both cases save it to the
+    board, so the picture is the same one next week.
+
+    The list says which one is live, and what each one costs, because the one
+    thing a presenter cannot do here is look at a preview to find out.
+    """
+
+    def __init__(self, parent, board, live=False):
+        super().__init__(parent, title="Video source",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = parent
+        self.board = board
+        self.live = bool(live)
+        self.chosen = ""
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label=("Up and down read the choices. Enter puts one on "
+                         "the air." if live else
+                         "Up and down read the choices. Enter picks one for "
+                         "the next time you go live."))
+        note.Wrap(self.FromDIP(560))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="&Video sources"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(580, 190))
+        self.list.SetName("Video sources")
+        # The name is column 0 because that is what first letter navigation
+        # searches, and no "on air" marker goes in front of it for the same
+        # reason. Same rule as the running order.
+        self.list.InsertColumn(0, "Source", width=250)
+        self.list.InsertColumn(1, "On air", width=70)
+        self.list.InsertColumn(2, "What it sends", width=250)
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _e: self._apply())
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda _e: self._describe())
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        # Room for two lines reserved BEFORE the window is fitted. The sizer
+        # measures an empty label as nothing, and _describe then wraps a
+        # sentence into two lines that the window has no height for, so the
+        # second one is simply not there. Wrap inserts real newlines; it does
+        # not make the control grow.
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.StdDialogButtonSizer()
+        close = wx.Button(self, wx.ID_CANCEL, "&Close")
+        row.AddButton(close)
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.refresh()
+        self.list.SetFocus()
+
+    # --------------------------------------------------------------- rows --
+    def kinds(self):
+        """Every source, with the ones that cannot work here left out.
+
+        A machine with no camera is not offered a camera, and one that cannot
+        be captured is not offered its screen. An entry that would always
+        fail is worse than a shorter list.
+        """
+        out = []
+        cameras = self.frame.known_cameras()
+        can_screen = screen.available()
+        for kind in C.PICTURE_SOURCES:
+            if kind in C.PICTURE_NEEDS_CAMERA and not cameras:
+                continue
+            if kind in C.PICTURE_NEEDS_SCREEN and not can_screen:
+                continue
+            out.append(kind)
+        return out
+
+    def refresh(self, keep=None):
+        if keep is None:
+            keep = max(0, self.list.GetFirstSelected())
+        self.list.DeleteAllItems()
+        rows = self.kinds()
+        for at, kind in enumerate(rows):
+            self.list.InsertItem(at, C.PICTURE_LABELS.get(kind, kind))
+            self.list.SetItem(at, 1, "yes" if kind == self.board.picture
+                              else "no")
+            self.list.SetItem(at, 2, C.PICTURE_DESCRIPTIONS.get(kind, ""))
+        if rows:
+            if self.board.picture in rows and not self.list.GetFirstSelected() > 0:
+                keep = rows.index(self.board.picture)
+            keep = max(0, min(keep, len(rows) - 1))
+            self.list.Select(keep)
+            self.list.Focus(keep)
+        self._describe()
+
+    def _selected(self):
+        at = self.list.GetFirstSelected()
+        rows = self.kinds()
+        return rows[at] if 0 <= at < len(rows) else ""
+
+    def _describe(self):
+        kind = self._selected()
+        if not kind:
+            self.doing.SetLabel("")
+            return
+        label = C.PICTURE_LABELS.get(kind, kind).lower()
+        if kind == self.board.picture:
+            said = ("This is the one going out now." if self.live
+                    else "This is the one chosen.")
+        elif self.live:
+            said = "Enter puts %s on the air." % label
+        else:
+            said = "Enter picks %s." % label
+        # The full sentence, under the list. The column shows it truncated
+        # with an ellipsis because the text is longer than any sensible
+        # column, and a sighted reader has nowhere else to find the rest.
+        # A screen reader always gets the whole cell, so this is the half of
+        # the window that was only wrong to look at.
+        detail = C.PICTURE_DESCRIPTIONS.get(kind, "")
+        self.doing.SetLabel("%s  %s" % (said, detail) if detail else said)
+        self.doing.Wrap(self.FromDIP(600))
+
+    # ---------------------------------------------------------------- keys --
+    def _on_key(self, event):
+        code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE):
+            self._apply()
+            return
+        event.Skip()
+
+    def _apply(self):
+        kind = self._selected()
+        if not kind:
+            return
+        said = self.frame.set_video_source(kind)
+        self.chosen = kind
+        self.refresh()
+        if said:
+            self.doing.SetLabel(said)

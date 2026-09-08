@@ -144,6 +144,80 @@ And specific to this one:
   default them; `Board._fade` clamps to `0`-`C.MAX_BED_FADE` and falls back
   only on something that is not a number. Sound effects never faded and this
   setting does not reach them.
+- **No two commands may share an id, and a `_BASE` is a RANGE.**
+  `ID_STATION_BASE` sat at `wx.ID_HIGHEST + 410` with twenty stations behind
+  it, so it ran to 429 and swallowed `ID_SHOT` at 411 and `ID_STREAM_HELP` at
+  412, both added later in the 400s by somebody reading the list as single
+  numbers. Two handlers bound for one id on one window means **the last one
+  bound wins**, `_on_pick_station` is bound after both and never calls
+  `Skip`, so `Ctrl+Shift+F` reached the station picker and did nothing. It is
+  at 700 now, above the slot block, and `tests/test_3_4_1.py` expands every
+  `_BASE` by its span and asserts nothing overlaps.
+  **Every test passed for the whole time it was broken**, because they all
+  call the handler directly and the fault was in the binding. This is the
+  same lesson as the crossfade box and Enter on a playlist row: a key is only
+  really tested by pressing it. `tools/check_video_key.py` does that, and it
+  runs a KNOWN GOOD key first as a control, so "the simulator could not
+  deliver it" is never mistaken for "the app ignored it".
+- **Ctrl+B asks; a pad never does.** `board.ask_before_live` puts a summary
+  in front of going live, and that is not a breach of the rule below it: a
+  pad is muscle memory in the middle of a show and going live is a decision
+  taken once, at the top of one. `GoLiveDialog` makes Go live the default
+  button so `Ctrl+B` then Enter is still the whole gesture, and the checkbox
+  inside it turns the question off for good. **The way back on is in
+  Preferences**, on the Audio streaming page, because a "do not ask again"
+  with no way back is a one way door.
+- **The asking lives in `toggle_stream`, NOT in `start_stream`**, and that is
+  load bearing. `start_stream` is called by anything that wants the show on
+  the air; `toggle_stream` is called by a person pressing a key, and only a
+  person can answer a question. Putting the dialog in `start_stream` hung
+  every test in the repository that goes live, for ever, on a window nothing
+  could click: `test_recording` stopped dead at "Recording and streaming at
+  the same time" and `test_stream` printed nothing at all. It is the same
+  trap as the `wx.MessageBox` one below, in a new place, and
+  `tests/test_3_4_1.py` now asserts `start_stream` opens no window.
+- **`preflight.py` imports no wx and touches no network**, which is what
+  makes every warning testable one at a time rather than by going on the air.
+  Anything it needs about the running app is passed in. A new warning goes
+  there, not into `start_stream`, and it gets a check in
+  `tests/test_3_4_1.py` next to the others.
+- **A source that fills a canvas rather than failing cannot fall back**, and
+  that is why the pre-flight exists at all. `ImageSource.frame` returns a
+  background-filled rectangle for a file that has been moved, so
+  `FallbackSource` never fires, `on_fallback` never fires, and the whole
+  broadcast is a dark rectangle that looks deliberate. Warn before the air,
+  because nothing downstream will.
+- **The picture can be changed while live, and the reason it is safe is
+  worth keeping.** Size, pixel format and frame rate go on the codec context
+  once, inside `RtmpDestination.connect`, before the FLV header and the H.264
+  sequence header go out. `_pump_video` asks every source for
+  `frame(self.width, self.height)`, so a source is TOLD the size and never
+  chooses it. Video PTS counts `_frames_sent` against the audio sample clock,
+  so a swap cannot move the timeline: no keyframe is forced and no session is
+  renegotiated. `Streamer.set_video_source` holds the new source as well as
+  handing it on, because a reconnect rebuilds the destination from the
+  settings snapshot and would otherwise put the picture back to whatever it
+  was at `Ctrl+B`. **The new source goes on the air before the old one is
+  closed**, or a camera's half second to first frame is half a second of card.
+- **Screen capture is GDI through ctypes, and it must stay on its own
+  thread.** Measured 8 September 2026: a desktop blit costs 16 to 33 ms and
+  BLOCKS, because the Desktop Window Manager paces it to the display's
+  refresh. The whole frame budget at 30 fps is 33.3 ms, and `_picture()` is
+  called inline on the streaming thread, which is the thread carrying the
+  audio. A capture on that thread would stall the sound, not just the
+  picture. `ScreenSource` reads on `dropdeck-screen` and `frame()` hands back
+  the last completed capture, exactly as `camera.py` does.
+  `tools/check_switching.py` measures the feed time and would catch a
+  regression; it was 15.9 ms against a 33.3 ms budget when this shipped.
+  The cost is the same at any destination size, so `StretchBlt` scales on the
+  GDI side and the frame arrives at the size the encoder wants.
+- **The screen fills the frame and the camera goes in the corner. That was
+  measured, not chosen.** A 1280 wide picture split in half leaves the screen
+  640 across, and a 1920x1080 desktop at 640 across is not small text, it is
+  no text: body copy is a grey smear and headings are shapes. At the full
+  1280 the same screen reads perfectly. Side by side needs a 1920 wide
+  stream, where each half is 960 and the text survives. Do not "improve" this
+  into a 50/50 split at 720p.
 - **Nothing goes between a keypress and a sound.** No confirmation, no
   animation, no lazy decode on the hot path. Short sounds are decoded into
   memory at assignment time precisely so the key is instant.
@@ -204,11 +278,18 @@ dropdeck/
   singleinstance.py one copy at a time; identical to the Prompt Vault's copy
   appupdate.py   signed update manifest; identical in shape to the Prompt Vault
   appicon.py     the drawn mark, and the .ico the build stamps in
+  preflight.py   what Ctrl+B is about to do, and what is wrong with it
+  screen.py      the desktop as a picture source, and the camera in its corner
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
   check_guide.py     fact-checks the published user guide against the app
   check_keyboard.py  real keystrokes into the real window. Run it by hand
+  check_switching.py a real time broadcast that changes picture, then decodes
+                     what arrived. The counterpart to check_stream_quality
+  check_video_key.py real Alt+Shift+V into the real window, with a known good
+                     key first as a control. Run it by hand
+  shot_golive.py     pictures of the two 3.4.1 windows, and a layout audit
 ```
 
 **Two decoders, one door.** `audiofile.py` tries libsndfile and falls back to

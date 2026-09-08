@@ -452,16 +452,35 @@ def build(settings, on_fallback=None):
                       title=settings.get("title", ""),
                       clock=bool(settings.get("picture_clock", False)))
     kind = settings.get("picture", C.PICTURE_CARD)
+    width = settings.get("video_width")
+    height = settings.get("video_height")
+    fps = settings.get("video_fps")
     if kind == C.PICTURE_IMAGE:
         primary = ImageSource(settings.get("picture_file", ""))
     elif kind == C.PICTURE_CAMERA:
-        # Imported here rather than at the top: picture.py is what camera.py
-        # imports, and the other way round as well would be a cycle.
-        from .camera import CameraSource
-        primary = CameraSource(settings.get("camera", ""),
-                               settings.get("video_width"),
-                               settings.get("video_height"),
-                               settings.get("video_fps"))
+        primary = _camera(settings, width, height, fps)
+    elif kind == C.PICTURE_SCREEN:
+        primary = _screen(settings, width, height, fps)
+    elif kind == C.PICTURE_SPLIT:
+        # Imported here for the same reason as the other two, and the camera
+        # is built even when it cannot open: SplitSource reports that itself
+        # and goes on with the screen, which is still a show.
+        from .screen import SplitSource
+        primary = SplitSource(_screen(settings, width, height, fps),
+                              _camera(settings, width, height, fps))
     else:
         return card
     return FallbackSource(primary, card, on_fallback)
+
+
+def _camera(settings, width, height, fps):
+    # Imported here rather than at the top: picture.py is what camera.py
+    # imports, and the other way round as well would be a cycle.
+    from .camera import CameraSource
+    return CameraSource(settings.get("camera", ""), width, height, fps)
+
+
+def _screen(settings, width, height, fps):
+    from .screen import ScreenSource
+    return ScreenSource(settings.get("screen", "") or C.SCREEN_ALL,
+                        width, height, fps)

@@ -25,13 +25,15 @@ from . import framing
 from . import picture
 from . import secrets
 from . import sources
+from . import preflight
+from . import screen
 from . import streamout
 from . import vst
 from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
+from .dialogs import (GoLiveDialog, VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
@@ -62,6 +64,11 @@ ID_SHOT = wx.ID_HIGHEST + 411
 #: Setting streaming up, in the app. No accelerator: it is a thing you read
 #: once while setting up, not a thing you reach for mid show.
 ID_STREAM_HELP = wx.ID_HIGHEST + 412
+#: What the stream is showing, and what to show instead. Alt+Shift+V, beside
+#: Alt+Shift+S for audio sources: same gesture, the other half of the show.
+#: A NEW key, and it goes nowhere near the frozen digit map, which uses only
+#: the digits and never Alt+Shift.
+ID_VIDEO_SOURCES = wx.ID_HIGHEST + 413
 #: Recording, which is its own thing and not a kind of streaming: you record
 #: a show whether or not anybody is listening to it live.
 ID_RECORD = wx.ID_HIGHEST + 405
@@ -74,8 +81,23 @@ ID_SOURCES = wx.ID_HIGHEST + 408
 ID_SOURCE_CONTROL = wx.ID_HIGHEST + 409
 ID_STREAM_SETUP = wx.ID_HIGHEST + 403
 #: One id per saved station on the On air menu. Twenty is more stations than
-#: anyone has, and a fixed block keeps them clear of every other id.
-ID_STATION_BASE = wx.ID_HIGHEST + 410
+#: anyone has.
+#:
+#: **MOVED IN 3.4.1, AND THE OLD PLACE WAS A REAL BUG.** This block used to
+#: start at 410, and the comment here used to claim a fixed block kept it
+#: clear of every other id. It did not: 410 to 429 swallowed ID_SHOT at 411
+#: and ID_STREAM_HELP at 412, both added later in the 400s without anybody
+#: noticing they were inside it. Two handlers bound for one id on one window
+#: means the LAST one bound wins, `_on_pick_station` is bound after both of
+#: them and never calls Skip, so Ctrl+Shift+F reached the station picker
+#: instead of the camera and did nothing at all.
+#:
+#: It survived every test because a test calls the handler by hand. Only a
+#: real keystroke, through the real accelerator table, goes near the binding
+#: that was wrong. `tools/check_video_key.py` is what found it and
+#: `tests/test_3_4_1.py` now asserts no two ids collide, so a third one
+#: cannot be quietly parked on top of this block.
+ID_STATION_BASE = wx.ID_HIGHEST + 700
 MAX_STATIONS = 20
 
 ID_SLOT_BASE = wx.ID_HIGHEST + 500
@@ -1118,6 +1140,11 @@ class DropDeckFrame(wx.Frame):
                    "Source &control..." + chr(9) + "Alt+Ctrl+Shift+S",
                    "Mute, solo, rename or remove a source while you are on "
                    "air")
+        air.Append(ID_VIDEO_SOURCES,
+                   "&Video source..." + chr(9) + "Alt+Shift+V",
+                   "What the stream is showing: a card, your artwork, a "
+                   "camera, your screen. It can be changed while you are on "
+                   "air")
         air.Append(ID_SOURCES, "&Audio sources..." + chr(9) + "Alt+Shift+S",
                    "Other inputs to put on the air: a second microphone, a "
                    "mixer, or one program's audio"),
@@ -1225,6 +1252,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
+        self.Bind(wx.EVT_MENU, self._on_video_sources, id=ID_VIDEO_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_source_control, id=ID_SOURCE_CONTROL)
         self.Bind(wx.EVT_MENU,
                   lambda _e: self._on_settings(page=SettingsDialog.PAGE_STREAM),
@@ -1331,6 +1359,10 @@ class DropDeckFrame(wx.Frame):
             # card, a cable, or a program.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("S"),
                                 ID_SOURCES),
+            # And Alt+Shift+V for the video source, which is the same idea for
+            # the other half of the show. Deliberately reachable while live.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("V"),
+                                ID_VIDEO_SOURCES),
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_CTRL | wx.ACCEL_SHIFT,
                                 ord("S"), ID_SOURCE_CONTROL),
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("M"),
@@ -3758,9 +3790,20 @@ class DropDeckFrame(wx.Frame):
         return streamer is not None and streamer.running
 
     def toggle_stream(self, _event=None):
-        """Ctrl+B. Go live, or come off air."""
+        """Ctrl+B. Go live, or come off air.
+
+        **The summary is asked for HERE rather than inside start_stream, and
+        that is not a detail.** start_stream is called by anything that wants
+        the show on the air; this is called by a person pressing a key. A
+        modal window on the first one hung every test that goes live, for
+        ever, on a dialog nothing could click. Ctrl+B and the On air menu
+        both come through here, so a user is asked either way, and nothing
+        else in the app or the tests is.
+        """
         if self.streaming():
             self.stop_stream()
+            return False
+        if not self._cleared_to_go():
             return False
         return self.start_stream()
 
@@ -3992,7 +4035,11 @@ class DropDeckFrame(wx.Frame):
         """
         self._stop_framing()
         source = getattr(self, "video_source", None)
-        if source is None or getattr(source, "kind", "") != C.PICTURE_CAMERA:
+        # Anything with a camera in it, not just the camera source. The split
+        # has one and a presenter using it needs to know they are in shot at
+        # least as much, because they are small in the corner of it.
+        if source is None or getattr(source, "kind",
+                                     "") not in C.PICTURE_NEEDS_CAMERA:
             return
         level = self.board.framing_level
         if level not in framing.FRAMING_LEVELS:
@@ -4050,7 +4097,7 @@ class DropDeckFrame(wx.Frame):
         if framer is not None and source is not None:
             self.announce_answer(framer.describe())
             return
-        if self.board.picture != C.PICTURE_CAMERA:
+        if self.board.picture not in C.PICTURE_NEEDS_CAMERA:
             self.announce_answer(
                 "The stream is not showing a camera. Picture settings are in "
                 "Preferences")
@@ -4271,12 +4318,198 @@ class DropDeckFrame(wx.Frame):
         """
         self.announce_answer(self.stream_status())
 
+    # ----------------------------------------------------- going live --
+    def preflight(self):
+        """What Ctrl+B would do right now, or None when it cannot tell."""
+        try:
+            return self._report_for(self._stream_settings())
+        except Exception:
+            return None
+
+    def _report_for(self, settings):
+        """The pre-flight for one set of settings, with the live facts added.
+
+        Whether the screen can be captured is only asked when the picture
+        needs it, because the answer costs a Windows call and a card does not
+        care.
+        """
+        ready, reason = True, ""
+        if settings.get("picture") in C.PICTURE_NEEDS_SCREEN:
+            ready = screen.available()
+            reason = screen.why_unavailable()
+        return preflight.check(
+            settings, self.board,
+            audio_running=bool(getattr(self.mixer, "is_running", True)),
+            mic_open=self._mic_open(), screen_ready=ready,
+            screen_reason=reason)
+
+    def _cleared_to_go(self, settings=None):
+        """Say what is about to go out, and let the presenter change it.
+
+        True means carry on to the air. The dialog is the default because the
+        whole complaint was not knowing what was live; the checkbox inside it
+        turns this back into the single keystroke it used to be, for somebody
+        who does this every day and knows their own settings.
+        """
+        try:
+            report = (self.preflight() if settings is None
+                      else self._report_for(settings))
+            if report is None:
+                return True
+        except Exception:
+            # Never let the check itself be what stops a broadcast.
+            return True
+        if not self.board.ask_before_live:
+            # Still said, just not asked. A warning nobody has to dismiss is
+            # the point of turning the dialog off, not a warning nobody hears.
+            #
+            # ONE announcement, not one per note. Three calls in a row means
+            # the second interrupts the first and the third interrupts that,
+            # so a presenter hears the last one and never learns their
+            # microphone is off the air. Whatever is STOPPING the broadcast
+            # leads, for the same reason it leads in the dialog.
+            said = ". ".join(note.text for note in
+                             report.stops + report.warnings)
+            if said:
+                self.announce(said)
+            return not report.blocked
+        while True:
+            with GoLiveDialog(self, report) as box:
+                answer = box.ShowModal()
+                remember = box.remember
+                fix = box.fix
+            if remember:
+                self.board.ask_before_live = False
+                self._touch()
+            if answer == wx.ID_OK:
+                return True
+            if answer != wx.ID_APPLY:
+                self.announce("Staying off air")
+                return False
+            self._on_settings(page=(SettingsDialog.PAGE_VIDEO
+                                    if fix == C.FIX_VIDEO
+                                    else SettingsDialog.PAGE_STREAM))
+            report = self.preflight()
+            if report is None:
+                return False
+
+    # ------------------------------------------------- the video source --
+    def known_cameras(self):
+        """Camera names, looked up once and remembered.
+
+        Enumeration opens DirectShow and takes a moment, so it is never done
+        on a keystroke. A camera already chosen counts even when the list
+        cannot be read, or unplugging a hub would silently remove the option
+        to put it back.
+        """
+        found = list(getattr(self, "_cameras_seen", []) or [])
+        if not found:
+            try:
+                found = list(camera.cameras())
+            except Exception:
+                found = []
+            self._cameras_seen = found
+        if self.board.camera and self.board.camera not in found:
+            found = found + [self.board.camera]
+        return found
+
+    def _on_video_sources(self, _event=None):
+        if self.board.live_to != C.LIVE_TO_VIDEO:
+            self.announce_answer(
+                "Ctrl+B is set to go to your radio station, which sends no "
+                "picture. Video streaming is in Preferences")
+            return
+        with VideoSourceDialog(self, self.board, live=self._showing()) as box:
+            box.ShowModal()
+
+    def _showing(self):
+        """Whether a picture is going out right now.
+
+        getattr, because video_source is only set by start_stream and a frame
+        that has never gone live does not have the attribute at all. The same
+        guard stop_stream already uses, and for the same reason.
+        """
+        return bool(self.streaming()
+                    and getattr(self, "video_source", None) is not None)
+
+    def set_video_source(self, kind):
+        """Put a different picture on the air. Returns what to say about it.
+
+        On air this reaches the encoder without touching the connection: the
+        size and the frame rate are locked at connect and nothing here
+        changes either, and video timestamps are counted against the audio
+        clock rather than taken from the source, so the swap does not move
+        the timeline. See RtmpDestination.set_video_source.
+
+        Off air it is only remembered. Either way it is saved, because a
+        picture chosen mid show is still the one wanted next week.
+        """
+        if kind not in C.PICTURE_SOURCES:
+            return ""
+        was = self.board.picture
+        self.board.picture = kind
+        self._touch()
+        label = C.PICTURE_LABELS.get(kind, kind).lower()
+        if not self._showing():
+            said = "Next time you go live: %s" % label
+            self.announce(said)
+            return said
+        old = getattr(self, "video_source", None)
+        try:
+            source = self._build_picture(self._stream_settings())
+        except Exception as exc:
+            self.board.picture = was
+            said = "That did not work: %s. Still showing %s" % (
+                exc, C.PICTURE_LABELS.get(was, was).lower())
+            self.announce(said)
+            return said
+        if source is None:
+            self.board.picture = was
+            return ""
+        # The new source goes on the air BEFORE the old one is closed. A
+        # camera takes about half a second to hand over its first frame and
+        # closing first would put a card on the air for that half second,
+        # which is a visible glitch nobody asked for. The old source is shut
+        # down afterwards, and the encoder has already stopped reading it.
+        self.video_source = source
+        self.streamer.set_video_source(source)
+        self.streamer.set_title(self._now_playing_title())
+        if old is not None and old is not source:
+            try:
+                old.close()
+            except Exception:
+                pass
+        # Framing follows the picture: it only looks through a camera, and it
+        # reads the source object rather than the board, so it has to be
+        # rebuilt on both the way in and the way out.
+        self._stop_framing()
+        self._start_framing()
+        said = "Now showing %s" % label
+        self.announce(said)
+        self._update_status()
+        return said
+
     def stream_status(self):
         streamer = getattr(self, "streamer", None)
         if streamer is None or not streamer.running:
-            if not self.board.stream_host:
+            # ASKED OF THE TARGET THAT IS ACTUALLY TICKED. This read
+            # board.stream_host whichever way live_to was set, so a board set
+            # up for YouTube and nothing else answered "no server is set up
+            # yet" while Ctrl+B would have gone live perfectly well, and a
+            # board with both named the radio station as the destination when
+            # the show was going to the video platform. It is the one
+            # question this key exists to answer.
+            report = self.preflight()
+            if report is None:
                 return "Off air, and no server is set up yet"
-            return "Off air. Ctrl+B goes live to %s" % self.board.stream_host
+            if report.blocked:
+                # Both halves. Where it WOULD go is still the answer to the
+                # question, and a reason on its own leaves somebody guessing
+                # which of the two destinations is the one complaining.
+                return "Off air. Ctrl+B would go to %s, but %s" % (
+                    report.summary(), report.stops[0].text[0].lower()
+                    + report.stops[0].text[1:])
+            return "Off air. Ctrl+B goes live to %s" % report.summary()
         if streamer.state != streamout.ON_AIR:
             return "%s. %s" % (streamer.state.capitalize(),
                                streamer.detail or streamer.error or "")
@@ -4398,6 +4631,7 @@ class DropDeckFrame(wx.Frame):
             self.board.picture_file = picture_settings["picture_file"]
             self.board.picture_clock = picture_settings["picture_clock"]
             self.board.camera = picture_settings["camera"]
+            self.board.screen = picture_settings["screen"]
             self.board.video_width = picture_settings["video_width"]
             self.board.video_height = picture_settings["video_height"]
             self.board.video_fps = picture_settings["video_fps"]
@@ -4405,6 +4639,7 @@ class DropDeckFrame(wx.Frame):
             self.board.framing_level = picture_settings["framing_level"]
             self.board.stream_mic = dialog.stream_mic.GetValue()
             self.board.stream_titles = dialog.stream_titles.GetValue()
+            self.board.ask_before_live = (dialog.ask_before_live.GetValue())
             self.board.playlist_monitor_only = (
                 dialog.playlist_monitor_only.GetValue())
             chain = getattr(self.mic, "chain", None)

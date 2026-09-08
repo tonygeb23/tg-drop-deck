@@ -1,0 +1,263 @@
+"""What is about to go on the air, worked out before it does.
+
+Ctrl+B used to be a leap. The app knew perfectly well where the show was
+going, what it was encoding, what would be on the screen and whether the
+presenter's own microphone was part of the programme, and it said none of it:
+it connected, and several seconds later either announced the destination or a
+failure. A sighted broadcaster has a rack of settings in front of them and can
+glance at it. There is no glance here, so the app has to say it.
+
+**And "it connected" is not the same claim as "it is right".** Nearly every way
+of getting this wrong survives the connection and ruins the broadcast quietly:
+
+  * a picture file that has been moved sends a flat dark rectangle for three
+    hours, because ImageSource fills a canvas rather than failing;
+  * the microphone left off the programme sends a show with no presenter on
+    it, and it sounds perfect from where the presenter is sitting because
+    monitoring is downstream of the split;
+  * the wrong one of the two destinations ticked sends the show to a radio
+    server nobody is listening to while the video platform waits;
+  * a bitrate outside what the platform publishes can have the broadcast
+    ended from the other end, with nothing said at this one.
+
+None of those raise. All of them are knowable in advance. So this module is
+the answer to every one: given the settings and a few facts about the running
+app, say what will be sent and what is wrong with it, in a form the frame can
+speak, put in a dialog, or assert against in a test.
+
+**Nothing here imports wx, and nothing here touches the network.** It is
+arithmetic and string building over a settings dict, which is what makes the
+whole of it testable with no sound card, no camera and no display, and why the
+list of warnings can be checked one by one rather than by going on the air.
+"""
+from __future__ import annotations
+
+import os
+
+from . import constants as C
+from . import streamout
+
+
+#: A problem that will stop the broadcast working at all. Ctrl+B does not
+#: proceed past one of these.
+STOP = "stop"
+
+#: A problem that will let the broadcast happen and spoil it. These are the
+#: expensive ones, because nothing downstream will mention them again.
+WARN = "warn"
+
+
+class Note:
+    """One thing worth saying before going live."""
+
+    def __init__(self, level, text, fix=""):
+        self.level = level
+        self.text = text
+        #: Where to send somebody who wants to put it right. A settings page
+        #: constant, or "" when there is nothing to open.
+        self.fix = fix
+
+    def __repr__(self):      # pragma: no cover - debugging only
+        return "Note(%r, %r)" % (self.level, self.text)
+
+
+class Preflight:
+    """What Ctrl+B is about to do, and what is wrong with it."""
+
+    def __init__(self, target, lines, notes):
+        #: C.LIVE_TO_AUDIO or C.LIVE_TO_VIDEO.
+        self.target = target
+        #: The summary, as (label, value) pairs in the order they are read.
+        #: A list rather than a dict because the order is the whole point:
+        #: where it is going first, then what is being sent, then who is on it.
+        self.lines = list(lines)
+        self.notes = list(notes)
+
+    @property
+    def stops(self):
+        return [n for n in self.notes if n.level == STOP]
+
+    @property
+    def warnings(self):
+        return [n for n in self.notes if n.level == WARN]
+
+    @property
+    def blocked(self):
+        return bool(self.stops)
+
+    def summary(self):
+        """The one sentence answer to "where is this going".
+
+        First line only. Everything else is available and this is what gets
+        spoken when somebody just wants to go live.
+        """
+        return self.lines[0][1] if self.lines else ""
+
+    def spoken(self):
+        """The whole thing, as one string a screen reader reads straight through.
+
+        Semicolons rather than full stops between the settings, so a screen
+        reader runs them together as a list rather than reading each as its
+        own sentence, and full stops before the problems so they land
+        separately. Measured against NVDA rather than guessed at.
+        """
+        parts = ["%s %s" % (label, value) for label, value in self.lines]
+        said = "; ".join(parts)
+        trouble = [n.text for n in self.notes]
+        if trouble:
+            said += ". " + ". ".join(trouble)
+        return said
+
+
+def _picture_words(settings):
+    """What will be on the screen, said as the audience would see it."""
+    kind = settings.get("picture", C.PICTURE_CARD)
+    if kind == C.PICTURE_IMAGE:
+        path = settings.get("picture_file", "")
+        return "your own picture, %s" % (os.path.basename(path) or "not chosen")
+    if kind == C.PICTURE_CAMERA:
+        return settings.get("camera") or "a camera, but none is chosen"
+    if kind == C.PICTURE_SCREEN:
+        return "what is on your screen"
+    if kind == C.PICTURE_SPLIT:
+        camera = settings.get("camera") or "no camera chosen"
+        return "your screen, with %s in the corner" % camera
+    name = settings.get("name") or settings.get("stream_name") or ""
+    if name:
+        return "a card saying %s" % name
+    return "a card"
+
+
+def _check_picture(settings, notes, screen_ready=True, screen_reason=""):
+    """Everything that can be wrong with the picture, before it is opened."""
+    kind = settings.get("picture", C.PICTURE_CARD)
+    if kind == C.PICTURE_IMAGE:
+        path = settings.get("picture_file", "")
+        if not path:
+            notes.append(Note(WARN, "No picture file has been chosen, so the "
+                                    "stream would show an empty screen",
+                              C.FIX_VIDEO))
+        elif not os.path.isfile(path):
+            # The expensive one. ImageSource fills a canvas with the
+            # background colour rather than returning None, so the fallback
+            # never fires, nothing is announced, and the whole broadcast is a
+            # dark rectangle that looks deliberate.
+            notes.append(Note(WARN, "That picture file is not there any more, "
+                                    "so the stream would show an empty screen",
+                              C.FIX_VIDEO))
+    if kind in C.PICTURE_NEEDS_CAMERA and not settings.get("camera"):
+        notes.append(Note(WARN, "No camera has been chosen, so the stream "
+                                "would fall back to a card", C.FIX_VIDEO))
+    if kind in C.PICTURE_NEEDS_SCREEN and not screen_ready:
+        notes.append(Note(WARN, screen_reason or "The screen cannot be "
+                                                 "captured on this machine",
+                          C.FIX_VIDEO))
+
+
+def check(settings, board, audio_running=True, mic_open=False,
+          screen_ready=True, screen_reason=""):
+    """Work out what Ctrl+B would do with these settings.
+
+    `settings` is what `_stream_settings` builds, so this sees exactly what
+    the streamer will see rather than a second reading of the board. The live
+    facts are passed in rather than fetched, which is what keeps this callable
+    from a test with nothing running.
+    """
+    notes = []
+    lines = []
+    video = board.live_to == C.LIVE_TO_VIDEO
+    server = settings.get("server", "")
+    host = settings.get("host", "")
+    page = C.FIX_VIDEO if video else C.FIX_AUDIO
+
+    # ---------------------------------------------------------- where it goes
+    label = streamout.server_label(server) or server
+    if not host:
+        lines.append(("Going to", "nowhere: no %s is set up yet"
+                      % ("video platform" if video else "server")))
+        notes.append(Note(STOP, "There is no %s set up yet"
+                          % ("video platform" if video else "server"), page))
+    elif video:
+        lines.append(("Going to", "%s, %s" % (label, streamout.host_label(host))))
+    else:
+        lines.append(("Going to", "%s, %s%s"
+                      % (label, host, settings.get("mount", "") or "")))
+
+    # ------------------------------------------------------------ the sound
+    spec = streamout.FORMATS.get(settings.get("format", "mp3"))
+    fmt = spec["label"] if spec else str(settings.get("format", "")).upper()
+    lines.append(("Sound", "%d kbps %s" % (settings.get("bitrate", 0), fmt)))
+
+    # ------------------------------------------------------------ the picture
+    if video:
+        lines.append(("Picture", "%s, %d by %d at %d kbps"
+                      % (_picture_words(settings),
+                         settings.get("video_width", C.RTMP_WIDTH),
+                         settings.get("video_height", C.RTMP_HEIGHT),
+                         settings.get("video_bitrate", C.RTMP_VIDEO_BITRATE))))
+
+    # ---------------------------------------------------------- the presenter
+    # Said every time, not only when it is wrong. "Microphone on air" is the
+    # line a presenter wants to hear before they start talking, and a warning
+    # that only appears when something is broken teaches nobody where to look.
+    if board.stream_mic:
+        lines.append(("Microphone", "on the air" if mic_open
+                      else "on the air when you open it, Ctrl+M"))
+    else:
+        lines.append(("Microphone", "NOT going out"))
+        notes.append(Note(WARN, "Your microphone is not on the air, so "
+                                "listeners will not hear you at all",
+                          C.FIX_AUDIO))
+
+    # ------------------------------------------------------------- the faults
+    if video and not settings.get("password"):
+        notes.append(Note(STOP, "There is no stream key for this station",
+                          C.FIX_VIDEO))
+    if not video and host and not settings.get("password"):
+        # Not a stop: a private Icecast can be set up to want no password, and
+        # refusing to broadcast over a guess would be worse than the warning.
+        notes.append(Note(WARN, "There is no password for this server, which "
+                                "most servers will refuse", C.FIX_AUDIO))
+    if not audio_running:
+        notes.append(Note(STOP, "The sound card is not running, so there is "
+                                "nothing to send", C.FIX_AUDIO))
+    if video:
+        _check_picture(settings, notes, screen_ready, screen_reason)
+        advice = streamout.bitrate_advice(
+            server, settings.get("video_width", C.RTMP_WIDTH),
+            settings.get("video_height", C.RTMP_HEIGHT),
+            settings.get("video_fps", C.RTMP_FPS),
+            settings.get("video_bitrate", C.RTMP_VIDEO_BITRATE),
+            settings.get("bitrate", 128))
+        if advice:
+            notes.append(Note(WARN, advice, C.FIX_VIDEO))
+        if (settings.get("picture") == C.PICTURE_CARD
+                and not board.stream_titles):
+            # The card is the only place a viewer finds out what is playing,
+            # and the switch that freezes it lives on the other page.
+            notes.append(Note(WARN, "Track titles are turned off, so the card "
+                                    "will not say what is playing",
+                              C.FIX_AUDIO))
+    warning = going_live_warning(board)
+    if warning:
+        notes.append(Note(WARN, warning, ""))
+    return Preflight(board.live_to, lines, notes)
+
+
+def going_live_warning(board):
+    """What the platform itself does the moment the stream connects.
+
+    The two behave in opposite ways and both surprises are expensive: YouTube
+    publishes and notifies subscribers at once, Facebook shows a preview and
+    posts nothing. This is said BEFORE connecting now. It used to be said
+    after, which is the wrong side of the only decision it informs.
+    """
+    if board.live_to != C.LIVE_TO_VIDEO:
+        return ""
+    if C.RTMP_GOES_LIVE_AT_ONCE.get(board.video_server):
+        return ("%s puts you live the moment you connect, and tells your "
+                "subscribers" % streamout.server_label(board.video_server))
+    if board.video_server == "facebook":
+        return ("Facebook will show you a preview and post nothing until you "
+                "press Go Live Now")
+    return ""

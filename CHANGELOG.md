@@ -1,5 +1,88 @@
 # Changelog
 
+## 3.4.1, 8 September 2026
+
+**Ctrl+B tells you what it is about to do, and waits.**
+
+Where the show is going, what it is sending, what will be on the screen, and
+whether your microphone is on the air. Then Enter puts you live, so it is one
+extra keypress and you hear all of it on the way past. A box in the window
+turns the asking off for good if you would rather not have it, and Preferences
+turns it back on.
+
+It also checks, and this is the half worth having. Nearly every way of getting
+a broadcast wrong survives the connection and ruins the show quietly:
+
+- **your microphone left off the air.** Nothing anywhere said so, and it sounds
+  perfect from where you are sitting, because you go on hearing yourself either
+  way. Every listener gets a show with the presenter missing;
+- **a picture file you have moved.** It went out as a flat dark rectangle for
+  the whole broadcast and nothing noticed;
+- **no camera chosen, or a camera another program has taken**;
+- **a bitrate outside what the platform will accept.** The app has known these
+  numbers since 3.4.0 and only ever showed them in Preferences;
+- **track titles turned off**, which quietly freezes the card so it goes on
+  saying whatever was playing when you went live;
+- **the wrong one of the two destinations ticked.**
+
+What YouTube and Facebook do the moment you connect is now said **before** you
+connect, which is the only side of that decision it is any use on.
+
+**Ctrl+Shift+B was wrong about where Ctrl+B goes, and is not any more.** It
+always read the radio station's address, whichever destination was ticked. A
+board set up for YouTube and nothing else answered "Off air, and no server is
+set up yet" while Ctrl+B would have gone live perfectly well, and a board with
+both named the radio station when the show was going to YouTube. It is the one
+question that key exists to answer.
+
+**Alt+Shift+V changes the picture, on air, without dropping the stream.**
+
+Up and down read the choices, Enter puts one out. It sits beside Alt+Shift+S,
+which does the same job for audio sources.
+
+**Two new things to point it at.**
+
+- **Your screen.** What you are doing, for a demonstration or a walkthrough.
+- **Your screen with the camera in the corner**, small, so the screen stays
+  readable.
+
+The corner rather than side by side is a measured decision, not a preference.
+A 1280 wide picture split down the middle leaves your screen 640 across, and a
+1920x1080 desktop at 640 across is not small text, it is no text: ordinary
+writing turns to a grey smear. At the full width the same screen reads
+perfectly. A screen nobody can read is not worth sending, so the screen gets
+the frame and the camera gets the corner.
+
+Nothing was added to the download for any of this. The screen capture is
+Windows' own, the same way the app already takes sound out of another program.
+
+**Sound and picture stay locked together through a switch**, and that is
+checked rather than assumed: `tools/check_switching.py` runs a real broadcast
+at real speed with the real screen capture attached, changes the picture three
+times, and then decodes what the server received. Over a minute on the air the
+sound and the picture finished 21 ms apart, they were never more than 5 ms
+apart at a switch, no gap between frames went over 100 ms, and no frame went
+black at any of them.
+
+**Ctrl+Shift+F works again. It has not worked since 3.4.0.**
+
+Found while testing the new key, and only because that test presses a real
+key rather than calling the code behind it.
+
+Saved stations get a block of twenty internal numbers on the On air menu, and
+that block had quietly grown over the top of two other commands: **what the
+camera can see**, which was the headline of 3.4.0, and **Set up streaming** on
+the Help menu. When two commands share a number the last one wins, so
+`Ctrl+Shift+F` was reaching the station picker and doing nothing at all.
+
+Every test in the app passed the whole time, because they all call the code
+directly and the fault was in what Windows does with the key first. There is a
+check now that no two commands can share a number, and a tool that presses the
+key for real.
+
+Nothing about the soundboard, the running order, the keyboard or your radio
+station streaming has changed. The digit map is untouched.
+
 ## 3.4.0, 7 September 2026
 
 **Drop Deck goes out on YouTube, Facebook and Restream.**

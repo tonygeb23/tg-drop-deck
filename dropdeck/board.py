@@ -28,7 +28,7 @@ STATION_FIELDS = (
     # The video side and the picture belong to the station too: a YouTube
     # station needs them and the Icecast station on the same board does not.
     "video_server", "video_host", "video_key", "live_to",
-    "picture", "picture_file", "picture_clock", "camera",
+    "picture", "picture_file", "picture_clock", "camera", "screen",
     "video_width", "video_height", "video_fps", "video_bitrate",
 )
 
@@ -277,6 +277,10 @@ class Board:
         self.picture_file = ""
         self.picture_clock = False
         self.camera = ""
+
+        #: Which screen goes out when the picture is the screen. Not a
+        #: monitor number: see C.SCREEN_CHOICES for why.
+        self.screen = C.SCREEN_ALL
         self.video_width = C.RTMP_WIDTH
         self.video_height = C.RTMP_HEIGHT
         self.video_fps = C.RTMP_FPS
@@ -327,6 +331,12 @@ class Board:
         #: supersedes announce_playback, which is still written to the file so
         #: an older build opening a newer board keeps behaving sensibly.
         self.speech_level = C.DEFAULT_SPEECH_LEVEL
+
+        #: Whether Ctrl+B says what it is about to send and waits for a
+        #: yes. On by default: not knowing what was live is the thing
+        #: this answers, and Enter is still the next keystroke. Somebody
+        #: who goes live every day turns it off inside the dialog.
+        self.ask_before_live = True
         self.path = None
         self.dirty = False
 
@@ -546,6 +556,7 @@ class Board:
             "bank_devices": {str(k): v for k, v in self.bank_devices.items()},
             "announce_playback": bool(self.announce_playback),
             "speech_level": self.speech_level,
+            "ask_before_live": bool(self.ask_before_live),
             "warn_before_end": bool(self.warn_before_end),
             "warn_seconds": float(self.warn_seconds),
             "preview_sounds": bool(self.preview_sounds),
@@ -570,6 +581,7 @@ class Board:
             "picture_file": self.picture_file,
             "picture_clock": bool(self.picture_clock),
             "camera": self.camera,
+            "screen": self.screen,
             "video_width": int(self.video_width),
             "video_height": int(self.video_height),
             "video_fps": int(self.video_fps),
@@ -694,6 +706,8 @@ class Board:
         board.picture_file = data.get("picture_file") or ""
         board.picture_clock = bool(data.get("picture_clock", False))
         board.camera = data.get("camera") or ""
+        screen = data.get("screen")
+        board.screen = screen if screen in C.SCREEN_CHOICES else C.SCREEN_ALL
         board.video_width = _video_number(data.get("video_width"),
                                           C.RTMP_WIDTH, 160, 3840)
         board.video_height = _video_number(data.get("video_height"),
@@ -758,6 +772,7 @@ class Board:
             level = (C.SPEECH_ALL if board.announce_playback
                      else C.SPEECH_ESSENTIAL)
         board.speech_level = level
+        board.ask_before_live = bool(data.get("ask_before_live", True))
 
         # Keys arrive as strings out of JSON and are used as ints everywhere
         # else. Anything unparseable is dropped rather than crashing a load,

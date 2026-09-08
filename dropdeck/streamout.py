@@ -1125,6 +1125,31 @@ class RtmpDestination(Destination):
             for packet in self._video.encode(frame):
                 self._mux(packet)
 
+    def set_video_source(self, source):
+        """Point the encoder at a different picture, mid stream.
+
+        Safe while live, and it is worth being exact about why, because the
+        things that would make it unsafe are all avoided rather than absent.
+
+        The encoder is locked to one size and one frame rate from the moment
+        `connect()` writes the FLV header: width, height, pixel format and
+        rate go on the codec context there and the H.264 sequence header has
+        already gone out. Nothing here touches any of them. `_pump_video`
+        asks every source for `frame(self.width, self.height)`, so a new
+        source is told the size rather than choosing it.
+
+        Timestamps survive because they were never the source's to give.
+        Video PTS counts `_frames_sent` against the audio clock, so a swap is
+        invisible to the timeline: the next frame is stamped where it would
+        have been anyway. There is no keyframe to force and no session to
+        renegotiate.
+
+        The assignment is one attribute and `_picture` reads it into a local
+        before using it, so the streaming thread either gets the old source
+        or the new one and never a half swapped pair.
+        """
+        self.video_source = source
+
     def _picture(self):
         """The next picture, or black when there is no source yet."""
         source = self.video_source
@@ -1231,6 +1256,16 @@ def _host_of(url):
         return parsed.hostname or url
     except Exception:
         return url
+
+
+def host_label(url):
+    """The host, safe to say out loud and safe to put on the screen.
+
+    The public name for `_host_of`. An RTMP address has the stream key in the
+    path, so anything that shows a user where their stream is going has to go
+    through this rather than printing the URL.
+    """
+    return _host_of(url)
 
 
 def _resolve(host, port):
@@ -1513,6 +1548,38 @@ class Streamer:
         if self.state != ON_AIR or not self.started_at:
             return 0.0
         return time.monotonic() - self.started_at
+
+    # ------------------------------------------------------------ pictures --
+    def set_video_source(self, source):
+        """Change what the stream is showing, on air or off.
+
+        Held here as well as handed on, because a reconnect rebuilds the
+        destination from scratch and would otherwise put the picture back to
+        whatever it was when Ctrl+B was pressed. That is the same trap the
+        settings dict already carries: it is a snapshot, and anything changed
+        after going live has to be kept somewhere the rebuild will look.
+        """
+        self.video_source = source
+        # What is playing goes to the new source at once, or a card would go
+        # out blank until the next track change, which on a long album track
+        # is a quarter of an hour of a stream saying nothing.
+        with self._lock:
+            title = self._title
+        setter = getattr(source, "set_title", None)
+        if setter is not None and title:
+            try:
+                setter(title)
+            except Exception:
+                pass
+        destination = self._destination
+        swap = getattr(destination, "set_video_source", None)
+        if swap is None:
+            return False
+        try:
+            swap(source)
+        except Exception:
+            return False
+        return True
 
     # -------------------------------------------------------------- titles --
     def set_title(self, title):

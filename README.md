@@ -46,6 +46,7 @@ Three faders, because a bed, a drop and a song should never fight over one:
 | `Ctrl+F` | Search every bank by name |
 | `Ctrl+L` | What is playing right now |
 | `Ctrl+B` | Go live, and come off air |
+| `Alt+Shift+V` | Change what the stream is showing, on air or off |
 | `Ctrl+R` | Start and stop recording |
 | `Ctrl+M` | Microphone on and off |
 | `Ctrl+D` | Ducking on or off |
@@ -82,6 +83,10 @@ down to hear your screen reader while listeners still get it at full level.
 `Ctrl+Shift+A` says who is listening, and handles the awkward case that is
 really the common one: when the server you send to is not the server people
 listen on.
+
+**And to YouTube, Facebook or Restream.** Those will not take sound on its own, so something has to be on the screen: a card with your station name and whatever is playing, which costs about 64 kbps, your own artwork, a camera, your screen, or your screen with the camera small in the corner. `Alt+Shift+V` changes it while you are on air without dropping the connection. `Ctrl+Shift+F` says what the camera can see, in shot or not, centred, close enough, lit, because you cannot look at a preview window.
+
+**`Ctrl+B` says what it is about to send** and waits for Enter: where the show is going, what it is sending, what is on the screen, and whether your microphone is on the air. It also says what would spoil the broadcast without stopping it, which is the half worth having. Turn the question off if you would rather it did not ask.
 
 Nothing goes out until you press `Ctrl+B`.
 

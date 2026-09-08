@@ -95,13 +95,18 @@ check("and it is told what to do instead, and that nothing was touched",
 
 # The signed hash is checked exactly as strictly for the zip.
 real_fetch = appupdate._fetch
-appupdate._fetch = lambda url: body
+# **kwargs, because download() passes a size limit and a one argument
+# stand in raises inside download's own try. That turned into
+# "Download failed" and BOTH checks below were reported as failures
+# of the code rather than of this line. The download path itself was
+# fine the whole time and untested the whole time.
+appupdate._fetch = lambda url, **kw: body
 try:
     path, message = appupdate.download(modern, portable=True)
     check("a portable download that matches its signed hash is kept",
           path is not None and os.path.exists(path), message)
     kept = path
-    appupdate._fetch = lambda url: body + b"tampered"
+    appupdate._fetch = lambda url, **kw: body + b"tampered"
     path, message = appupdate.download(modern, portable=True)
     check("and one that does not is thrown away", path is None)
     check("with a reason that says nothing was installed",
