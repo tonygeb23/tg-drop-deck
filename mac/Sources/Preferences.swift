@@ -572,9 +572,54 @@ extension MainWindow {
                 }
             }
         }
-        // The two ways of saying where Command B goes move together, because
-        // they are one answer.
+        // **Changing the provider has to change the model list**, or the box
+        // keeps the name that was in it: Tony's board came out of 3.5.2 with
+        // Gemini chosen and "claude-sonnet-5" in the model box, which is a
+        // 404 with a confusing message.
+        videoControls.onProviderChanged = { [weak self] in
+            let which = ShotCheck.providers[
+                max(0, min(ShotCheck.providers.count - 1, providerPopup.indexOfSelectedItem))]
+            modelBox.removeAllItems()
+            modelBox.addItems(withObjectValues: ShotCheck.knownModels[which] ?? [])
+            modelBox.stringValue = ShotCheck.defaultModels[which] ?? ""
+            visionKeyField.stringValue = Secrets.fetch(station: which,
+                                                       prefix: Secrets.visionPrefix)
+            self?.speaker.announceState(
+                "\(ShotCheck.providerNames[which] ?? which). Model "
+                + "\(modelBox.stringValue). "
+                + (visionKeyField.stringValue.isEmpty
+                   ? "No key for it yet." : "Its key is already in."))
+        }
+        providerPopup.target = videoControls
+        providerPopup.action = #selector(VideoControls.providerChanged)
+
+        // **And changing the platform has to change the address**, which for
+        // YouTube and Facebook is not the user's to type, and the line saying
+        // what that platform does the moment you connect.
+        videoControls.onPlatformChanged = { [weak self, board] in
+            let which = C.videoServerOrder[
+                max(0, min(C.videoServerOrder.count - 1, platformPopup.indexOfSelectedItem))]
+            if C.rtmpFixedAddress.contains(which) {
+                videoHostField.stringValue = C.rtmpIngest[which] ?? ""
+                videoHostField.isEditable = false
+            } else {
+                if videoHostField.stringValue.isEmpty
+                    || C.rtmpIngest.values.contains(videoHostField.stringValue) {
+                    videoHostField.stringValue = C.rtmpIngest[which] ?? ""
+                }
+                videoHostField.isEditable = true
+            }
+            keyField.stringValue = Secrets.fetch(station: board.stream.name.isEmpty
+                                                 ? which : board.stream.name)
+            whatText.string = GoingLive.note(which)
+            whatText.setSelectedRange(NSRange(location: 0, length: 0))
+            self?.speaker.announceState("\(StreamServers.serverLabel(which)). "
+                + GoingLive.note(which))
+        }
         platformPopup.target = videoControls
+        platformPopup.action = #selector(VideoControls.platformChanged)
+        // Set the address up for whatever is chosen right now.
+        videoControls.onPlatformChanged?()
         whatText.isEditable = false
 
         // --------------------------------------------------------- recording --
@@ -901,10 +946,14 @@ final class VideoControls: NSObject {
     var onHelp: (() -> Void)?
     var onBrowse: (() -> Void)?
     var onListModels: (() -> Void)?
+    var onProviderChanged: (() -> Void)?
+    var onPlatformChanged: (() -> Void)?
     @objc func getKey() { onGetKey?() }
     @objc func help() { onHelp?() }
     @objc func browse() { onBrowse?() }
     @objc func listModels() { onListModels?() }
+    @objc func providerChanged() { onProviderChanged?() }
+    @objc func platformChanged() { onPlatformChanged?() }
 }
 
 enum GoingLive {

@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.5.2"
+    static let appVersion = "3.5.21"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 

@@ -162,6 +162,18 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.5.21": ("You can paste again, and you could not paste at all before "
+               "this: not a stream key, not a station name, not a password, "
+               "not a track title. The app had no Edit menu, and on a Mac "
+               "that menu is what supplies Command V, Command C, Command X, "
+               "Command A and Command Z. A text field implements paste and "
+               "waits to be sent it, and the only thing that sends it is a "
+               "menu item carrying that key, so with no Edit menu there was "
+               "nothing anywhere to send it. Command V was wired straight to "
+               "Paste songs from the clipboard instead. There is a proper "
+               "Edit menu now and every item goes to whatever has the focus. "
+               "Pasting songs still answers to Command V when the running "
+               "order has the focus. Reported by Tony, minutes after 3.5.2."),
     "3.5.2": ("Video. The Mac copy now goes out on YouTube, Facebook, Restream "
               "or any RTMP server, with everything Windows gained between 3.4.0 "
               "and 3.5.2 arriving at once. A card, your own artwork, a camera, "

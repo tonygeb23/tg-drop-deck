@@ -31,6 +31,19 @@ DEFAULT_GUIDE = os.path.join(
 #: app's own map, each with the reason.
 EXPLAINED = {
     "fn": "a hardware modifier the Mac handles before any app sees it",
+    # From 3.5.21 the standard Edit menu carries these, which is where macOS
+    # puts them and where every text field in the app gets them from. They are
+    # deliberately NOT in KeyMap: a binding there as well would be two commands
+    # on one key, and the menu bar would pick a winner without saying so. What
+    # the guide says about Command V is still true, and truer than it was:
+    # pasting songs answers to it through the responder chain when the running
+    # order has the focus, and a text box gets it when one has.
+    "Command+V": "the Edit menu's Paste, which reaches the running order "
+                 "through the responder chain",
+    "Command+C": "the Edit menu's Copy",
+    "Command+X": "the Edit menu's Cut",
+    "Command+A": "the Edit menu's Select All",
+    "Command+Z": "the Edit menu's Undo",
     "VO": "VoiceOver's own modifier, named to explain why the digit map moved",
     "Command": "a modifier named on its own in prose",
     "Option": "a modifier named on its own in prose",

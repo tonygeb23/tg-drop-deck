@@ -562,6 +562,22 @@ final class Board {
         } else {
             b.visionModel = ""
         }
+        // **A model name belonging to a different provider is worse than
+        // none.** Tony's board came out of 3.5.2 holding Gemini and
+        // "claude-sonnet-5" together, because changing the provider did not
+        // change the model box. Asking Google for a Claude model is a 404,
+        // which this app then explains as "a model name that cannot look at
+        // pictures", so the message sends somebody looking in the wrong place.
+        // An empty model means "use the default for whoever is chosen", which
+        // is the right answer here.
+        if !b.visionModel.isEmpty {
+            let mine = ShotCheck.knownModels[b.visionProvider] ?? []
+            let theirs = ShotCheck.providers.filter { $0 != b.visionProvider }
+                .flatMap { ShotCheck.knownModels[$0] ?? [] }
+            if !mine.contains(b.visionModel) && theirs.contains(b.visionModel) {
+                b.visionModel = ""
+            }
+        }
         b.videoWidth = Board.videoNumber(dict["video_width"], C.rtmpWidth, 160, 3840)
         b.videoHeight = Board.videoNumber(dict["video_height"], C.rtmpHeight, 120, 2160)
         b.videoFPS = Board.videoNumber(dict["video_fps"], C.rtmpFPS, 1, 60)

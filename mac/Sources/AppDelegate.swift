@@ -271,6 +271,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return m
     }
 
+    /// The standard Edit menu, built where a check can also build it.
+    ///
+    /// Every item targets nil ON PURPOSE, which is what "go to whatever has
+    /// focus" means: the field editor takes it when somebody is typing, and it
+    /// falls through to the app delegate when nothing does.
+    static func makeEditMenu() -> NSMenu {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
+                     keyEquivalent: "a")
+        return edit
+    }
+
     private func buildMenus() {
         let bar = NSMenu()
 
@@ -298,6 +319,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         bar.addItem(appItem)
+
+        // Edit
+        //
+        // **This was missing until 3.5.21, and its absence broke pasting
+        // everywhere in the app.** On macOS the Edit menu is not decoration:
+        // it is what SUPPLIES the key equivalents for Command C, V, X, A and
+        // Z. A text field does not implement those keys itself, it implements
+        // `paste:` and waits to be sent it, and the thing that sends it is a
+        // menu item with that key equivalent going down the responder chain.
+        // With no Edit menu there was nothing to send `paste:`, so a stream
+        // key could not be pasted into the box that asks for one, and neither
+        // could a station name, a password or a track title.
+        //
+        // Every item here targets nil ON PURPOSE, which is what "go to
+        // whatever has focus" means: the field editor takes it when somebody
+        // is typing, and it falls through to this class when nothing does.
+        let editItem = NSMenuItem()
+        editItem.submenu = AppDelegate.makeEditMenu()
+        bar.addItem(editItem)
 
         // File
         let fileItem = NSMenuItem()
@@ -370,7 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pl.addItem(item("Go to the soundboard", .viewBoard, #selector(goBoard)))
         pl.addItem(item("Swap between the two", .viewNext, #selector(swapViews)))
         pl.addItem(.separator())
-        pl.addItem(item("Paste songs from the clipboard", .playlistPaste, #selector(pastePlaylist)))
+        // No key equivalent of its own any more: Command V is the Edit menu's
+        // now, and it reaches here through `paste(_:)` below when nothing that
+        // takes text has the focus. Same key, same result, and it no longer
+        // takes the key away from every text box in the app.
+        pl.addItem(plain("Paste songs from the clipboard", #selector(pastePlaylist)))
         pl.addItem(plain("Add songs to the end...", #selector(addSongs)))
         pl.addItem(item("Insert a drop from a file...", .playlistDropFile, #selector(insertDrop)))
         pl.addItem(item("Insert a random drop", .playlistDropRandom, #selector(insertRandomDrop)))
@@ -509,6 +553,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func goBoard() { main.showView(.board) }
     @objc func swapViews() { main.swapViews() }
     @objc func pastePlaylist() { main.playlistPasteFromClipboard() }
+
+    /// The last stop for Command V.
+    ///
+    /// The Edit menu sends `paste:` down the responder chain. A text field
+    /// takes it and pastes text, which is the whole reason that menu exists.
+    /// Nothing in the board or the running order takes it, so it arrives here,
+    /// and here it means what it has always meant: put the files on the
+    /// clipboard into the running order.
+    @objc func paste(_ sender: Any?) { main.playlistPasteFromClipboard() }
     @objc func addSongs() { main.playlistAddFiles() }
     @objc func insertDrop() { main.playlistInsertDrop() }
     @objc func tickAll() { main.playlistTickAll(true) }

@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.5.21 for Mac, 8 September 2026
+
+**You can paste again. You could not paste at all, anywhere, and that is not
+an exaggeration.**
+
+Reported by Tony within minutes of 3.5.2 going out, trying to put a stream key
+into the box that asks for one.
+
+**The app had no Edit menu**, and on a Mac that menu is not decoration. It is
+what supplies `Command+V`, and `Command+C`, and `Command+X`, and
+`Command+A`, and `Command+Z`. A text field does not implement those keys
+itself: it implements paste and waits to be sent it, and the only thing that
+sends it is a menu item carrying that key. With no Edit menu there was nothing
+to send it, so nothing in the whole app could be pasted into. Not the stream
+key, not a station name, not a password, not a track title, not a source name.
+
+It has been that way since the Mac copy was written. It went unnoticed because
+everything before this release could be typed, and a stream key is the first
+thing this app has ever asked for that nobody types by hand.
+
+`Command+V` was doing something else entirely: it was wired straight to
+**Paste songs from the clipboard**, so pressing it in a text box tried to add
+files to your running order.
+
+Now there is an Edit menu with Undo, Redo, Cut, Copy, Paste, Delete and Select
+All, and every one of them goes to whatever has the focus. In a box, they
+work on the text. **Pasting songs still answers to `Command+V`** when the
+running order has the focus, which is how a Mac is supposed to behave: the
+same key, and what it does depends on where you are.
+
+Nothing else changed.
+
 ## 3.5.2 for Mac, 8 September 2026
 
 **The Mac catches up. Everything Windows gained between 3.4.0 and 3.5.2

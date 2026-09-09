@@ -22,6 +22,7 @@
 // counting the ink pixels found it.
 
 import Foundation
+import AppKit
 import CoreGraphics
 import CoreVideo
 
@@ -35,6 +36,7 @@ extension SelfTest {
         testKeychain()
         testPictureSources()
         testVideoKeys()
+        testEditMenu()
         testSavedSetups()
     }
 
@@ -324,6 +326,95 @@ extension SelfTest {
         // use rather than to a test run.
         out.append("  note  cameras seen: "
                    + (Cameras.all().isEmpty ? "none" : Cameras.all().joined(separator: ", ")))
+    }
+
+    // --------------------------------------------------------- the Edit menu ---
+
+    private func testEditMenu() {
+        out.append("")
+        out.append("The Edit menu, which is what makes Command V paste")
+
+        // **The app shipped without one from 3.0.0 to 3.5.2**, and nobody
+        // noticed until a stream key had to go into a box. On macOS the Edit
+        // menu is not decoration: it is what SUPPLIES Command C, V, X, A and
+        // Z. A text field implements `paste:` and waits to be sent it, and the
+        // only thing that sends it is a menu item with that key equivalent.
+        // With no Edit menu there was nothing to send it, so nothing in the
+        // whole app could be pasted into.
+        // Built here rather than read off the live menu bar, because the
+        // checks run headless and there is no menu bar yet. It is the same
+        // function the menu bar is built from, so there is nothing to drift.
+        let edit = AppDelegate.makeEditMenu()
+        check("there is an Edit menu with something in it", edit.items.count >= 6,
+              "\(edit.items.count) items")
+
+        var missing: [String] = []
+        for (title, key, selector) in [
+            ("Cut", "x", #selector(NSText.cut(_:))),
+            ("Copy", "c", #selector(NSText.copy(_:))),
+            ("Paste", "v", #selector(NSText.paste(_:))),
+            ("Select All", "a", #selector(NSText.selectAll(_:))),
+        ] {
+            guard let entry = edit.items.first(where: { $0.title == title }) else {
+                missing.append("\(title) is not there"); continue
+            }
+            if entry.keyEquivalent != key {
+                missing.append("\(title) is on \(entry.keyEquivalent) not \(key)")
+            }
+            if entry.action != selector {
+                missing.append("\(title) does not send the standard selector")
+            }
+            // Targeting nil is what "go to whatever has focus" means. A target
+            // here would send every paste to one object and text fields would
+            // never see it, which is the bug in a different shape.
+            if entry.target != nil { missing.append("\(title) has a fixed target") }
+        }
+        check("Cut, Copy, Paste and Select All are there, on their own keys, "
+              + "going to whatever has focus", missing.isEmpty,
+              missing.joined(separator: "; "))
+
+        // 3.5.21 is NEWER than 3.5.2, and that is worth a check rather than a
+        // shrug: as strings it is not, and an update that sorts backwards is
+        // an update that never offers itself again.
+        check("3.5.21 is newer than 3.5.2",
+              AppUpdate.isNewer("3.5.21", than: "3.5.2"))
+        check("and 3.5.2 is not newer than 3.5.21",
+              !AppUpdate.isNewer("3.5.2", than: "3.5.21"))
+        check("and 3.5.3 is not newer than 3.5.21",
+              !AppUpdate.isNewer("3.5.3", than: "3.5.21"))
+        check("this build's own version sorts above the one before it",
+              AppUpdate.isNewer(C.appVersion, than: "3.5.2"), C.appVersion)
+
+        // A model belonging to another provider is dropped rather than kept.
+        var mixed = Board.from(dict: ["vision_provider": "google",
+                                      "vision_model": "claude-sonnet-5"],
+                               relativeTo: nil)
+        check("a model from the wrong provider is dropped",
+              mixed.visionProvider == "google" && mixed.visionModel.isEmpty,
+              "\(mixed.visionProvider) / \(mixed.visionModel)")
+        mixed = Board.from(dict: ["vision_provider": "google",
+                                  "vision_model": "gemini-flash-latest"],
+                           relativeTo: nil)
+        check("and one that belongs to it is kept",
+              mixed.visionModel == "gemini-flash-latest", mixed.visionModel)
+        mixed = Board.from(dict: ["vision_provider": "google",
+                                  "vision_model": "some-new-model-2027"],
+                           relativeTo: nil)
+        check("and a name this build has never heard of is left alone, "
+              + "because model names change faster than this app ships",
+              mixed.visionModel == "some-new-model-2027", mixed.visionModel)
+
+        // And nothing else may claim Command V, or the menu bar picks a winner
+        // without saying so and text fields lose again.
+        var clashes: [String] = []
+        for command in Command.allCases {
+            for binding in KeyMap.bindings[command] ?? []
+            where binding.key == "v" && binding.mods == [.command] {
+                clashes.append(command.rawValue)
+            }
+        }
+        check("nothing else claims Command V", clashes.isEmpty,
+              clashes.joined(separator: ", "))
     }
 
     // ------------------------------------------------------- saved setups ---

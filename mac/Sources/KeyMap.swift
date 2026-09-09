@@ -308,7 +308,12 @@ enum KeyMap {
         .viewNext:      [Binding("\t", [.command, .option])],
 
         // Playlist
-        .playlistPaste:       [Binding("v", [.command])],
+        // Command V belongs to the Edit menu, which is where macOS puts it and
+        // where every text field in the app gets it from. Pasting songs still
+        // answers to it, through `paste(_:)` on the responder chain, so the
+        // key does the same thing it always did when the running order has the
+        // focus. A binding here as well would be two commands on one key.
+        .playlistPaste:       [],
         .playlistDropRandom:  [Binding("d", [.option])],
         .playlistDropFile:    [Binding("d", [.command, .shift])],
         .playlistPlayFromHere:[Binding("\r", [.command, .shift])],
