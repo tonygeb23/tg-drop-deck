@@ -264,7 +264,9 @@ extension SelfTest {
             let screen = ScreenSource(which: C.screenAll, width: C.rtmpWidth,
                                       height: C.rtmpHeight, fps: C.rtmpFPS)
             screen.start()
-            let arrived = screen.waitReady(timeout: C.screenOpenTimeout)
+            // Not asserted on: waitReady answers as soon as ANY frame lands,
+            // and a blank one is a frame. The verdict below is the real answer.
+            _ = screen.waitReady(timeout: C.screenOpenTimeout)
             // Long enough to have looked at its opening frames, and that is
             // NOT the frame rate: ScreenCaptureKit sends nothing at all while
             // the screen is not changing, so five real frames off a still
