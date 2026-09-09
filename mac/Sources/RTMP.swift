@@ -53,6 +53,157 @@ enum RTMPError: Error, CustomStringConvertible {
     }
 }
 
+/// One inbound message, put back together out of its chunks.
+struct RTMPMessage {
+    let type: UInt8
+    let streamID: UInt32
+    let payload: Data
+}
+
+/// The chunk layer, incoming.
+///
+/// **This is the half that was missing, and missing it cost a release.** RTMP
+/// does not put a message on the wire in one piece: it cuts it into chunks and
+/// puts a header byte in front of every piece after the first, and until the
+/// server has been told otherwise those pieces are 128 bytes long. So
+/// `NetConnection.Connect.Success`, which is what YouTube answers a connect
+/// with, arrives as `NetConnection.Conne`, then a header byte, then
+/// `ct.Success`.
+///
+/// The first version of this client looked for those names in the raw bytes.
+/// That works against `tools/mock_rtmp.py`, whose replies are small enough to
+/// fit in one chunk, and it does not work against YouTube. Measured against
+/// the real ingest on 8 September 2026: the connect succeeded, the answer
+/// arrived in 311 bytes, and searching for the name found nothing, so the app
+/// waited fifteen seconds, gave up, and sat on "connecting" for ever.
+///
+/// A publisher needs to UNDERSTAND about six of these messages and can ignore
+/// the rest, but it has to unwrap all of them to find the six.
+struct RTMPChunkReader {
+
+    /// What the far end says its chunks are. 128 until it says otherwise, and
+    /// it always says otherwise early.
+    private(set) var chunkSize = 128
+
+    private struct Partial {
+        var type: UInt8 = 0
+        var streamID: UInt32 = 0
+        var length: Int = 0
+        var timestamp: Int = 0
+        var payload = Data()
+    }
+    private var streams: [UInt32: Partial] = [:]
+
+    /// Take whatever has arrived and hand back every WHOLE message in it,
+    /// leaving the leftovers in `buffer` for next time.
+    mutating func read(from buffer: inout Data) -> [RTMPMessage] {
+        var out: [RTMPMessage] = []
+        while true {
+            guard let (message, used) = one(buffer) else { break }
+            buffer.removeFirst(used)
+            if let message {
+                // Set Chunk Size. Everything after it is cut differently, so
+                // this one is acted on here rather than handed up.
+                if message.type == 1, message.payload.count >= 4 {
+                    let value = message.payload.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+                    if value > 0 { chunkSize = min(value, 0x00ff_ffff) }
+                }
+                out.append(message)
+            }
+        }
+        return out
+    }
+
+    /// One chunk off the front. Returns the message when that chunk finished
+    /// one, and how many bytes were consumed, or nothing when there is not a
+    /// whole chunk yet.
+    private mutating func one(_ data: Data) -> (RTMPMessage?, Int)? {
+        var at = 0
+        func byte(_ i: Int) -> UInt8? {
+            let index = data.index(data.startIndex, offsetBy: i, limitedBy: data.endIndex)
+            guard let index, index < data.endIndex else { return nil }
+            return data[index]
+        }
+        guard let first = byte(at) else { return nil }
+        at += 1
+        let fmt = (first >> 6) & 0x03
+
+        // The chunk stream id, in one, two or three bytes.
+        var csid = UInt32(first & 0x3f)
+        if csid == 0 {
+            guard let b = byte(at) else { return nil }
+            csid = UInt32(b) + 64
+            at += 1
+        } else if csid == 1 {
+            guard let lo = byte(at), let hi = byte(at + 1) else { return nil }
+            csid = UInt32(hi) * 256 + UInt32(lo) + 64
+            at += 2
+        }
+
+        var partial = streams[csid] ?? Partial()
+        var timestampField = partial.timestamp
+
+        func three(_ i: Int) -> Int? {
+            guard let a = byte(i), let b = byte(i + 1), let c = byte(i + 2) else { return nil }
+            return Int(a) << 16 | Int(b) << 8 | Int(c)
+        }
+
+        switch fmt {
+        case 0:
+            guard let ts = three(at), let len = three(at + 3), let type = byte(at + 6),
+                  let s0 = byte(at + 7), let s1 = byte(at + 8),
+                  let s2 = byte(at + 9), let s3 = byte(at + 10) else { return nil }
+            timestampField = ts
+            partial.length = len
+            partial.type = type
+            // The one little endian field in the whole protocol.
+            partial.streamID = UInt32(s0) | UInt32(s1) << 8 | UInt32(s2) << 16 | UInt32(s3) << 24
+            at += 11
+        case 1:
+            guard let ts = three(at), let len = three(at + 3),
+                  let type = byte(at + 6) else { return nil }
+            timestampField = ts
+            partial.length = len
+            partial.type = type
+            at += 7
+        case 2:
+            guard let ts = three(at) else { return nil }
+            timestampField = ts
+            at += 3
+        default:
+            break
+        }
+
+        if timestampField == 0xffffff {
+            guard let a = byte(at), let b = byte(at + 1),
+                  let c = byte(at + 2), let d = byte(at + 3) else { return nil }
+            timestampField = Int(a) << 24 | Int(b) << 16 | Int(c) << 8 | Int(d)
+            at += 4
+        }
+        partial.timestamp = timestampField
+
+        // A message longer than one chunk arrives in chunkSize pieces.
+        let remaining = max(0, partial.length - partial.payload.count)
+        let take = min(chunkSize, remaining)
+        guard data.count >= at + take else { return nil }
+        if take > 0 {
+            let from = data.index(data.startIndex, offsetBy: at)
+            partial.payload.append(data[from..<data.index(from, offsetBy: take)])
+        }
+        at += take
+
+        if partial.payload.count >= partial.length && partial.length > 0 {
+            let message = RTMPMessage(type: partial.type, streamID: partial.streamID,
+                                      payload: partial.payload)
+            partial.payload = Data()
+            streams[csid] = partial
+            return (message, at)
+        }
+        streams[csid] = partial
+        return (nil, at)
+    }
+}
+
 /// One publishing connection.
 final class RTMPClient {
 
@@ -79,6 +230,12 @@ final class RTMPClient {
 
     private let lock = NSLock()
     private var incoming = Data()
+    private var reader = RTMPChunkReader()
+    /// Commands the server has sent, in order, with the status code that came
+    /// with each. Filled by the reassembler rather than by looking for names
+    /// in the raw bytes, which is what missed YouTube's answer entirely.
+    private var heard: [(command: String, code: String)] = []
+    private var handshakeDone = false
     private(set) var bytesSent = 0
     private(set) var connected = false
 
@@ -92,6 +249,13 @@ final class RTMPClient {
     init(url: String, key: String) {
         self.url = url
         self.key = key
+    }
+
+    /// Everything the server has said, for the diagnostics and the checks.
+    /// A publisher acts on about six of these and this is all of them.
+    var conversation: [(command: String, code: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return heard
     }
 
     /// The full address, key included. Never shown, never logged.
@@ -195,6 +359,13 @@ final class RTMPClient {
         }
         let s1 = reply.subdata(in: 1..<1537)
         try write(s1)
+        // Everything from here is chunked, so the reassembler takes over. Set
+        // before anything else arrives, and anything already buffered is
+        // handed to it now.
+        lock.lock()
+        handshakeDone = true
+        drainMessages()
+        lock.unlock()
     }
 
     // ------------------------------------------------------------ commands ---
@@ -252,13 +423,45 @@ final class RTMPClient {
         try write(chunk(type: 0, chunkStream: controlChunk, messageType: 20,
                         streamID: messageStreamID, timestamp: 0, payload: publish))
 
-        guard let said = try waitFor(code: ["NetStream.Publish.Start"],
-                                   timeout: timeout) else {
-            throw RTMPError.refused("the server never said the stream had started")
-        }
-        if said != "NetStream.Publish.Start" {
+        // **Do NOT wait for NetStream.Publish.Start, because YouTube never
+        // sends it.** Measured against the real ingest on 8 September 2026:
+        // connect is answered, onBWDone arrives, createStream is answered, and
+        // then publish gets silence. Silence before the metadata, silence
+        // after the metadata, silence after an audio sequence header, for
+        // twelve seconds.
+        //
+        // Waiting for it is therefore a deadlock, and it is the one that
+        // shipped: the app waited fifteen seconds for a status that was never
+        // coming, gave up, retried, and sat on "connecting to YouTube" for
+        // ever while YouTube sat waiting for a stream.
+        //
+        // So this is what every real encoder does: say publish, wait only long
+        // enough to catch a refusal that comes straight back, and then START
+        // SENDING. A server that is going to say no says it in an `_error` or
+        // an onStatus, and `refusal()` is checked on every turn of the pump
+        // after this, so a no that arrives later still stops the broadcast.
+        if let said = try waitFor(code: [], timeout: C.rtmpPublishGrace),
+           said != "publish" {
             throw RTMPError.refused(Self.saying(said))
         }
+    }
+
+    /// A refusal the server has sent at any point, or nothing.
+    ///
+    /// The pump asks this every turn. `publish` is not answered by every
+    /// platform, so the absence of an answer is not an error and cannot be
+    /// treated as one; the presence of a refusal always is.
+    func refusal() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        for entry in heard {
+            if RTMPClient.refusals.contains(entry.code) { return Self.saying(entry.code) }
+            if entry.command == "_error" {
+                return entry.code.isEmpty
+                    ? "the server refused the stream"
+                    : Self.saying(entry.code)
+            }
+        }
+        return nil
     }
 
     /// What one of the server's refusals means, in a sentence.
@@ -383,6 +586,7 @@ final class RTMPClient {
             if let data, !data.isEmpty {
                 self.lock.lock()
                 self.incoming.append(data)
+                self.drainMessages()
                 // **Trimmed, or a three hour show grows a buffer for three
                 // hours.** The server goes on sending acknowledgements and
                 // ping requests for as long as the stream is up, and nothing
@@ -394,8 +598,22 @@ final class RTMPClient {
                 }
                 self.lock.unlock()
             }
-            if complete || error != nil { return }
+            // **Only a finished stream ends the loop.** An error on one read
+            // used to end it for good, which on a connection that had not
+            // finished coming up meant nothing was ever received again.
+            if complete { return }
             self.receiveLoop(connection)
+        }
+    }
+
+    /// Take whole messages out of the buffer and remember what they said.
+    /// Called with the lock held.
+    private func drainMessages() {
+        guard handshakeDone else { return }
+        for message in reader.read(from: &incoming) where message.type == 20 {
+            let values = AMF0.read(message.payload)
+            guard let name = AMF0.firstString(in: values) else { continue }
+            heard.append((name, AMF0.code(in: values) ?? ""))
         }
     }
 
@@ -423,38 +641,40 @@ final class RTMPClient {
     /// carry nothing this acts on. So rather than a full reassembler this
     /// looks for the command names in what has arrived, which cannot be fooled
     /// into a wrong answer: the strings are length prefixed and unique.
+    /// Wait for the server to say one of these, or to say something else.
+    ///
+    /// Asks the REASSEMBLER, not the raw bytes. A command name is split across
+    /// chunk boundaries as a matter of course, so looking for one in what
+    /// arrived finds it only when the reply happens to be short. YouTube's is
+    /// not, and that is exactly how this shipped broken.
     private func waitFor(code wanted: [String], timeout: Double,
-                       wantCommand: String? = nil) throws -> String? {
+                         wantCommand: String? = nil) throws -> String? {
         let until = Date().addingTimeInterval(timeout)
         while Date() < until {
             lock.lock()
-            let seen = incoming
+            let said = heard
             lock.unlock()
-            if let found = Self.scan(seen, for: wanted, command: wantCommand) {
-                return found
+            for entry in said {
+                if wanted.contains(entry.code) { return entry.code }
+                if let wantCommand, entry.command == wantCommand {
+                    // A _result with no status code is still an answer: that
+                    // is what createStream sends back.
+                    return entry.code.isEmpty ? wantCommand : entry.code
+                }
+                if entry.command == "_error" || RTMPClient.refusals.contains(entry.code) {
+                    return entry.code.isEmpty ? "_error" : entry.code
+                }
             }
-            if let text = Self.scanRefusal(seen) { return text }
             Thread.sleep(forTimeInterval: 0.02)
         }
         return nil
     }
 
-    static func scan(_ data: Data, for wanted: [String], command: String?) -> String? {
-        let text = String(decoding: data, as: UTF8.self)
-        for code in wanted where text.contains(code) { return code }
-        if let command, text.contains(command) { return command }
-        return nil
-    }
-
-    static func scanRefusal(_ data: Data) -> String? {
-        let text = String(decoding: data, as: UTF8.self)
-        for code in ["NetConnection.Connect.Rejected", "NetStream.Publish.Denied",
-                     "NetConnection.Connect.InvalidApp", "NetStream.Publish.BadName",
-                     "NetConnection.Connect.Failed"] where text.contains(code) {
-            return code
-        }
-        return nil
-    }
+    static let refusals: Set<String> = [
+        "NetConnection.Connect.Rejected", "NetStream.Publish.Denied",
+        "NetConnection.Connect.InvalidApp", "NetStream.Publish.BadName",
+        "NetConnection.Connect.Failed",
+    ]
 
     func close() {
         connected = false

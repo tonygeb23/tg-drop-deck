@@ -56,9 +56,12 @@ enum Screens {
     /// What to say when the screen cannot be captured. One sentence, and it
     /// names the setting rather than the problem, because the problem is not
     /// something the user can do anything with.
-    static let notAllowed = "Drop Deck has not been allowed to record the screen. "
-                          + "Turn it on under Screen and System Audio Recording in "
-                          + "System Settings, Privacy and Security"
+    static let notAllowed = "The screen is coming back black. Almost always that is "
+                          + "Drop Deck not being allowed to record it: turn it on under "
+                          + "Screen and System Audio Recording in System Settings, "
+                          + "Privacy and Security, then quit and open Drop Deck again. "
+                          + "If it is already on, check whether the VoiceOver screen "
+                          + "curtain is up"
 
     static func whyUnavailable() -> String {
         available() ? "" : notAllowed

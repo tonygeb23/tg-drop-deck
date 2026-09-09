@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.5.22"
+    static let appVersion = "3.5.23"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -488,6 +488,15 @@ enum C {
     /// says "Off air, trying again" on its own. The presenter is told either
     /// way; it is eight seconds later and by a different route, and it is
     /// written down here rather than left to be rediscovered.
+
+    /// How long to listen for a refusal after saying publish, before starting
+    /// to send anyway.
+    ///
+    /// **Not a wait for permission.** YouTube never answers publish at all, so
+    /// waiting for a yes is waiting for ever; this is only long enough to
+    /// catch a no that comes straight back. A no that arrives later is caught
+    /// by the pump, which asks on every turn.
+    static let rtmpPublishGrace = 2.0
 
     /// The most frames that may be sent in one go when catching up.
     /// Deliberately tiny. Measured 7 September 2026 on Windows: with the pump

@@ -38,6 +38,7 @@ extension SelfTest {
         testVideoKeys()
         testEditMenu()
         testPermissions()
+        testChunkReader()
         testSavedSetups()
     }
 
@@ -473,6 +474,128 @@ extension SelfTest {
         check("it can say what it is allowed to do", said.contains("Microphone")
               && said.contains("Camera") && said.contains("Screen recording"), said)
         out.append("  note  on this Mac right now: " + said)
+    }
+
+    // ---------------------------------------------------- the chunk layer ---
+
+    private func testChunkReader() {
+        out.append("")
+        out.append("Putting a chunked RTMP message back together")
+
+        // **This is the fault that stopped 3.5.22 going live at all.** RTMP
+        // cuts a message into pieces and puts a header byte in front of every
+        // piece after the first, and until the server says otherwise those
+        // pieces are 128 bytes. So YouTube's answer to connect arrives as
+        // "NetConnection.Conne", a header byte, then "ct.Success". The client
+        // looked for the name in the raw bytes, which works when a reply fits
+        // in one chunk, as the mock server's do, and never worked on YouTube.
+        /// Shaped like YouTube's real answer, which is what makes it long
+        /// enough to be cut in two. Read off the wire on 8 September 2026:
+        /// _result, then the properties object with fmsVer and capabilities
+        /// and mode, then the information object with level, code,
+        /// description, objectEncoding and data.
+        func amfResult(_ code: String) -> Data {
+            var body = AMF0.encode(.string("_result"))
+            body.append(AMF0.encode(.number(1)))
+            body.append(AMF0.encode(.object([
+                ("fmsVer", .string("FMS/3,5,3,824")),
+                ("capabilities", .number(127)),
+                ("mode", .number(1)),
+            ])))
+            body.append(AMF0.encode(.object([
+                ("level", .string("status")),
+                ("code", .string(code)),
+                ("description", .string("Connection succeeded.")),
+                ("objectEncoding", .number(0)),
+                ("data", .ecmaArray([("version", .string("3,5,3,824"))])),
+            ])))
+            return body
+        }
+        /// One message, cut the way a server cuts it.
+        func chunked(_ payload: Data, size: Int, csid: UInt8 = 3,
+                     type: UInt8 = 20) -> Data {
+            var out = Data()
+            out.append(UInt8(csid & 0x3f))                       // fmt 0
+            out.append(contentsOf: [0, 0, 0])                    // timestamp
+            out.append(UInt8((payload.count >> 16) & 0xff))
+            out.append(UInt8((payload.count >> 8) & 0xff))
+            out.append(UInt8(payload.count & 0xff))
+            out.append(type)
+            out.append(contentsOf: [0, 0, 0, 0])                 // stream id
+            var at = payload.startIndex
+            var first = true
+            while at < payload.endIndex {
+                if !first { out.append(UInt8(0xc0 | (csid & 0x3f))) }
+                let take = min(size, payload.distance(from: at, to: payload.endIndex))
+                let end = payload.index(at, offsetBy: take)
+                out.append(payload[at..<end])
+                at = end
+                first = false
+            }
+            return out
+        }
+
+        let body = amfResult("NetConnection.Connect.Success")
+        check("the reply is longer than one 128 byte chunk, as YouTube's is",
+              body.count > 128, "\(body.count) bytes")
+
+        // The old way, for the record: this is what shipped and it finds
+        // nothing.
+        let wire = chunked(body, size: 128)
+        let needle = Array("NetConnection.Connect.Success".utf8)
+        let bytes = Array(wire)
+        var contiguous = false
+        if bytes.count >= needle.count {
+            for i in 0...(bytes.count - needle.count)
+            where Array(bytes[i..<(i + needle.count)]) == needle { contiguous = true; break }
+        }
+        check("and the name is NOT contiguous on the wire, which is why "
+              + "searching the bytes could never work", !contiguous)
+
+        var reader = RTMPChunkReader()
+        var buffer = wire
+        var messages = reader.read(from: &buffer)
+        check("the reassembler gets one whole message out of it",
+              messages.count == 1, "\(messages.count)")
+        if let first = messages.first {
+            let values = AMF0.read(first.payload)
+            check("and it reads as _result", AMF0.firstString(in: values) == "_result",
+                  AMF0.firstString(in: values) ?? "nothing")
+            check("carrying the code the client waits for",
+                  AMF0.code(in: values) == "NetConnection.Connect.Success",
+                  AMF0.code(in: values) ?? "nothing")
+        }
+
+        // Arriving a byte at a time must give the same answer: a socket does
+        // not promise to deliver a message in one piece either.
+        reader = RTMPChunkReader()
+        var dribble = Data()
+        var got: [RTMPMessage] = []
+        for byte in wire {
+            dribble.append(byte)
+            got += reader.read(from: &dribble)
+        }
+        check("and the same when it arrives one byte at a time",
+              got.count == 1 && AMF0.code(in: AMF0.read(got[0].payload))
+                                == "NetConnection.Connect.Success")
+
+        // Set Chunk Size changes how everything after it is cut.
+        reader = RTMPChunkReader()
+        var withSize = Data([0x02, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0])
+        withSize.append(contentsOf: [0x00, 0x00, 0x10, 0x00])     // 4096
+        withSize.append(chunked(body, size: 4096))
+        messages = reader.read(from: &withSize)
+        check("Set Chunk Size is obeyed, so what follows is cut differently",
+              reader.chunkSize == 4096, "\(reader.chunkSize)")
+        check("and the message after it still comes out whole",
+              messages.contains { AMF0.code(in: AMF0.read($0.payload))
+                                  == "NetConnection.Connect.Success" })
+
+        // And the thing the deadlock came from: publish is not answered by
+        // every platform, so nothing may wait for a yes.
+        check("there is a grace for a refusal rather than a wait for permission",
+              C.rtmpPublishGrace > 0 && C.rtmpPublishGrace <= 5,
+              "\(C.rtmpPublishGrace) seconds")
     }
 
     // ------------------------------------------------------- saved setups ---

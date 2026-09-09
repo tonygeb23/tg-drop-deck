@@ -275,6 +275,15 @@ final class VideoStreamer {
             }
             guard let client else { continue }
 
+            // A platform that is going to refuse may do it after the first
+            // frames rather than at publish, so it is asked every turn.
+            if let refused = client.refusal() {
+                client.close()
+                self.client = nil
+                set(.failed, refused)
+                break
+            }
+
             // The picture is swapped here rather than under the caller, so the
             // old one is closed on this thread and never while it is being read.
             lock.lock()

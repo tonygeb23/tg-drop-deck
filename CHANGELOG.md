@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.5.23 for Mac, 8 September 2026
+
+**Going live to YouTube works. It could not, and it sat there saying
+"connecting" for ever.**
+
+Reported by Tony, who pasted his stream key in and pressed Command B.
+
+Two faults, both found by pointing the app at YouTube's real ingest instead of
+at the test server.
+
+**RTMP does not put a message on the wire in one piece.** It cuts it into
+chunks and puts a header byte in front of every piece after the first, and
+until the server says otherwise those pieces are 128 bytes long. So YouTube's
+answer to a connection, `NetConnection.Connect.Success`, arrives as
+`NetConnection.Conne`, then a header byte, then `ct.Success`. The app was
+looking for that name in the bytes as they arrived, which finds it only when a
+reply is short enough to fit in one chunk. The test server's replies are.
+YouTube's are not. So the app connected perfectly well, YouTube said yes, and
+the app never saw the yes.
+
+**And YouTube never says the stream has started.** Not before the metadata,
+not after an audio header, not at all: measured, twelve seconds of silence.
+The app was waiting for it, so even once it could read the reply it would have
+waited for a message that was never coming. Restream does send it, which is
+why that one would have worked and the other two never could.
+
+Both are fixed the way a real encoder does it: the chunks are put back
+together properly, and saying "publish" is followed by SENDING rather than by
+waiting for permission. A platform that refuses still refuses, and the app
+notices and comes off air, because it now listens for that on every pass
+rather than once at the start.
+
+**There is a new check that talks to the real thing.**
+`mac/tools/check_ingests.py` reaches YouTube, Facebook and Restream with a
+deliberately fake key and proves each one answers, sending nothing
+broadcastable. The old check, which decodes a whole broadcast frame by frame,
+passed throughout: a test server behaves like the code that was written to
+talk to it, and that is exactly what it cannot catch.
+
+**Also:** when the screen comes back black the app now names both causes, the
+permission and the VoiceOver screen curtain, rather than only the first.
+
 ## 3.5.22 for Mac, 8 September 2026
 
 **Drop Deck now asks for the permissions it needs, which it never did.**

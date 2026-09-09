@@ -162,6 +162,19 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.5.23": ("Going live to YouTube works, and it could not before: it sat "
+               "saying connecting for ever. Two faults, both found by pointing "
+               "the app at the real ingest instead of at the test server. RTMP "
+               "cuts a message into 128 byte chunks with a header byte in "
+               "front of every piece after the first, so YouTube's "
+               "NetConnection.Connect.Success arrives in two halves and the "
+               "app was looking for it whole. And YouTube never says the "
+               "stream has started at all, so waiting for that was waiting for "
+               "ever; Restream does send it, which is why that one would have "
+               "worked. The chunks are reassembled properly now and publish is "
+               "followed by sending rather than by waiting. A new check, "
+               "mac/tools/check_ingests.py, reaches all three platforms with a "
+               "fake key and proves they answer. Reported by Tony."),
     "3.5.22": ("Drop Deck now asks for the permissions it needs, which it "
                "never did. An app does not appear in System Settings under "
                "Camera, or under Screen and System Audio Recording, until it "
