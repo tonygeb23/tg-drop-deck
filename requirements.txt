@@ -23,3 +23,9 @@ opencv-python-headless
 # ships was built with no libfreetype, so drawtext is not there either.
 # Measured 8 September 2026. About 3 MB once _avif is excluded at build time.
 Pillow
+# Dark mode that does not cost a control its screen reader role. It points
+# real native controls at the Windows dark theme classes rather than letting
+# wxMSW owner-draw them, which is what turns every check box into a "button"
+# with no checked state. Without it the window stays light and nothing says
+# why, so the selftest themes a real window and reads the colour back.
+git+https://github.com/alexoloopios/accessible-wxpython-darkmode.git

@@ -104,6 +104,22 @@ SPEECH_LABELS = (
 )
 DEFAULT_SPEECH_LEVEL = SPEECH_ALL
 
+#: Light or dark. "system" is the default and follows the machine's own
+#: setting, which is where somebody who wants a dark computer has already
+#: said so once. The other two are for the case that setting cannot express:
+#: a studio where the room is dark and the rest of the machine is not, or the
+#: other way round. Nothing here overrides a Windows High Contrast theme,
+#: which stands above all three, because that is an assistive setting the
+#: user chose deliberately and this app does not know better.
+APPEARANCE_SYSTEM, APPEARANCE_LIGHT, APPEARANCE_DARK = "system", "light", "dark"
+APPEARANCE_MODES = (APPEARANCE_SYSTEM, APPEARANCE_LIGHT, APPEARANCE_DARK)
+APPEARANCE_LABELS = (
+    "Follow the system setting",
+    "Light",
+    "Dark",
+)
+DEFAULT_APPEARANCE = APPEARANCE_SYSTEM
+
 #: A bank name has to fit a notebook tab and be worth hearing read out.
 #: Long enough for "Sirens and Alarms", short enough that a tab strip of four
 #: of them still shows which one you are on.

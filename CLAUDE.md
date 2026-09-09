@@ -476,6 +476,58 @@ And specific to this one:
   **All three write the status bar at every level**, so nothing this app has
   to say is ever only spoken. `none` is opt-in and is labelled as silencing
   everything; that is Brian Hartgen's request and it was deliberate.
+- **Dark mode follows the system by default, and it is a library's job.**
+  **Preferences, Appearance**: Follow the system setting, Light, or Dark,
+  through accessible-wxpython-darkmode, added 9 September 2026.
+  `board.appearance`, and `C.APPEARANCE_MODES`. **Follow is the default and
+  is the reason the other two are a dropdown rather than a key**: somebody
+  who wants a dark computer has already said so once in Windows Settings, and
+  an app that ignores that is an app they have to tell twice. The two
+  overrides are for what one switch cannot express, a studio where the room
+  is dark and the machine is not, or the reverse. A machine in High Contrast
+  gets High Contrast whatever is chosen here, because the library stands down
+  in front of a setting the user chose deliberately, and the page says so out
+  loud rather than leaving somebody to work out why Dark did nothing. **It
+  took no keystroke**: the digit map is frozen and this is a setting, not a
+  performance. **`darkmode.saved_mode` reads `board.json` itself** rather than
+  waiting for a `Board`, because `main` has to know before `wx.App` exists or
+  the first window appears light and then flips, which is precisely what
+  somebody sensitive to brightness does not want shown to them.
+  **The reason it is a library and not a pile of `SetBackgroundColour` calls
+  is the one rule this app has always had**: on wxMSW, giving a colour to a
+  check box
+  makes wxWidgets owner-draw it, and an owner-drawn Win32 `BUTTON` reports
+  `ROLE_SYSTEM_PUSHBUTTON` whatever it used to be, so every check box in
+  Preferences would have been announced as "button" with no checked state. It
+  points real controls at the OS's dark theme classes instead, and refuses
+  outright on a Windows too old to have them. A light window that reads
+  correctly beats a dark one that does not.
+  **Two things in this window it cannot theme, and both are measured.** The
+  pads paint their own face, so `_pad_colours` asks `darkmode.palette` and
+  gets the theme's own roles rather than inventing a green and a red to sit
+  on `#202020`. And a native Windows status bar draws its own text and
+  ignores `SetForegroundColour` entirely: it came back BLACK on `#202020`,
+  1.3 to 1, which is not low contrast, it is invisible. Clearing that
+  control's theme makes the text appear by turning the whole bar light grey,
+  which is worse. So `darkmode._DarkStatusBar` paints the pixels and NOTHING
+  ELSE: the window is still `msctls_statusbar32`, `SetStatusText` still sends
+  `SB_SETTEXT`, and MSAA still answers `ROLE_SYSTEM_STATUSBAR` with the same
+  text, which `tests/test_darkmode.py` asks Windows directly rather than
+  assuming. Painting over a native control is not the same as replacing one.
+  **Changing Appearance swaps it**, in `_apply_appearance`, carrying the text
+  across: dark means the painted one and light means the native one, they are
+  different classes, so a live change cannot simply recolour it.
+  That bar matters more than a status bar usually would, because all three
+  speech channels write it at every speech level: a user on `none` has it and
+  nothing else.
+  **The notebook's pane edge stays light and that is left alone.**
+  `SysTabControl32` has no dark parts on any current Windows, and clearing
+  its theme trades a thin white line for four light grey bank tabs.
+  **And nothing in `tests/` can see any of this**, because nothing in
+  `tests/` goes through `main`, which is the only thing that calls
+  `darkmode.enable`. Every window a test opens is light, correctly.
+  `tools/shot_darkmode.py` is what photographs the real thing, the same
+  reason `check_keyboard.py` is in tools rather than tests.
 - **The bank hint is spoken once per bank per session.** A screen reader
   already announces the tab, so speaking twenty words of help on top of that
   every time was two announcements for one keystroke. `_hinted_banks` on the
@@ -522,6 +574,7 @@ dropdeck/
   vision.py      asking a model that can see what the shot looks like
   colours.py     the brand, by name, and whether a pair can actually be read
   health.py      noticing the picture has gone black or frozen, and saying so
+  darkmode.py    the window following the machine's own light or dark setting
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
@@ -532,6 +585,8 @@ tools/
   check_video_key.py real Alt+Shift+V into the real window, with a known good
                      key first as a control. Run it by hand
   shot_golive.py     pictures of the two 3.4.1 windows, and a layout audit
+  shot_darkmode.py   the real window with dark mode on, and a count of what
+                     came back light. Nothing in tests/ can see this
 ```
 
 **Two decoders, one door.** `audiofile.py` tries libsndfile and falls back to

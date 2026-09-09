@@ -73,6 +73,7 @@ if sys.platform == "win32":
 import wx  # noqa: E402
 
 from dropdeck import constants as C                    # noqa: E402
+from dropdeck import darkmode                          # noqa: E402
 from dropdeck.singleinstance import SingleInstance     # noqa: E402
 from dropdeck.ui import DropDeckFrame                  # noqa: E402
 
@@ -274,6 +275,14 @@ def selftest():  # noqa: C901
                         "names for every track")
 
     app = wx.App(redirect=False)
+
+    # Dark mode. A build that lost the library raises nothing at all: the
+    # window is simply light for ever, on a machine set to dark, and looks
+    # like a decision. Same class of silent loss as the Pillow one above, so
+    # it gets the same treatment and actually themes a window.
+    ok, said = darkmode.selfcheck()
+    (notes if ok else problems).append(said)
+
     frame = DropDeckFrame()
     notes.append("window: %s" % frame.GetTitle())
     if not frame.GetIcons().GetIconCount():
@@ -419,6 +428,16 @@ def main():
         # into exit 139. Closing the app normally is clean (verified); this
         # path is the one that is not, and it has nothing left to do.
         os._exit(code)
+    # Light or dark, from Preferences, defaulting to following the machine's
+    # own setting. Before wx.App exists and before the message box below, so
+    # the first window that appears is already the right colour rather than
+    # flipping once it is on screen. That is also why it reads the board file
+    # itself rather than waiting for the Board: the frame that loads the board
+    # is the frame this has to be decided before. It answers False and does
+    # nothing at all on a Windows with no dark theme classes, in High
+    # Contrast, and with the library not installed.
+    darkmode.enable(darkmode.saved_mode())
+
     # One copy at a time. Two soundboards open at once is not just clutter -
     # they fight over the same board file and both hold the audio device, so
     # the second one can silently fail to make any sound at all.

@@ -398,6 +398,11 @@ class Board:
         #: supersedes announce_playback, which is still written to the file so
         #: an older build opening a newer board keeps behaving sensibly.
         self.speech_level = C.DEFAULT_SPEECH_LEVEL
+        #: Light or dark - see constants.APPEARANCE_MODES. Read before the
+        #: window is built, by darkmode.saved_mode, which peeks at this file
+        #: rather than waiting for a Board: dark mode has to be in force
+        #: before the first frame exists or it appears light and then flips.
+        self.appearance = C.DEFAULT_APPEARANCE
 
         #: Whether Ctrl+B says what it is about to send and waits for a
         #: yes. On by default: not knowing what was live is the thing
@@ -635,6 +640,7 @@ class Board:
             "bank_devices": {str(k): v for k, v in self.bank_devices.items()},
             "announce_playback": bool(self.announce_playback),
             "speech_level": self.speech_level,
+            "appearance": self.appearance,
             "ask_before_live": bool(self.ask_before_live),
             "warn_before_end": bool(self.warn_before_end),
             "warn_seconds": float(self.warn_seconds),
@@ -879,6 +885,13 @@ class Board:
             level = (C.SPEECH_ALL if board.announce_playback
                      else C.SPEECH_ESSENTIAL)
         board.speech_level = level
+        # A board written before this setting existed, or one carrying
+        # something unrecognised, follows the machine. That is the default
+        # and it is also the safe answer: it is what the user already chose
+        # once, somewhere else.
+        look = data.get("appearance")
+        board.appearance = (look if look in C.APPEARANCE_MODES
+                            else C.DEFAULT_APPEARANCE)
         board.ask_before_live = bool(data.get("ask_before_live", True))
 
         # Keys arrive as strings out of JSON and are used as ints everywhere

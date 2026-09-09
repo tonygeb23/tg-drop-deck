@@ -672,8 +672,8 @@ class SettingsDialog(wx.Dialog):
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
     (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
-     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH,
-     PAGE_SHOT) = range(10)
+     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH, PAGE_APPEARANCE,
+     PAGE_SHOT) = range(11)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -695,6 +695,7 @@ class SettingsDialog(wx.Dialog):
         self._build_picture_tab()
         self._build_record_tab()
         self._build_speech_tab()
+        self._build_appearance_tab()
         self._build_shot_tab()
         outer.Add(self.tabs, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -742,6 +743,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_VIDEO: self.video_server,
                 self.PAGE_RECORD: self.record_format,
                 self.PAGE_SPEECH: self.speech_choice,
+                self.PAGE_APPEARANCE: self.appearance_choice,
                 self.PAGE_SHOT: self.vision_provider}.get(
                     self.tabs.GetSelection())
 
@@ -2656,6 +2658,77 @@ class SettingsDialog(wx.Dialog):
             "announced unless you have chosen Nothing above.")
         sizer.Add(self.announce_playback, 0, wx.ALL, 10)
         self._on_speech_level(None)
+
+    def _build_appearance_tab(self):
+        panel, sizer = self._page("Appearance")
+
+        # A dropdown and not a check box, because there are three answers and
+        # only two of them are a state. "Follow the system setting" is a
+        # different KIND of answer from Light and Dark: it is a decision not
+        # to decide here, and a ticked box cannot say that.
+        self._label(panel, sizer, "&Light or dark")
+        self.appearance_choice = wx.Choice(
+            panel, choices=list(C.APPEARANCE_LABELS))
+        self.appearance_choice.SetName("Light or dark")
+        look = getattr(self.board, "appearance", C.DEFAULT_APPEARANCE)
+        self.appearance_choice.SetSelection(
+            C.APPEARANCE_MODES.index(look) if look in C.APPEARANCE_MODES
+            else 0)
+        self.appearance_choice.SetToolTip(
+            "Following the system is the default and is usually what you "
+            "want: it uses the light or dark setting you already chose in "
+            "Windows Settings. Choose Light or Dark to make this app differ "
+            "from the rest of the machine. A Windows High Contrast theme "
+            "always wins over all three.")
+        sizer.Add(self.appearance_choice, 0, wx.EXPAND | wx.ALL, 10)
+
+        # Said out loud rather than left as something to discover by trying
+        # it, because the two situations this note describes are exactly the
+        # ones somebody cannot see for themselves.
+        self._note(panel, sizer,
+                   "The window changes as soon as you press OK.\n\n"
+                   "Dark mode needs Windows 10 version 1809 or later. On an "
+                   "older Windows the app stays light, because the only way "
+                   "to darken the controls there would stop a screen reader "
+                   "calling a check box a check box.\n\n"
+                   "If you use a Windows High Contrast theme, that is used "
+                   "instead of any of these, and nothing here changes it.")
+
+        self.appearance_state = wx.StaticText(panel, label=self._appearance_now())
+        sizer.Add(self.appearance_state, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.appearance_choice.Bind(wx.EVT_CHOICE, self._on_appearance)
+
+    def _appearance_now(self):
+        """One line saying what is actually on screen, which is not the same
+        as what is chosen: Follow the system is two different answers and
+        High Contrast overrules all three."""
+        from . import darkmode
+        if not darkmode.available():
+            return ("Now: light. The dark mode library is not installed in "
+                    "this copy.")
+        if darkmode.is_high_contrast():
+            return "Now: your Windows High Contrast theme, which comes first."
+        return "Now: dark." if darkmode.is_dark() else "Now: light."
+
+    def _on_appearance(self, _event):
+        # Nothing is applied here, OK does that. This only keeps the line
+        # underneath honest while somebody arrows through the choices, and
+        # for Follow the system it is the only way to find out which of the
+        # two that currently means.
+        from . import darkmode
+        chosen = C.APPEARANCE_MODES[self.appearance_choice.GetSelection()]
+        if chosen == C.APPEARANCE_SYSTEM:
+            self.appearance_state.SetLabel(self._appearance_now())
+        elif darkmode.is_high_contrast():
+            self.appearance_state.SetLabel(self._appearance_now())
+        else:
+            self.appearance_state.SetLabel(
+                "After OK: dark." if chosen == C.APPEARANCE_DARK
+                else "After OK: light.")
+
+    @property
+    def appearance(self):
+        return C.APPEARANCE_MODES[self.appearance_choice.GetSelection()]
 
     def _fade_spin(self, panel, grid, label, name, value, tip):
         grid.Add(wx.StaticText(panel, label=label), 0,
