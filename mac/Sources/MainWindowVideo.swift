@@ -297,6 +297,10 @@ extension MainWindow {
         speaker.announceAnswer(parts.joined(separator: ". "))
     }
 
+    func showPermissions() {
+        PermissionsPanel(speaker: speaker).run(over: window)
+    }
+
     func showStreamHelp() {
         StreamHelpPanel(speaker: speaker).run(over: window)
     }

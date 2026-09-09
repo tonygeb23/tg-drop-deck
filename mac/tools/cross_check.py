@@ -80,7 +80,8 @@ SOURCES = {
                 "Framing.swift"],
     "shotcheck": ["Constants.swift", "KeyMap.swift", "Colours.swift",
                   "Secrets.swift", "Overlay.swift", "Picture.swift",
-                  "Camera.swift", "Screen.swift", "ShotCheck.swift"],
+                  "Camera.swift", "Screen.swift", "Permissions.swift",
+                  "ShotCheck.swift"],
     # The board pulls in most of the model, but none of the interface.
     "boardvideo": ["Constants.swift", "KeyMap.swift", "Colours.swift",
                    "Secrets.swift", "ShotCheck.swift", "Board.swift",
@@ -93,7 +94,8 @@ SOURCES = {
                    "SoundButton.swift", "GlobalHotkeys.swift", "Feedback.swift",
                    "AppUpdate.swift", "StreamServers.swift", "Preflight.swift",
                    "Health.swift", "StreamHelp.swift", "Overlay.swift",
-                   "Picture.swift", "Camera.swift", "Screen.swift"],
+                   "Picture.swift", "Camera.swift", "Screen.swift",
+                   "Permissions.swift"],
 }
 
 #: Differences that are CORRECT, declared one at a time with the reason.

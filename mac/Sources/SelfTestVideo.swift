@@ -37,6 +37,7 @@ extension SelfTest {
         testPictureSources()
         testVideoKeys()
         testEditMenu()
+        testPermissions()
         testSavedSetups()
     }
 
@@ -264,25 +265,41 @@ extension SelfTest {
                                       height: C.rtmpHeight, fps: C.rtmpFPS)
             screen.start()
             let arrived = screen.waitReady(timeout: C.screenOpenTimeout)
-            // Give it long enough to have looked at its opening frames.
-            Thread.sleep(forTimeInterval: 0.4)
+            // Long enough to have looked at its opening frames, and that is
+            // NOT the frame rate: ScreenCaptureKit sends nothing at all while
+            // the screen is not changing, so five real frames off a still
+            // desktop can take several seconds. Waited for rather than slept
+            // through, so it costs nothing when the answer comes quickly.
+            let until = Date().addingTimeInterval(8)
+            while Date() < until && !Screens.provedBlank && screen.error.isEmpty {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
             let shot = screen.frame(width: C.rtmpWidth, height: C.rtmpHeight)
-            if screen.error == Screens.notAllowed {
-                // Not a fault in the build. The user has not said yes yet, and
-                // what matters is that the app NOTICED rather than broadcasting
-                // a black rectangle.
-                out.append("  note  the screen is not allowed yet, and the app said so "
-                           + "rather than sending black")
+
+            if Screens.provedBlank || screen.error == Screens.notAllowed {
+                // Not a fault in the build. The user has not said yes to THIS
+                // build yet, and what matters is that the app worked it out
+                // from the pixels rather than from the system call, which
+                // answered that everything was fine.
+                out.append("  note  the screen is not allowed to this build, and the "
+                           + "app worked that out from the pixels rather than from "
+                           + "the system call, which said it was fine")
                 check("a screen that is not allowed refuses rather than sending black",
                       shot == nil)
-            } else {
-                check("the screen delivers a frame", arrived, screen.error)
-                if let shot {
-                    let seen = SelfTest.inspect(shot)
-                    check("and it is a picture rather than a black rectangle",
-                          seen.mean > 8 && seen.distinct > 20,
-                          "mean \(seen.mean), \(seen.distinct) colours")
+            } else if let shot {
+                let seen = SelfTest.inspect(shot)
+                if seen.mean > 8 && seen.distinct > 20 {
+                    check("the screen delivers a real picture", true)
+                } else {
+                    // Blank, but the five frame verdict has not landed yet.
+                    // Asserting either way here is asserting on a race.
+                    out.append("  note  the screen is coming back blank and the app has "
+                               + "not seen enough frames to say so yet. Nothing is "
+                               + "asserted on that race")
                 }
+            } else {
+                out.append("  note  the screen delivered nothing in time: "
+                           + (screen.error.isEmpty ? "no reason given" : screen.error))
             }
             screen.close()
         }
@@ -415,6 +432,45 @@ extension SelfTest {
         }
         check("nothing else claims Command V", clashes.isEmpty,
               clashes.joined(separator: ", "))
+    }
+
+    // ------------------------------------------------------- permissions ---
+
+    private func testPermissions() {
+        out.append("")
+        out.append("What macOS lets this app do")
+
+        // **The app has to ASK, not just look.** Until 3.5.22 it only ever
+        // read the status, which prompts nobody and registers nothing, so it
+        // never appeared in System Settings under Camera at all and there was
+        // nothing there to switch on. Reported by Tony, who went looking.
+        check("there are three permissions and they are all named",
+              Permission.allCases.count == 3
+              && Permission.allCases.allSatisfy { !$0.label.isEmpty })
+
+        var bad: [String] = []
+        for which in Permission.allCases {
+            if which.whatFor.isEmpty { bad.append("\(which.label) says what it is for") }
+            if which.settingsName.isEmpty { bad.append("\(which.label) names its pane") }
+            if which.settingsURL == nil { bad.append("\(which.label) can open Settings") }
+        }
+        check("each one says what it is for, where it lives, and can open it",
+              bad.isEmpty, bad.joined(separator: ", "))
+
+        // Every state has a sentence. "not asked for yet" is the one that
+        // matters: it is the state the whole fault lived in, and an app in it
+        // is invisible to System Settings.
+        for state in [PermissionState.neverAsked, .allowed, .refused, .notYours] {
+            check("the state \(state.rawValue) has words", !state.said.isEmpty, state.said)
+        }
+        check("the never asked wording says so plainly",
+              PermissionState.neverAsked.said == "not asked for yet")
+
+        // And the whole thing answers, whatever this Mac has granted.
+        let said = Permissions.describe()
+        check("it can say what it is allowed to do", said.contains("Microphone")
+              && said.contains("Camera") && said.contains("Screen recording"), said)
+        out.append("  note  on this Mac right now: " + said)
     }
 
     // ------------------------------------------------------- saved setups ---

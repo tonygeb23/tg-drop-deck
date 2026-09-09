@@ -136,9 +136,31 @@ final class CameraSource: NSObject, PictureSource, AVCaptureVideoDataOutputSampl
         if session != nil { lock.unlock(); return }
         lock.unlock()
 
-        if Cameras.permission() == .denied || Cameras.permission() == .restricted {
+        // **ASK, do not just look.** Checking the status prompts nobody and
+        // registers nothing, so an app that only checks never appears in
+        // System Settings under Camera at all, and there is nothing there to
+        // switch on. This is where the prompt belongs: somebody has just
+        // chosen a camera as their picture.
+        switch Permissions.state(.camera) {
+        case .allowed:
+            break
+        case .refused, .notYours:
             setError(Cameras.explain("not authorized", device: device))
             return
+        case .neverAsked:
+            let waiting = DispatchSemaphore(value: 0)
+            var granted = false
+            Permissions.ask(.camera) { state, _ in
+                granted = state == .allowed
+                waiting.signal()
+            }
+            // The prompt is the user's to answer in their own time. The wait
+            // is bounded so a dialog left alone cannot hold a show up for ever,
+            // and the fallback puts the card out and says why.
+            if waiting.wait(timeout: .now() + 120) == .timedOut || !granted {
+                setError(Cameras.explain("not authorized", device: device))
+                return
+            }
         }
         guard let picked = Cameras.device(named: device) else {
             setError(Cameras.explain("not connected", device: device))

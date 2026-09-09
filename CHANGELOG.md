@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.5.22 for Mac, 8 September 2026
+
+**Drop Deck now asks for the permissions it needs, which it never did.**
+
+Reported by Tony, who went to System Settings to allow the camera by hand and
+could not find Drop Deck in the list.
+
+He was not looking in the wrong place. **An app does not appear under Camera,
+or under Screen and System Audio Recording, until it has ASKED**, and Drop
+Deck never asked. It only ever looked: it read whether it was allowed, which
+prompts nobody and registers nothing. So the prompt never came, the app was
+never listed, and there was nothing to switch on.
+
+Now it asks, in the two places that matter.
+
+**When you first use one.** Choosing a camera as your picture asks for the
+camera. Choosing your screen asks for the screen. That is the moment somebody
+has actually asked for the thing, which is when a system dialog makes sense.
+
+**And on the way in.** If your board is set to go to a video platform and its
+picture is a camera or your screen, Drop Deck asks at launch, once, so the
+answer is settled while nobody is waiting. A board pointed at a radio station
+with a card for a picture is asked nothing, which is most boards.
+
+**Help, What Drop Deck is allowed to do** is the third way. It lists the
+microphone, the camera and screen recording with what each is for and whether
+it is allowed, asks for any of them on Return, and opens System Settings at
+the right pane. It says the whole state out loud as it opens.
+
+**And it no longer believes macOS over its own eyes.** There is a system call
+that says whether the screen may be captured, and it can answer yes while
+every captured pixel is black, which happens when the grant was recorded
+against an older build of the app. Drop Deck now trusts what it actually
+captured: one blank capture and it says the screen is not allowed, puts itself
+in the list, and tells you where the switch is.
+
+Two things worth knowing, both of them macOS rather than this app. **It only
+ever asks once**, so anything already refused has to be turned on in System
+Settings. And **screen recording needs the app quit and opened again** after
+you switch it on.
+
+Nothing else changed.
+
 ## 3.5.21 for Mac, 8 September 2026
 
 **You can paste again. You could not paste at all, anywhere, and that is not

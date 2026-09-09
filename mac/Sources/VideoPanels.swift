@@ -1444,3 +1444,156 @@ final class StreamHelpPanel: NSObject {
         if let url = URL(string: C.userGuideURL) { NSWorkspace.shared.open(url) }
     }
 }
+
+// ------------------------------------------------------------ permissions ---
+
+/// What macOS lets Drop Deck do, and asking for it on purpose.
+///
+/// **This window exists because an app that has never asked does not appear in
+/// System Settings at all.** Somebody looking for Drop Deck under Camera and
+/// finding nothing is not looking in the wrong place: there is genuinely
+/// nothing there until the app asks. The camera and the screen now ask when
+/// they are first used, and this is the way to ask without going near a show.
+final class PermissionsPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+
+    private let speaker: Speaker
+    private var table: ActionTable!
+    private var doing: NSTextField!
+    private var busy = false
+
+    init(speaker: Speaker) {
+        self.speaker = speaker
+        super.init()
+    }
+
+    func run(over parent: NSWindow?) {
+        let alert = NSAlert()
+        alert.messageText = "What Drop Deck is allowed to do"
+        alert.informativeText = "Up and down read them. Return asks macOS for the one "
+                              + "you are on. macOS only asks once for each, so anything "
+                              + "already refused has to be turned on in System Settings."
+        alert.addButton(withTitle: "Close")
+
+        let width: CGFloat = 660
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 260))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 78, width: width, height: 170))
+        table = ActionTable(frame: scroll.bounds)
+        for (id, heading, w) in [("what", "Permission", 170),
+                                 ("state", "State", 170),
+                                 ("why", "What it is for", 300)] {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
+            column.title = heading
+            column.width = CGFloat(w)
+            table.addTableColumn(column)
+        }
+        table.dataSource = self
+        table.delegate = self
+        table.setAccessibilityLabel("Permissions")
+        table.onChoose = { [weak self] in self?.askSelected() }
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        box.addSubview(scroll)
+
+        doing = NSTextField(wrappingLabelWithString: "")
+        doing.frame = NSRect(x: 0, y: 40, width: width, height: 34)
+        doing.setAccessibilityLabel("What this one is for")
+        box.addSubview(doing)
+
+        let askAll = NSButton(title: "Ask for everything", target: self,
+                              action: #selector(askEverything))
+        askAll.frame = NSRect(x: 0, y: 4, width: 180, height: 30)
+        askAll.setAccessibilityLabel("Ask for everything")
+        box.addSubview(askAll)
+
+        let settings = NSButton(title: "Open System Settings", target: self,
+                                action: #selector(openSettings))
+        settings.frame = NSRect(x: 190, y: 4, width: 210, height: 30)
+        settings.setAccessibilityLabel("Open System Settings")
+        box.addSubview(settings)
+
+        alert.accessoryView = box
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        alert.window.initialFirstResponder = table
+        describe()
+        // Said on the way in, because the whole question this window answers is
+        // one a screen reader user should not have to go and read.
+        speaker.announceAnswer(Permissions.describe())
+        _ = PanelKeys.run(alert)
+    }
+
+    private func selected() -> Permission? {
+        let row = max(0, table.selectedRow)
+        return row < Permission.allCases.count ? Permission.allCases[row] : nil
+    }
+
+    private func askSelected() {
+        guard !busy, let which = selected() else { return }
+        busy = true
+        speaker.announce("Asking macOS for \(which.label.lowercased()).")
+        Permissions.ask(which) { [weak self] _, said in
+            guard let self else { return }
+            self.busy = false
+            self.refresh()
+            self.speaker.announceAnswer(said)
+        }
+    }
+
+    @objc private func askEverything() {
+        guard !busy else { return }
+        busy = true
+        speaker.announce("Asking macOS for everything Drop Deck needs. "
+                       + "Answer each one as it comes up.")
+        Permissions.askAll { [weak self] said in
+            guard let self else { return }
+            self.busy = false
+            self.refresh()
+            self.speaker.announceAnswer(said)
+        }
+    }
+
+    @objc private func openSettings() {
+        guard let which = selected() else { return }
+        Permissions.open(which)
+        speaker.announce("Opened System Settings at \(which.settingsName). "
+                       + "Drop Deck is in that list once it has asked.")
+    }
+
+    private func refresh() {
+        let row = max(0, table.selectedRow)
+        table.reloadData()
+        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        table.window?.makeFirstResponder(table)
+        describe()
+    }
+
+    private func describe() {
+        guard let which = selected() else { return }
+        var line = "\(which.whatFor). In System Settings, Privacy and Security, "
+                 + "under \(which.settingsName)."
+        if Permissions.state(which) == .neverAsked && which == .screen {
+            line += " macOS wants Drop Deck quit and opened again after this one is "
+                  + "switched on."
+        }
+        doing.stringValue = line
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { Permission.allCases.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
+                   row: Int) -> NSView? {
+        guard row < Permission.allCases.count, let column = tableColumn else { return nil }
+        let which = Permission.allCases[row]
+        let text: String
+        switch column.identifier.rawValue {
+        case "what": text = which.label
+        case "state": text = Permissions.state(which).said
+        default: text = which.whatFor
+        }
+        let cell = NSTextField(labelWithString: text)
+        cell.setAccessibilityLabel(text)
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { describe() }
+}

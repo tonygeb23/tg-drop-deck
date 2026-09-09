@@ -95,8 +95,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.main.announceStartup()
             self.warnAboutFunctionKeys()
             self.main.startupHousekeeping()
+            self.askForWhatTheBoardNeeds()
         }
         trace("ready")
+    }
+
+    /// Ask, on launch, for whatever this board is actually set up to use.
+    ///
+    /// **Point of use is the rule, and this is a point of use.** A board whose
+    /// picture is a camera is going to want the camera the moment Command B is
+    /// pressed, and the worst time to meet a system dialog is on the way to
+    /// air. Asking here means the answer is settled while nobody is waiting.
+    ///
+    /// It asks ONLY for what the board needs and ONLY when macOS has never
+    /// been asked, so it happens once and it never nags. A board pointed at a
+    /// radio station with a card for a picture is asked nothing at all, which
+    /// is most boards.
+    private func askForWhatTheBoardNeeds() {
+        guard main.board.liveTo == C.liveToVideo else { return }
+        var wanted: [Permission] = []
+        if C.pictureNeedsCamera.contains(main.board.picture),
+           Permissions.state(.camera) == .neverAsked {
+            wanted.append(.camera)
+        }
+        if C.pictureNeedsScreen.contains(main.board.picture),
+           Permissions.state(.screen) == .neverAsked {
+            wanted.append(.screen)
+        }
+        guard !wanted.isEmpty else { return }
+
+        let names = wanted.map { $0.label.lowercased() }
+        main.speaker.announce(
+            "Your picture needs \(names.joined(separator: " and ")). macOS is about "
+          + "to ask. Nothing works until it is allowed, and Drop Deck does not appear "
+          + "in System Settings until it has asked.")
+        var queue = wanted
+        func next() {
+            guard !queue.isEmpty else { return }
+            let which = queue.removeFirst()
+            Permissions.ask(which) { [weak self] _, said in
+                self?.main.speaker.announceAnswer(said)
+                next()
+            }
+        }
+        next()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
@@ -512,6 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let helpItem = NSMenuItem()
         let help = NSMenu(title: "Help")
         help.addItem(plain("Setting up streaming...", #selector(streamHelp)))
+        help.addItem(plain("What Drop Deck is allowed to do...", #selector(permissions)))
         help.addItem(item("Keyboard shortcuts", .shortcuts, #selector(showShortcuts)))
         help.addItem(plain("User manual...", #selector(openManual)))
         help.addItem(.separator())
@@ -699,6 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func cameraCheck() { main.sayWhatTheCameraSees() }
     @objc func sayScreen() { main.sayWhatIsOnScreen() }
     @objc func streamHelp() { main.showStreamHelp() }
+    @objc func permissions() { main.showPermissions() }
     @objc func pickLiveTo(_ sender: NSMenuItem) {
         main.setLiveTo(sender.representedObject as? String ?? C.liveToAudio)
     }

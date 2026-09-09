@@ -162,6 +162,19 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.5.22": ("Drop Deck now asks for the permissions it needs, which it "
+               "never did. An app does not appear in System Settings under "
+               "Camera, or under Screen and System Audio Recording, until it "
+               "has ASKED, and this one only ever looked: it read whether it "
+               "was allowed, which prompts nobody and registers nothing. So "
+               "the prompt never came and there was nothing in the list to "
+               "switch on. It now asks when you first choose a camera or your "
+               "screen, asks at launch when your board is set up to need one, "
+               "and Help, What Drop Deck is allowed to do lists all three with "
+               "their state and asks for any of them. It also stops believing "
+               "the system call that says the screen may be captured while "
+               "every captured pixel is black: one blank capture and it says "
+               "so and puts itself in the list. Reported by Tony."),
     "3.5.21": ("You can paste again, and you could not paste at all before "
                "this: not a stream key, not a station name, not a password, "
                "not a track title. The app had no Edit menu, and on a Mac "

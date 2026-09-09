@@ -22,12 +22,36 @@ import CoreMedia
 
 enum Screens {
 
+    /// Set once a capture has come back entirely blank.
+    ///
+    /// **`CGPreflightScreenCaptureAccess` lies**, and this is the app's memory
+    /// of catching it at it. Measured on this Mac with a Developer ID signed
+    /// build: preflight answered true, every frame arrived marked complete, at
+    /// the right size, at thirty a second, and every pixel was zero. A grant
+    /// recorded against an older build's code identity reads as a grant and
+    /// captures nothing.
+    ///
+    /// So what the app SAW outranks what the system said, and everything that
+    /// reports on the screen asks this first.
+    static private(set) var provedBlank = false
+
+    static func sawBlankCapture() {
+        provedBlank = true
+        // This is what puts Drop Deck in the Screen and System Audio Recording
+        // list. An app that has never asked is not in it, which is why looking
+        // for it there and finding nothing is not the user's mistake.
+        _ = CGRequestScreenCaptureAccess()
+    }
+
     /// Whether this machine can be captured at all.
     ///
     /// The permission is a system one and the user grants it once, in System
     /// Settings. Asking here rather than assuming is what lets the pre-flight
     /// say so before somebody goes live rather than after.
-    static func available() -> Bool { CGPreflightScreenCaptureAccess() }
+    static func available() -> Bool {
+        if provedBlank { return false }
+        return CGPreflightScreenCaptureAccess()
+    }
 
     /// What to say when the screen cannot be captured. One sentence, and it
     /// names the setting rather than the problem, because the problem is not
@@ -130,9 +154,24 @@ final class ScreenSource: NSObject, PictureSource, SCStreamOutput {
         lock.lock()
         if stream != nil { lock.unlock(); return }
         lock.unlock()
-        guard Screens.available() else {
-            setError(Screens.whyUnavailable())
-            return
+        // The same fault as the camera, and worse, because there is no
+        // "never asked" to read for the screen: an app that has never asked
+        // and an app that was refused both answer false. So it ASKS, which is
+        // also the only thing that puts Drop Deck in the Screen and System
+        // Audio Recording list where it can be switched on.
+        if !Screens.available() {
+            let waiting = DispatchSemaphore(value: 0)
+            var granted = false
+            var said = ""
+            Permissions.ask(.screen) { state, sentence in
+                granted = state == .allowed
+                said = sentence
+                waiting.signal()
+            }
+            if waiting.wait(timeout: .now() + 120) == .timedOut || !granted {
+                setError(said.isEmpty ? Screens.notAllowed : said)
+                return
+            }
         }
         Task { await open() }
     }
@@ -265,6 +304,7 @@ final class ScreenSource: NSObject, PictureSource, SCStreamOutput {
                 blankRun += 1
                 if blankRun >= 5 {
                     checkedBlank = true
+                    Screens.sawBlankCapture()
                     // The frames already taken were black too, so they must go
                     // with the verdict. Leaving them cached is how the app
                     // would go on serving the very picture it just decided was
