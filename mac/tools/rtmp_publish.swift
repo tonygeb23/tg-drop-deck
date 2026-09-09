@@ -50,10 +50,19 @@ for frame in 0..<(FPS * SECONDS) {
     // Roughly one audio block per video frame at these rates.
     let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(blockFrames))!
     pcm.frameLength = AVAudioFrameCount(blockFrames)
+    // A DIFFERENT tone in each ear, 440 on the left and 660 on the right.
+    //
+    // It used to be the same 440 in both, which meant this test could not tell
+    // stereo from mono anywhere in the encode, the FLV or the carry: a mono
+    // collapse would have decoded as two identical channels and passed every
+    // check. Captured programs really were going out in mono and none of this
+    // noticed. Two tones that cannot be confused for each other is the whole
+    // point.
     for c in 0..<2 {
         let ch = pcm.floatChannelData![c]
+        let hz: Float = c == 0 ? 440 : 660
         for i in 0..<blockFrames {
-            ch[i] = 0.25 * sinf(2 * .pi * 440 * Float(samples + i) / 44100)
+            ch[i] = 0.25 * sinf(2 * .pi * hz * Float(samples + i) / 44100)
         }
     }
     if let encoded = aac.encode(pcm) {

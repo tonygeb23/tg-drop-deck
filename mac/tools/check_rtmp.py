@@ -95,13 +95,24 @@ def main():
         binary = build(work)
         with mock_rtmp.spawn(seconds=40) as server:
             print("Publishing to %s" % server.url)
+            # From the ROOT, always. The bundled fonts are found either inside
+            # an app bundle or at "mac/Resources/fonts/..." relative to the
+            # working directory, and this publisher is a bare binary with no
+            # bundle. Run from anywhere else and every card comes back nil, no
+            # frame is ever encoded, and the decode checks all fail for a
+            # reason that has nothing to do with what they are testing.
             out = subprocess.run([binary, server.url], capture_output=True,
-                                 text=True, timeout=180)
+                                 text=True, timeout=180, cwd=ROOT)
             for line in out.stdout.strip().splitlines():
                 print("   ", line)
             if out.returncode:
                 print(out.stderr.strip()[:2000])
                 raise SystemExit("the publisher failed")
+            if "sent 0 video tags" in out.stdout:
+                raise SystemExit(
+                    "the publisher sent nothing, so there is nothing to decode. "
+                    "The card could not be drawn, which means the bundled fonts "
+                    "were not found from %s." % ROOT)
             result = server.finish()
 
     print("")
@@ -138,10 +149,11 @@ def main():
         check("the audio is AAC", audio.name == "aac", audio.name)
         check("at the sample rate that was asked for",
               audio.sample_rate == 44100, audio.sample_rate)
+        check("in stereo, two channels", audio.channels == 2, audio.channels)
 
     vframes = aframes = 0
     first_key = None
-    luma, levels, vpts, apts = [], [], [], []
+    luma, levels, vpts, apts, apart = [], [], [], [], []
     container = av.open(io.BytesIO(result.flv))
     for packet in container.demux():
         if packet.stream.type not in ("video", "audio"):
@@ -165,6 +177,20 @@ def main():
                 arr = np.asarray(frame.to_ndarray())
                 if arr.size:
                     levels.append(float(np.abs(arr).max()))
+                    # The two ears are sent DIFFERENT tones, so a mono
+                    # collapse anywhere between the encoder and here shows up
+                    # as the two channels being the same numbers.
+                    flat = arr.reshape(-1) if arr.ndim == 1 else arr
+                    if flat.ndim == 2 and flat.shape[0] == 2:
+                        left, right = flat[0], flat[1]
+                    elif flat.ndim == 2 and flat.shape[1] == 2:
+                        left, right = flat[:, 0], flat[:, 1]
+                    else:                       # packed stereo in one row
+                        one = flat.reshape(-1)
+                        left, right = one[0::2], one[1::2]
+                    if left.size and left.size == right.size:
+                        apart.append(float(np.abs(
+                            left.astype(float) - right.astype(float)).max()))
 
     check("every video frame decoded", vframes >= 85, vframes)
     check("every audio frame decoded", aframes >= 85, aframes)
@@ -173,6 +199,12 @@ def main():
           [round(v, 1) for v in luma])
     check("the sound is not silence", bool(levels) and max(levels) > 0.05,
           round(max(levels), 4) if levels else None)
+    # 440 in one ear and 660 in the other. If anything on the way folded them
+    # together the difference is zero everywhere, which is exactly what a
+    # listener hears as mono and what no level meter can show.
+    check("the two ears are really different, so it is stereo",
+          bool(apart) and max(apart) > 0.05,
+          round(max(apart), 4) if apart else None)
     if vpts and apts:
         drift = abs(max(vpts) - max(apts)) * 1000
         # The whole reason video is stamped against the audio sample counter.
