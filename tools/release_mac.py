@@ -162,6 +162,19 @@ NOTARY_PROFILE = os.environ.get("NOTARY_PROFILE", "TGStudios")
 #: What the Mac release adds, shown in the update prompt. A version with no
 #: note here is refused, the same rule the Windows publisher enforces.
 MAC_NOTES = {
+    "3.5.24": ("It has stopped telling you the picture has frozen when it has "
+               "not. The check that notices a dead picture compares each "
+               "frame with the last, which is right for a camera and wrong "
+               "for a desktop: identical frames from a screen mean nobody has "
+               "moved the mouse. Measured on Tony's own setup, his screen "
+               "with the camera in the corner, the average difference between "
+               "frames was 0.000 and every sample read as frozen. A screen is "
+               "no longer judged by its pixels; a capture that has really "
+               "stopped is still noticed by the capture going quiet. The "
+               "camera keeps a watcher of its own, because on a shared screen "
+               "it is a sixteenth of the picture, and it now says the camera "
+               "has frozen rather than the picture. Black is still reported "
+               "from any source. Reported by Tony, on the air."),
     "3.5.23": ("Going live to YouTube works, and it could not before: it sat "
                "saying connecting for ever. Two faults, both found by pointing "
                "the app at the real ingest instead of at the test server. RTMP "

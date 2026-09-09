@@ -141,7 +141,24 @@ final class ScreenSource: NSObject, PictureSource, SCStreamOutput {
     /// second later fills it straight back up with the same black picture.
     private var refused = false
 
-    var moving: Bool { true }
+    /// **A screen that is not changing is not a broken screen.**
+    ///
+    /// The freeze check compares one frame with the last and calls them the
+    /// same a fault. That is right for a camera, where identical frames mean
+    /// something has stopped, and wrong for a desktop, where identical frames
+    /// mean nobody has moved the mouse. Measured on Tony's own setup while he
+    /// was on the air: the mean difference between consecutive frames was
+    /// 0.000 and every single sample read as frozen, so the app told him his
+    /// picture had died every forty five seconds while it was perfectly fine.
+    ///
+    /// ScreenCaptureKit says the same thing in its own words by sending an
+    /// `idle` frame rather than a picture, and the heartbeat in
+    /// `didOutputSampleBuffer` is what notices a capture that has really
+    /// stopped. Liveness here comes from that, never from the pixels.
+    ///
+    /// Black is still checked, because a black screen going out IS a fault
+    /// whatever is causing it.
+    var moving: Bool { false }
     var now: () -> Double = { ProcessInfo.processInfo.systemUptime }
 
     init(which: String = C.screenAll, width: Int? = nil, height: Int? = nil,
@@ -421,7 +438,12 @@ final class SplitSource: PictureSource {
     private let corner: String
     private(set) var showingCamera = false
 
-    var moving: Bool { true }
+    /// The composite is mostly desktop: the camera is a quarter of the width
+    /// in one corner, which is about a sixteenth of the picture. So even a
+    /// lively camera moves too little of the whole frame to clear the
+    /// threshold, and a still desktop drags the average to nothing. The
+    /// camera is checked on its own instead, in the pump.
+    var moving: Bool { false }
     var error: String { screen.error }
 
     init(screen: ScreenSource, camera: CameraSource,

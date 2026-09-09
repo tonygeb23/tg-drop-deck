@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.5.24 for Mac, 8 September 2026
+
+**It has stopped telling you your picture has frozen when it has not.**
+
+Reported by Tony, on the air, being told every forty five seconds that the
+picture was stuck on one frame while it was perfectly fine.
+
+**A screen that is not changing is not a broken screen.** The check that
+notices a dead picture works by comparing each frame with the one before it
+and calling them being the same a fault. That is exactly right for a camera,
+where identical frames mean something has stopped. It is exactly wrong for a
+desktop, where identical frames mean nobody has moved the mouse.
+
+Measured on Tony's own setup, which is his screen with the camera in the
+corner: the average difference between one frame and the next was **0.000**,
+and every single sample read as frozen.
+
+So a screen is no longer judged by its pixels. A capture that has really
+stopped is noticed the way it always was, by the capture itself going quiet,
+which is a separate and reliable signal.
+
+**The camera is still watched, on its own.** On a shared screen the camera is
+about a sixteenth of the picture, so asking the whole frame whether anything
+moved gets the answer "no" whatever the camera is doing. It now has its own
+watcher looking at the camera alone, and it says "the camera has frozen"
+rather than "the picture has frozen", because when only the inset has stopped
+the second one is not true.
+
+**A black picture is still reported from any source**, because a black picture
+going out is a black picture going out, whatever is making it.
+
+Nothing else changed.
+
 ## 3.5.23 for Mac, 8 September 2026
 
 **Going live to YouTube works. It could not, and it sat there saying

@@ -39,6 +39,7 @@ extension SelfTest {
         testEditMenu()
         testPermissions()
         testChunkReader()
+        testFreezeSubjects()
         testSavedSetups()
     }
 
@@ -596,6 +597,72 @@ extension SelfTest {
         check("there is a grace for a refusal rather than a wait for permission",
               C.rtmpPublishGrace > 0 && C.rtmpPublishGrace <= 5,
               "\(C.rtmpPublishGrace) seconds")
+    }
+
+    // ------------------------------- what the freeze check is asked about ---
+
+    private func testFreezeSubjects() {
+        out.append("")
+        out.append("Which sources may be called frozen")
+
+        // **Reported by Tony while he was on the air**: "stuck on one frame,
+        // camera is frozen" every forty five seconds, with nothing wrong. His
+        // picture was the screen with the camera in the corner, and a desktop
+        // nobody is touching produces identical frames. Measured on his own
+        // setup: the mean difference between consecutive composite frames was
+        // 0.000, so every sample read as frozen.
+        //
+        // A screen that is not changing is not a broken screen. Liveness for
+        // a capture comes from its heartbeat, never from its pixels.
+        let screen = ScreenSource(which: C.screenAll)
+        check("a screen is never called frozen by its pixels", !screen.moving)
+        let split = SplitSource(screen: ScreenSource(which: C.screenAll),
+                                camera: CameraSource(device: ""))
+        check("nor is a screen with the camera in the corner", !split.moving)
+        check("but a camera is, because identical frames there mean something "
+              + "has stopped", CameraSource(device: "").moving)
+        check("and a card is not, because it is supposed to be still",
+              !CardSource().moving)
+        check("nor a picture file", !ImageSource(path: "/tmp/x.png").moving)
+
+        // The arithmetic that produced the false alarm, run directly: two
+        // identical frames read as frozen, and that is CORRECT of the
+        // watcher. What was wrong was asking it about a desktop.
+        let still = HealthWatcher()
+        let frame = [UInt8](repeating: 120, count: 64 * 36 * 4)
+        var said = ""
+        for i in 0..<40 {
+            said = still.look(frame: frame, width: 64, height: 36,
+                              bytesPerPixel: 4, counted: 3, rowBytes: 64 * 4,
+                              moving: true, now: Double(i))
+            if !said.isEmpty { break }
+        }
+        check("an unchanging picture IS called frozen when it is supposed to move",
+              said == C.healthFrozenSaid, said)
+
+        let allowed = HealthWatcher()
+        var quiet = true
+        for i in 0..<40 where !allowed.look(frame: frame, width: 64, height: 36,
+                                            bytesPerPixel: 4, counted: 3,
+                                            rowBytes: 64 * 4, moving: false,
+                                            now: Double(i)).isEmpty {
+            quiet = false
+        }
+        check("and is not, when it is not supposed to move", quiet)
+
+        // Black is still a fault whatever the source, because a black picture
+        // going out is a black picture going out.
+        let dark = HealthWatcher()
+        let black = [UInt8](repeating: 0, count: 64 * 36 * 4)
+        var blackSaid = ""
+        for i in 0..<40 {
+            blackSaid = dark.look(frame: black, width: 64, height: 36,
+                                  bytesPerPixel: 4, counted: 3, rowBytes: 64 * 4,
+                                  moving: false, now: Double(i))
+            if !blackSaid.isEmpty { break }
+        }
+        check("a black picture is still reported even from a still source",
+              blackSaid == C.healthBlackSaid, blackSaid)
     }
 
     // ------------------------------------------------------- saved setups ---

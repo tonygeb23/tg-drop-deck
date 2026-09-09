@@ -57,7 +57,16 @@ final class VideoStreamer {
     private var source: PictureSource?
     private var wantedSource: PictureSource?
     private var overlay = Overlay()
+    /// Watches what actually goes out, for a picture that has gone black.
     private let health = HealthWatcher()
+    /// Watches the CAMERA on its own, for one that has stopped moving.
+    ///
+    /// Separate because the two questions have different subjects. Black is a
+    /// fault in the whole picture and is asked of the whole picture. Frozen is
+    /// a fault in a source that is supposed to be live, and on a shared screen
+    /// the camera is a sixteenth of the frame, so asking the composite gets
+    /// the answer "nothing moved" whatever the camera is doing.
+    private let cameraHealth = HealthWatcher()
     private(set) var framer = Framer()
 
     private var settings = VideoStreamSettings()
@@ -98,6 +107,12 @@ final class VideoStreamer {
                         onSay: { [weak self] text in self?.say(text) })
         health.reset()
         health.onSay = { [weak self] text in self?.say(text) }
+        cameraHealth.reset()
+        cameraHealth.onSay = { [weak self] text in
+            // Named, because "the picture has frozen" is not true of the
+            // picture when only the inset has stopped.
+            self?.say(text.replacingOccurrences(of: "The picture", with: "The camera"))
+        }
 
         stopping = false
         samplesSent = 0
@@ -294,6 +309,7 @@ final class VideoStreamer {
                 lock.unlock()
                 old?.close()
                 health.reset()
+                cameraHealth.reset()
                 video.forceKeyframe()
             } else {
                 lock.unlock()
@@ -367,6 +383,13 @@ final class VideoStreamer {
             let shown = Pixels.composite(frame, overlay, width: settings.width,
                                          height: settings.height)
             health.look(buffer: shown, moving: picture.moving)
+            // And the camera on its own, when there is one. A camera that has
+            // stopped delivering is caught by staleness in CameraSource; this
+            // catches the other kind, where frames keep arriving and they are
+            // all the same picture.
+            if let camera = VideoStreamer.cameraFrame(picture) {
+                cameraHealth.look(buffer: camera, moving: true)
+            }
             if framer.due(), let camera = VideoStreamer.cameraFrame(picture) {
                 framer.look(camera)
             }
