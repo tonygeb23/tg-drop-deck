@@ -65,8 +65,8 @@ extension MainWindow {
         var s = VideoStreamSettings()
         s.server = board.videoServer
         s.host = board.videoHost
-        s.key = Secrets.fetch(station: board.stream.name.isEmpty
-                              ? board.videoServer : board.stream.name)
+        s.key = Secrets.fetchVideoKey(server: board.videoServer, host: board.videoHost,
+                                      stationName: board.stream.name)
         s.width = board.videoWidth
         s.height = board.videoHeight
         s.fps = board.videoFPS
@@ -111,7 +111,7 @@ extension MainWindow {
 
     /// Everything Command B is about to do, worked out before it does it.
     func preflight() -> Preflight {
-        Preflighter.check(
+        let report = Preflighter.check(
             settings: preflightSettings(), board: preflightBoard(),
             audioRunning: group.isRunning, micOpen: mic.isOpen,
             screenReady: Screens.available(),
@@ -119,6 +119,21 @@ extension MainWindow {
             text: Preflighter.TextFitting(
                 placeLabel: { Overlays.placeLabel($0) },
                 fits: { Overlays.fits($0, key: $1, width: $2, height: $3) }))
+        // One last go at anything that is not running, then the ones still
+        // wrong go in the list with everything else. A source marked on air
+        // that is not actually running is a voice missing from the whole show,
+        // and this is the last moment anybody can put it right.
+        //
+        // Added out here rather than inside Preflighter, which is checked line
+        // for line against the Windows copy and must stay identical.
+        _ = sourceGroup.retryFailed(outputRate: group.sampleRate)
+        let trouble = sourceGroup.trouble
+        guard !trouble.isEmpty else { return report }
+        return Preflight(
+            target: report.target, lines: report.lines,
+            notes: report.notes + trouble.map {
+                PreflightNote(.warn, "A source is not on the air. \($0)")
+            })
     }
 
     // ---------------------------------------------------------- the keys ---

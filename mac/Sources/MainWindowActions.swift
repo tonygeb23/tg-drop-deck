@@ -494,7 +494,8 @@ extension MainWindow {
         player.warnBeforeEnd = board.warnBeforeEnd
         player.warnSeconds = board.warnSeconds
         for m in group.mixers.values { m.playlistMonitorOnly = board.playlistMonitorOnly }
-        sourceGroup.replace(with: board.sources, outputRate: group.sampleRate)
+        announceSourceTrouble(
+            sourceGroup.replace(with: board.sources, outputRate: group.sampleRate))
         if board.globalHotkeysOn { armGlobalHotkeys(announce: false) }
         group.apply(board)
         group.warmCache(board)

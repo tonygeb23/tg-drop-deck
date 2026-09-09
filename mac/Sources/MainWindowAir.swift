@@ -330,6 +330,27 @@ extension MainWindow {
 
     // ------------------------------------------------------------- sources ---
 
+    /// Help, Check my audio sources. Listens, then says what each one is
+    /// really doing. Safe on air: it reads meters, never the audio.
+    func showSourceCheck() {
+        SourceHealthPanel(group: sourceGroup, speaker: speaker,
+                          micOnAir: mic.onAir, micOpen: mic.isOpen).run(over: window)
+    }
+
+    /// Say which sources would not open, once, quietly.
+    ///
+    /// Mirrors what Windows says in `start_sources`. A source that is not
+    /// plugged in is an ordinary thing on a laptop that moves between desks and
+    /// must not become a dialog in front of a show, but it must not be silent
+    /// either: a source marked on air that is not running is the difference
+    /// between a broadcast with your screen reader in it and one without.
+    func announceSourceTrouble(_ trouble: [String]) {
+        guard !trouble.isEmpty else { return }
+        speaker.announceHelp(trouble.count == 1
+            ? "This source would not open. \(trouble[0])"
+            : "These sources would not open. \(trouble.joined(separator: ". "))")
+    }
+
     /// Option Shift S. One list plus one set of controls that follows it,
     /// deliberately, because a dialog per source is far more to hear.
     func showSources() {

@@ -559,6 +559,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         help.addItem(plain("User manual...", #selector(openManual)))
         help.addItem(.separator())
         help.addItem(plain("Check the keyboard...", #selector(keyboardCheck)))
+        help.addItem(plain("Check my audio sources...", #selector(sourceCheck)))
         help.addItem(.separator())
         help.addItem(plain("Submit feedback...", #selector(submitFeedback)))
         help.addItem(plain("Check for updates...", #selector(checkUpdates)))
@@ -777,6 +778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showPreferences() { main.showPreferences(tab: nil) }
     @objc func showShortcuts() { main.showShortcuts() }
     @objc func keyboardCheck() { main.showKeyboardCheck() }
+    @objc func sourceCheck() { main.showSourceCheck() }
     @objc func showAbout() { main.showAbout() }
     @objc func openManual() {
         if let url = URL(string: C.userGuideURL) { NSWorkspace.shared.open(url) }

@@ -1,5 +1,114 @@
 # Changelog
 
+## 3.5.26 for Mac, 8 September 2026
+
+**Your stream key is remembered again.**
+
+Reported by Tony: "seems like I have to go get a new stream key every single
+time."
+
+The key was filed in the keychain under the radio station's name. That is the
+wrong name for it. A station name can be changed, and loading a saved setup
+could clear it, and once it was cleared the key was still sitting there with
+nothing able to find it. From outside, that is indistinguishable from the app
+forgetting the key, and the only way back on air is to go to the platform and
+fetch a fresh one.
+
+On Tony's own machine the key was under "Tony's Tunes" while the board's
+station name had become empty, so the app was looking under "youtube" and
+finding nothing.
+
+It is now filed under the platform. YouTube and Facebook each keep their own
+key, and moving between them brings the right one back instead of overwriting
+one with the other. A key left under an old station name is carried across the
+first time it is needed, and the old entry tidied away.
+
+**It is never guessed at.** A key the board does not name is left alone, even
+when it is the only one there. Adopting it would mean somebody who switches
+from YouTube to Facebook has their YouTube key silently become their Facebook
+one, and the original deleted. A guess that moves a key is a guess that can
+lose one.
+
+488 checks, 0 failed. All nine cross checks against the Windows modules remain
+byte for byte identical.
+
+## 3.5.25 for Mac, 8 September 2026
+
+**Your extra audio sources really go on the air now. They never could.**
+
+Reported by Tony, who added two sources, VoiceOver and Logic Pro, went live,
+listened to the stream on his phone and heard neither of them. Only the
+built in microphone was there.
+
+**The capture was never made.** A source set to capture a program asked Core
+Audio for a tap. Core Audio answered `noErr`, success, and handed back tap
+object zero. Nothing threw, nothing was logged, the source reported itself
+running, its On air box was ticked, and it sent silence. From where the
+presenter sits this is invisible, because they go on hearing the program in
+their own ears whether or not it is going out.
+
+The way the tap was being asked for was the problem. A `CATapDescription` was
+made empty and the program set on it afterwards. That form is refused, and
+refused silently. Measured on the machine rather than reasoned about, by
+building every form there is and reporting which ones make a tap and which
+ones actually carry sound:
+
+    init(stereoMixdownOfProcesses:)                  tap, sound
+    init(stereoMixdownOfProcesses:) + bundleIDs      tap, sound
+    init(stereoMixdownOfProcesses: []) + bundleIDs   tap, sound
+    CATapDescription() then set bundleIDs            NO TAP
+    CATapDescription() then set processes            NO TAP
+
+The last two are what shipped. It is now asked the way that works, and both
+of Tony's sources are proven on the air on his own machine: **VoiceOver at
+minus 25 decibels, Logic Pro at minus 12**, measured through the app's own
+path with a second independent tap running alongside to confirm the numbers.
+
+**Three more faults of the same shape went with it.**
+
+Adding a second source no longer inherits the program the source above it
+uses. The program list only ever set itself when a source already had a
+program, so a new one silently kept the previous row's choice and then saved
+it. That is how one of Tony's two sources came to point at the wrong program.
+There is a "not chosen" entry now, exactly as the device list has always had.
+
+A program a board names stays in the list even when it is not running, so
+opening the panel and pressing OK can no longer throw that choice away.
+
+A source whose interface is unplugged now says so instead of quietly opening
+the built in microphone instead. Falling back to the default input is right
+for the microphone and wrong for a source: a source pointed at a mixer on a
+desk would become the laptop lid, sound perfectly healthy, and put the wrong
+thing on the air. Windows has always refused this, in the same words.
+
+Two copies of Drop Deck no longer stop each other capturing the same program.
+The capture device was named after the source, so the second copy collided
+with the first and got `kAudioHardwareIllegalOperationError` with no
+explanation.
+
+**And nothing was watching.** The reason a silent source survived a whole
+broadcast is that the only place in the app that ever asked whether a source
+had started was the sources panel, and only on the way out of it. Now:
+
+- Sources that will not open are said out loud when the app opens, when a
+  saved setup is loaded, and again in the going live check. Windows has said
+  this since it had sources; the Mac never did.
+- A source that is not ready is tried again every few seconds, so a program
+  you start after going on air comes on by itself and says so.
+- **Help, Check my audio sources** listens for six seconds and tells you in
+  words whether each source is really putting sound out, and if not, which
+  kind of nothing it is: a program that is not playing, or audio arriving and
+  being lost. It reads meters rather than the audio itself, so it is safe to
+  run in the middle of a show.
+- `--check-sources` and `--tap-probe` do the same from a terminal, with the
+  measurements printed.
+
+Guarded by a self test that creates a real tap on this machine and fails if
+Core Audio hands back nothing, and by one that checks the refused form is
+still refused, so if a future macOS starts accepting it we find out rather
+than the knowledge going stale. 480 checks, 0 failed. All nine cross checks
+against the Windows modules remain byte for byte identical.
+
 ## 3.5.24 for Mac, 8 September 2026
 
 **It has stopped telling you your picture has frozen when it has not.**

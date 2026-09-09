@@ -51,6 +51,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     private var stopButton: NSButton!
 
     private var refreshTimer: Timer?
+    private var sourceRetryTimer: Timer?
     private var saveTimer: Timer?
 
     /// Which banks have already had their hint read out. Once per bank per
@@ -122,6 +123,20 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) {
             [weak self] _ in self?.refreshPads()
         }
+        // Sources that were not ready when the app opened get another go, on a
+        // slow tick. Somebody who starts Logic after going on air should not
+        // have to know that a dialog has to be reopened for it to be heard.
+        // Only the failed ones are touched, so nothing running is disturbed.
+        sourceRetryTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            let cameOn = self.sourceGroup.retryFailed(outputRate: self.group.sampleRate)
+            guard !cameOn.isEmpty else { return }
+            self.speaker.announceHelp(cameOn.count == 1
+                ? "\(cameOn[0]) is on the air now"
+                : "\(cameOn.joined(separator: ", ")) are on the air now")
+            self.updateStatusLine()
+        }
         updateStatusLine()
     }
 
@@ -147,7 +162,8 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         group.primary.airSource = sourceGroup
         group.primary.monitorSource = sourceMonitor
         for m in group.mixers.values { m.playlistMonitorOnly = board.playlistMonitorOnly }
-        sourceGroup.replace(with: board.sources, outputRate: group.sampleRate)
+        announceSourceTrouble(
+            sourceGroup.replace(with: board.sources, outputRate: group.sampleRate))
         if board.globalHotkeysOn { armGlobalHotkeys(announce: false) }
         group.warmCache(board)
         updateStatusLine()

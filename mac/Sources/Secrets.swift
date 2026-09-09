@@ -104,6 +104,62 @@ enum Secrets {
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 
+    /// Where a VIDEO stream key is filed.
+    ///
+    /// By the platform, **not by the station name**. It used to be the station
+    /// name, and that is the radio station's name: it can be changed, and it
+    /// can be cleared by loading a saved setup. When it changed, the key was
+    /// still in the keychain but nothing could find it any more, so it looked
+    /// as though the app had forgotten it and the only way on air was to go
+    /// and fetch a fresh one from the platform. Every single time.
+    ///
+    /// One entry per platform is also simply more useful: somebody who moves
+    /// between YouTube and Facebook keeps both keys rather than overwriting
+    /// one with the other.
+    static func videoStation(server: String, host: String) -> String {
+        server.isEmpty ? host : server
+    }
+
+    /// Every station a stream key is filed under, whatever it is called.
+    static func stations(prefix: String = targetPrefix) -> [String] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: C.appName,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        query[kSecReturnData as String] = false
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  account.hasPrefix(prefix) else { return nil }
+            return String(account.dropFirst(prefix.count))
+        }
+    }
+
+    /// The video stream key, carrying it over from wherever an older build
+    /// left it. The carry happens once: the key is re-filed under the platform
+    /// and the old entry removed, so nothing is left lying about under a name
+    /// that no longer means anything.
+    static func fetchVideoKey(server: String, host: String, stationName: String) -> String {
+        let station = videoStation(server: server, host: host)
+        let here = fetch(station: station)
+        if !here.isEmpty { return here }
+
+        // Only where the board still names the station it was filed under.
+        // NOT by picking up whatever else is in the keychain: somebody with a
+        // YouTube key who switches to Facebook would have the YouTube key
+        // adopted as their Facebook one, and a guess that moves a key is a
+        // guess that can lose it.
+        guard !stationName.isEmpty, stationName != station else { return "" }
+        let carried = fetch(station: stationName)
+        guard !carried.isEmpty else { return "" }
+        if store(station: station, key: carried) { forget(station: stationName) }
+        return carried
+    }
+
     /// The key for one station, or an empty string. Never throws.
     static func fetch(station: String, prefix: String = targetPrefix) -> String {
         var query = base(account: target(for: station, prefix: prefix))

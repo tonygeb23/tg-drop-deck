@@ -392,8 +392,9 @@ extension MainWindow {
         // The key is NOT in the board file. Anybody holding a YouTube key can
         // broadcast to that channel, and a board is plain JSON that people
         // send each other.
-        let keyStation = board.stream.name.isEmpty ? board.videoServer : board.stream.name
-        let keyField = NSSecureTextField(string: Secrets.fetch(station: keyStation))
+        let keyField = NSSecureTextField(string: Secrets.fetchVideoKey(
+            server: board.videoServer, host: board.videoHost,
+            stationName: board.stream.name))
         keyField.setAccessibilityLabel("Stream key")
         videoBox.addArrangedSubview(field("Stream key", keyField))
         videoBox.addArrangedSubview(note(
@@ -609,8 +610,11 @@ extension MainWindow {
                 }
                 videoHostField.isEditable = true
             }
-            keyField.stringValue = Secrets.fetch(station: board.stream.name.isEmpty
-                                                 ? which : board.stream.name)
+            // Each platform keeps its own key, so moving between them brings
+            // the right one back rather than showing the last one typed.
+            keyField.stringValue = Secrets.fetchVideoKey(
+                server: which, host: videoHostField.stringValue,
+                stationName: board.stream.name)
             whatText.string = GoingLive.note(which)
             whatText.setSelectedRange(NSRange(location: 0, length: 0))
             self?.speaker.announceState("\(StreamServers.serverLabel(which)). "
@@ -744,7 +748,11 @@ extension MainWindow {
             max(0, min(C.framingLevels.count - 1, framingPopup.indexOfSelectedItem))]
         board.liveTo = liveHereBox.state == .on ? C.liveToVideo : C.liveToAudio
         // The key goes to the keychain, never to the board file.
-        let station = board.stream.name.isEmpty ? board.videoServer : board.stream.name
+        // Filed by platform. NOT by the station name, which is the radio
+        // station's and can be cleared: when it was, the key was still in the
+        // keychain and nothing could find it, so it had to be fetched from the
+        // platform again every single time.
+        let station = Secrets.videoStation(server: board.videoServer, host: board.videoHost)
         let typedKey = keyField.stringValue.trimmingCharacters(in: .whitespaces)
         if typedKey != Secrets.fetch(station: station) {
             Secrets.store(station: station, key: typedKey)

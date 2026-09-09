@@ -14,6 +14,26 @@ if let at = CommandLine.arguments.firstIndex(of: "--streamtest") {
     exit(StreamTest.run(Array(CommandLine.arguments.dropFirst(at + 1))))
 }
 
+// Are the extra sources really on the air, or only configured to be? A source
+// delivering silence sounds exactly like one that works, from where the
+// presenter is sitting.
+if CommandLine.arguments.contains("--check-sources") {
+    exit(SourceCheck.run(seconds: {
+        if let at = CommandLine.arguments.firstIndex(of: "--check-sources"),
+           at + 1 < CommandLine.arguments.count,
+           let n = Double(CommandLine.arguments[at + 1]) { return n }
+        return 2.0
+    }()))
+}
+
+// Which way of asking for a process tap works on this machine. Diagnostic.
+if let at = CommandLine.arguments.firstIndex(of: "--tap-probe"),
+   at + 1 < CommandLine.arguments.count {
+    let seconds = at + 2 < CommandLine.arguments.count
+        ? (Double(CommandLine.arguments[at + 2]) ?? 6) : 6
+    exit(TapProbe.run(CommandLine.arguments[at + 1], seconds: seconds))
+}
+
 // Every key the app binds, one per line, for mac/check_guide.py.
 if CommandLine.arguments.contains("--dump-keys") {
     for key in KeyMap.dump() { print(key) }

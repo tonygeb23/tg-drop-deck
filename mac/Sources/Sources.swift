@@ -81,6 +81,12 @@ class BaseSource: RunningSource {
     var config: SourceConfig
     private(set) var lastError: String?
     private(set) var peak: Float = 0
+    /// How much audio has actually arrived from the capture, and how loud the
+    /// loudest of it was. Only for the diagnostics: it separates "nothing is
+    /// arriving" from "it arrives and then does not survive the way here",
+    /// which look identical from the far end and have nothing in common.
+    private(set) var framesIn = 0
+    private(set) var peakIn: Float = 0
     var isRunning: Bool { false }
 
     let monitorRing = AudioRing(frames: C.micRingFrames)
@@ -102,6 +108,9 @@ class BaseSource: RunningSource {
 
     func setError(_ message: String?) { lastError = message }
 
+    /// Start the arriving-audio meter again, for a fresh look at a source.
+    func resetMeter() { framesIn = 0; peakIn = 0 }
+
     func grow(_ frames: Int) {
         guard frames > capacity else { return }
         stereo.deallocate(); resampled.deallocate()
@@ -117,6 +126,8 @@ class BaseSource: RunningSource {
         let gain = config.muted ? 0 : dbToGain(config.gainDB)
         peak = foldToStereo(raw, frames: frames, channels: channels,
                             channel: config.channel, gain: gain, into: stereo)
+        framesIn += frames
+        peakIn = max(peakIn, peak)
 
         var out = stereo
         var count = frames
@@ -176,6 +187,17 @@ final class DeviceSource: BaseSource {
     override func start(outputRate: Double) -> Bool {
         guard !isRunning else { return true }
         self.outputRate = outputRate
+        // A named device that is not there is a failure, NOT a reason to open
+        // the built in microphone instead. The layer below falls back to the
+        // default input, which is right for the microphone and wrong here: a
+        // source set to a mixer on a desk would quietly become the laptop lid,
+        // sound perfectly healthy, and put the wrong thing on the air. Windows
+        // refuses the same way, with the same words.
+        if let uid = config.deviceUID, !uid.isEmpty,
+           AudioDevices.deviceID(forUID: uid) == nil {
+            setError("\(AudioDevices.name(forUID: uid) ?? "That device") is not plugged in")
+            return false
+        }
         guard input.open(deviceUID: config.deviceUID) else {
             setError(input.lastError)
             return false
@@ -332,6 +354,47 @@ final class ProcessSource: BaseSource {
 
     override var isRunning: Bool { running }
 
+    /// How a tap is asked for. **The only place it is built**, because getting
+    /// this wrong is silent.
+    ///
+    /// It MUST use one of the initialisers that takes the processes up front.
+    /// A plain `CATapDescription()` with the processes or the bundle ids set
+    /// afterwards is refused without saying so: Core Audio returns noErr and
+    /// hands back tap object 0, nothing is captured, and every layer above
+    /// goes on reporting the source as on the air. That is not documented
+    /// anywhere. It is measured, on the machine in front of you, by
+    /// `--tap-probe`, which builds every form and reports which ones make a
+    /// tap and which ones actually carry sound:
+    ///
+    ///     init(stereoMixdownOfProcesses:)                  tap, sound
+    ///     init(stereoMixdownOfProcesses:) + bundleIDs      tap, sound
+    ///     init(stereoMixdownOfProcesses: []) + bundleIDs   tap, sound
+    ///     CATapDescription() then set bundleIDs            NO TAP
+    ///     CATapDescription() then set processes            NO TAP
+    ///
+    /// Do not shorten this to the plain initialiser. It is the reason two
+    /// sources that were on the air went out as silence.
+    @available(macOS 14.2, *)
+    static func describeTap(bundle: String, sourceName: String,
+                            processes: [AudioObjectID]) -> CATapDescription {
+        let description = CATapDescription(stereoMixdownOfProcesses: processes)
+        description.name = "\(C.appName) tap for \(sourceName)"
+        description.isPrivate = true
+        // The presenter goes on hearing the program in their own ears while it
+        // also goes to air. Muting it locally would be catastrophic when the
+        // program is the screen reader.
+        description.muteBehavior = .unmuted
+        if #available(macOS 26.0, *) {
+            // From macOS 26 the tap can also name the program by bundle id,
+            // which is what lets a program be chosen before it has ever made a
+            // sound, and what lets the tap pick the program up again when it
+            // restarts. VoiceOver does get restarted.
+            description.bundleIDs = [bundle]
+            description.isProcessRestoreEnabled = true
+        }
+        return description
+    }
+
     @discardableResult
     override func start(outputRate: Double) -> Bool {
         guard !running else { return true }
@@ -345,26 +408,33 @@ final class ProcessSource: BaseSource {
         }
         self.outputRate = outputRate
 
-        let description = CATapDescription()
-        description.name = "\(C.appName) tap for \(config.name)"
-        description.isPrivate = true
-        // The presenter goes on hearing the program in their own ears while it
-        // also goes to air. Muting it locally would be catastrophic when the
-        // program is the screen reader.
-        description.muteBehavior = .unmuted
-
-        if #available(macOS 26.0, *) {
-            description.bundleIDs = [bundle]
-            // The tap remembers the program by bundle id and picks it up again
-            // when it restarts. VoiceOver does get restarted.
-            description.isProcessRestoreEnabled = true
-        } else {
-            guard let process = AudioProcesses.find(bundleID: bundle) else {
-                setError("\(config.name) is not making any audio at the moment")
-                return false
-            }
-            description.processes = [process.objectID]
+        // The tap MUST be built with one of the initialisers that takes the
+        // processes up front. A plain CATapDescription() with the processes or
+        // the bundle ids set afterwards is silently refused: Core Audio returns
+        // noErr and hands back tap object 0, so nothing is captured and nothing
+        // says why. That is not documented anywhere. It is measured, on this
+        // machine, by `--tap-probe`, which builds every form and reports which
+        // ones make a tap and which ones actually carry sound:
+        //
+        //   init(stereoMixdownOfProcesses:)                  tap, sound
+        //   init(stereoMixdownOfProcesses:) + bundleIDs      tap, sound
+        //   init(stereoMixdownOfProcesses: []) + bundleIDs   tap, sound
+        //   CATapDescription() then set bundleIDs            NO TAP
+        //   CATapDescription() then set processes            NO TAP
+        //
+        // Do not shorten this to the plain initialiser. It is the reason two
+        // sources that were on the air went out as silence.
+        let known = AudioProcesses.find(bundleID: bundle)
+        // objectID 0 means the program is running but has never opened audio,
+        // so Core Audio has no object for it yet and there is nothing to pass.
+        let ids: [AudioObjectID] = (known?.objectID).flatMap { $0 == 0 ? nil : [$0] } ?? []
+        if #unavailable(macOS 26.0), ids.isEmpty {
+            setError("\(config.name) has not played any audio yet. Play something in it, "
+                     + "then switch this source off and on again.")
+            return false
         }
+        let description = ProcessSource.describeTap(bundle: bundle, sourceName: config.name,
+                                                    processes: ids)
 
         var tap: AudioObjectID = 0
         let status = AudioHardwareCreateProcessTap(description, &tap)
@@ -372,7 +442,9 @@ final class ProcessSource: BaseSource {
             setError(status == kAudioHardwareIllegalOperationError
                      ? "macOS refused to capture that program. Allow \(C.appName) under "
                        + "Privacy and Security, Screen and System Audio Recording."
-                     : "That program's audio could not be captured (\(status))")
+                     : status == noErr
+                       ? "macOS would not capture \(config.name) and gave no reason."
+                       : "That program's audio could not be captured (\(status))")
             return false
         }
         tapID = tap
@@ -386,7 +458,14 @@ final class ProcessSource: BaseSource {
 
         // The tap is read through a private aggregate device, which is the only
         // way Core Audio offers to get at one.
-        let aggregateUID = "app.tgstudios.dropdeck.tap.\(config.id)"
+        // The name has to be unique for THIS capture, not just for this source.
+        // A fixed name collides with the same source in a second copy of the
+        // app, and with one left behind by a copy that was force quit, and Core
+        // Audio answers that collision with kAudioHardwareIllegalOperationError
+        // and no explanation. The source then reports "it did not start" and
+        // the program goes out as silence, which is the same ending as the tap
+        // fault this replaced and just as hard to see.
+        let aggregateUID = "app.tgstudios.dropdeck.tap.\(config.id).\(UUID().uuidString)"
         let description2: [String: Any] = [
             kAudioAggregateDeviceNameKey: "\(C.appName) \(config.name)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
@@ -401,7 +480,10 @@ final class ProcessSource: BaseSource {
         guard created == noErr, aggregate != 0 else {
             AudioHardwareDestroyProcessTap(tap)
             tapID = 0
-            setError("The capture device could not be made (\(created))")
+            setError(created == kAudioHardwareIllegalOperationError
+                     ? "macOS would not make a capture device for \(config.name). "
+                       + "Another copy of \(C.appName) may already be capturing it."
+                     : "The capture device could not be made (\(created))")
             return false
         }
         aggregateID = aggregate
@@ -499,7 +581,8 @@ final class SourceGroup: AudioSource {
     init() { scratch = .allocate(capacity: capacity * 2) }
     deinit { scratch.deallocate() }
 
-    func replace(with configs: [SourceConfig], outputRate: Double) {
+    @discardableResult
+    func replace(with configs: [SourceConfig], outputRate: Double) -> [String] {
         stopAll()
         lock.lock()
         sources = configs.map { config -> RunningSource in
@@ -508,6 +591,37 @@ final class SourceGroup: AudioSource {
         let list = sources
         lock.unlock()
         for source in list { source.start(outputRate: outputRate) }
+        return trouble
+    }
+
+    /// The wanted sources that are not actually running, each with its reason.
+    ///
+    /// **Nothing else in the app noticed that a source had failed.** Two
+    /// sources sat there marked on air, reading as on air, and went out as
+    /// silence, because the only place that ever looked was the sources panel
+    /// and only on the way out of it. Windows says "These sources would not
+    /// open" every time it opens them; this is that list.
+    var trouble: [String] {
+        all.filter { ($0.config.onAir || $0.config.monitor) && !$0.isRunning }
+           .map { source in
+               let why = source.lastError ?? "it would not open"
+               return "\(source.config.name): \(why)"
+           }
+    }
+
+    /// Try the ones that are not running again.
+    ///
+    /// A program can be chosen before it is open, and somebody who starts
+    /// Logic after going on air should not have to know to go back into a
+    /// dialog. Only the failed ones are touched, so a running capture is never
+    /// interrupted by the retry.
+    func retryFailed(outputRate: Double) -> [String] {
+        var cameOn: [String] = []
+        for source in all where !source.isRunning {
+            guard source.config.onAir || source.config.monitor else { continue }
+            if source.start(outputRate: outputRate) { cameOn.append(source.config.name) }
+        }
+        return cameOn
     }
 
     func stopAll() {

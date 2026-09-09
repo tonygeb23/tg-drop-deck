@@ -879,6 +879,48 @@ extension SelfTest {
               Secrets.forget(station: station)
               && Secrets.fetch(station: station).isEmpty)
 
+        // ---- WHERE THE VIDEO KEY IS FILED ---------------------------------
+        //
+        // It used to be filed under the radio station's name. That name can be
+        // changed, and loading a saved setup could clear it, and when it was
+        // cleared the key was still sitting in the keychain with nothing able
+        // to find it. It looked exactly like the app forgetting the key, and
+        // the only way back on air was to fetch a fresh one from the platform.
+        // Every single time. Reported as "I have to go get a new stream key
+        // every single time".
+        check("a video key is filed under the platform",
+              Secrets.videoStation(server: "youtube", host: "rtmps://a/live2") == "youtube")
+        check("and under the address when there is no platform",
+              Secrets.videoStation(server: "", host: "rtmp://mine/live") == "rtmp://mine/live")
+
+        let oldName = "TG Drop Deck self test old station"
+        let platform = "TG Drop Deck self test platform"
+        Secrets.forget(station: oldName)
+        Secrets.forget(station: platform)
+        Secrets.store(station: oldName, key: "carried-over-key")
+        let carried = Secrets.fetchVideoKey(server: platform, host: "rtmp://x",
+                                            stationName: oldName)
+        check("a key filed under the old station name is still found",
+              carried == "carried-over-key")
+        check("and is moved to the platform, so it is found next time",
+              Secrets.fetch(station: platform) == "carried-over-key")
+        check("and the entry under the old name is tidied away",
+              Secrets.fetch(station: oldName).isEmpty)
+        check("and the name it now lives under is listed",
+              Secrets.stations().contains(platform))
+
+        // It must NEVER go looking for a key it was not told about. Somebody
+        // with a YouTube key who switches to Facebook would otherwise have the
+        // YouTube key adopted as their Facebook one and the original deleted.
+        // A guess that moves a key is a guess that can lose it.
+        let other = "TG Drop Deck self test other platform"
+        Secrets.forget(station: other)
+        check("a platform with no key of its own gets nothing",
+              Secrets.fetchVideoKey(server: other, host: "rtmp://y", stationName: "").isEmpty)
+        check("and the key belonging to the first one is untouched",
+              Secrets.fetch(station: platform) == "carried-over-key")
+        Secrets.forget(station: platform)
+
         // Never put a whole key on screen or in a spoken line.
         check("a key is redacted to its last four",
               Secrets.redact("abcd-1234-wxyz") == "set, ending wxyz")

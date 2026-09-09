@@ -20,11 +20,16 @@ CONTENTS="${BUNDLE}/Contents"
 rm -rf "${BUILD_ROOT}"
 mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 
+# DROPDECK_FAST=1 skips the optimiser. Only for a quick diagnostic run on this
+# machine: never for anything that ships, which is why it is off by default.
+OPT="-O"
+if [ "${DROPDECK_FAST:-0}" = "1" ]; then OPT="-Onone"; echo "FAST build, not optimised, do not ship this"; fi
+
 echo "Compiling..."
 # MP3 comes from LAME, dynamically linked, because macOS has no MP3 encoder at
 # any layer. Separate library, its own file in Contents/Frameworks, nothing of
 # it linked into our binary: see vendor/README.md for why that shape matters.
-swiftc -O \
+swiftc $OPT \
   -target arm64-apple-macos14.0 \
   -import-objc-header Sources/LAMEBridge.h \
   -I vendor/include \

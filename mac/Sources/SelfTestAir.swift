@@ -551,6 +551,76 @@ extension SelfTest {
               && again.sources[0].bundleID == "com.apple.VoiceOver"
               && again.sources[0].isProcess)
 
+        // ---- THE TAP IS REALLY MADE ----------------------------------------
+        //
+        // The fault this guards against shipped, and it was invisible from
+        // every direction. `AudioHardwareCreateProcessTap` was handed a plain
+        // `CATapDescription()` with the bundle id set afterwards. It answered
+        // noErr and returned tap object 0. Nothing threw, nothing logged, the
+        // source reported itself on the air, the level meters were quiet
+        // because there was no sound to show, and two sources went out as
+        // silence for a whole broadcast.
+        //
+        // So the check is not that the description has the right fields on it.
+        // It is that Core Audio, on this machine, hands back a real tap for
+        // it. Nothing less would have caught this: every field was correct.
+        if #available(macOS 14.2, *), Permissions.state(.screen) == .allowed {
+            let me = Bundle.main.bundleIdentifier ?? "app.tgstudios.dropdeck"
+            let ids: [AudioObjectID] = (AudioProcesses.find(bundleID: me)?.objectID)
+                .flatMap { $0 == 0 ? nil : [$0] } ?? []
+            let description = ProcessSource.describeTap(
+                bundle: me, sourceName: "self test", processes: ids)
+            var tap: AudioObjectID = 0
+            let status = AudioHardwareCreateProcessTap(description, &tap)
+            check("a process tap is really made, not just asked for",
+                  status == noErr && tap != 0)
+            if tap != 0 { AudioHardwareDestroyProcessTap(tap) }
+
+            // And the shape that shipped is still refused, so if a future
+            // macOS starts accepting it this check says so rather than the
+            // knowledge quietly going stale.
+            let plain = CATapDescription()
+            if #available(macOS 26.0, *) { plain.bundleIDs = [me] }
+            plain.isPrivate = true
+            var noTap: AudioObjectID = 0
+            _ = AudioHardwareCreateProcessTap(plain, &noTap)
+            check("the plain description is still the one that gives nothing",
+                  noTap == 0)
+            if noTap != 0 { AudioHardwareDestroyProcessTap(noTap) }
+        }
+
+        // A source that is wanted but did not start has to be findable, since
+        // nothing else in the app was looking and that is how two silent
+        // sources reached the air.
+        // A device that is not there, rather than a program that is not
+        // running: from macOS 26 a tap can legitimately be made for a program
+        // before it starts, and waits for it, so that is not a failure to
+        // report. A cable that is not plugged in always is.
+        var wanted = SourceConfig()
+        wanted.name = "not a real device"
+        wanted.kind = "device"
+        wanted.deviceUID = "no such device, this is the self test"
+        wanted.onAir = true
+        let troubleGroup = SourceGroup()
+        let trouble = troubleGroup.replace(with: [wanted], outputRate: C.defaultSampleRate)
+        check("a source whose device is gone would not open", trouble.count == 1)
+        check("and it is named, with a reason",
+              trouble.first?.hasPrefix("not a real device: ") == true
+              && trouble.first?.hasSuffix("is not plugged in") == true)
+        check("and the group agrees it is in trouble", troubleGroup.trouble.count == 1)
+        troubleGroup.stopAll()
+
+        // A source that is not wanted is not trouble. A laptop that moves
+        // between desks has sources switched off on purpose and they must not
+        // turn into a warning in front of a show.
+        var off = wanted
+        off.onAir = false
+        off.monitor = false
+        let quietGroup = SourceGroup()
+        check("a source nobody asked for is not reported",
+              quietGroup.replace(with: [off], outputRate: C.defaultSampleRate).isEmpty)
+        quietGroup.stopAll()
+
         // NOTHING opens a microphone except a keypress. A board carries the
         // device and the gain and deliberately does not carry "it was on".
         check("a board never says the microphone was on",

@@ -167,6 +167,18 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     func run(over parent: NSWindow?) -> Bool {
         devices = AudioDevices.inputs()
         programs = AudioProcesses.all()
+        // A program the board already names stays in the list even when it is
+        // not running at this moment, because otherwise opening this panel and
+        // pressing OK would quietly throw that choice away. Losing a setting by
+        // looking at it is the worst kind of bug.
+        for c in working where c.isProcess {
+            guard let bundle = c.bundleID, !bundle.isEmpty,
+                  !programs.contains(where: { $0.bundleID == bundle }) else { continue }
+            programs.append(AudioProcessInfo(
+                objectID: 0, pid: 0, bundleID: bundle,
+                name: bundle.components(separatedBy: ".").last ?? bundle,
+                isPlaying: false, isKnownToCoreAudio: false))
+        }
 
         let alert = NSAlert()
         alert.messageText = "Audio sources"
@@ -244,6 +256,10 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
         label("Program", 90)
         programPopup = NSPopUpButton(frame: NSRect(x: 310, y: 64, width: 300, height: 26))
+        // The first row is "not chosen", exactly as the device popup has, so a
+        // brand new source starts with nothing chosen instead of silently
+        // inheriting whatever the row above it points at.
+        programPopup.addItem(withTitle: "not chosen")
         for p in programs {
             // Say which of the three a program is, because "not in the list"
             // and "in the list but silent" are different problems and only one
@@ -313,10 +329,8 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         kindPopup.selectItem(at: c.isProcess ? 1 : 0)
         devicePopup.selectItem(at: (devices.firstIndex { $0.uid == c.deviceUID }
                                     .map { $0 + 1 }) ?? 0)
-        if let bundle = c.bundleID,
-           let index = programs.firstIndex(where: { $0.bundleID == bundle }) {
-            programPopup.selectItem(at: index)
-        }
+        programPopup.selectItem(at: (programs.firstIndex { $0.bundleID == c.bundleID }
+                                     .map { $0 + 1 }) ?? 0)
         channelPopup.selectItem(at: MicChannel.allCases.firstIndex(of: c.channel) ?? 0)
         gainSlider.doubleValue = Double(c.gainDB)
         onAirBox.state = c.onAir ? .on : .off
@@ -335,7 +349,7 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         let d = devicePopup.indexOfSelectedItem
         c.deviceUID = d == 0 ? nil : devices[d - 1].uid
         let p = programPopup.indexOfSelectedItem
-        if p >= 0 && p < programs.count { c.bundleID = programs[p].bundleID }
+        c.bundleID = (p >= 1 && p <= programs.count) ? programs[p - 1].bundleID : nil
         c.channel = MicChannel.allCases[max(0, channelPopup.indexOfSelectedItem)]
         c.gainDB = Float(gainSlider.doubleValue.rounded())
         c.onAir = onAirBox.state == .on
