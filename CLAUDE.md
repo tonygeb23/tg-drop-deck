@@ -21,6 +21,22 @@ line was written, which is why they match exactly.
   the diff afterwards**: a dash swapped for a comma leaves comma splices, and
   the tool cannot tell a good comma from a bad one.
 
+- **Mac work does not touch Windows files, and Windows work does not touch
+  Mac files.** Tony's rule, 8 September 2026: "if we're on mac, you do not
+  modify a single windows code. you can look at it for an analysis, but, no
+  modifications." The two apps mirror one another in FEATURES. They are
+  separate code, separate operating systems and **separate version numbers**.
+  Read across the line freely, write across it never.
+
+  This was not a tidiness rule when he made it. `tools/release_mac.py` read
+  its version out of `dropdeck/constants.py`, so eight Mac releases bumped
+  the WINDOWS app's version from 3.5.2 to 3.5.28 while the newest Windows
+  installer in existence was 3.5.2. A Windows build claiming a version above
+  anything the feed can serve answers "you have the newest one" for ever, so
+  no Windows fix could ever have reached him again. One line, no Windows code
+  changed at all, and the update channel was off the air.
+  `tests/test_version_separation.py` asserts each build cuts its own version.
+
 Inherited from the other TG Studios apps, and not negotiable here either:
 
 - **wxPython only.** Never tkinter.

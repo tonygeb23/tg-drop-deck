@@ -39,9 +39,17 @@ import sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Standalone on purpose. dropdeck/ imports numpy and wx, and a Mac has neither
-# and should not need them to cut a Mac release. The two facts this needs from
-# the Python package, the version and the update public key, are read out of
-# the source as text so they cannot drift from what the apps carry.
+# and should not need them to cut a Mac release. Facts are read out of the
+# source as text so they cannot drift from what the apps carry.
+#
+# The VERSION comes from mac/Sources/Constants.swift, never from
+# dropdeck/constants.py. Cutting a Mac release used to bump the version in the
+# Windows app's own constants file, which left the Windows build claiming a
+# version no Windows installer had ever carried; because that number was
+# HIGHER than the live Windows manifest, the Windows updater answered "you
+# have the newest one" and could never offer a fix again. The two apps mirror
+# one another in FEATURES. They do not share a version number, and Mac work
+# does not write to Windows files.
 
 
 def _constant(path, name):
@@ -52,8 +60,18 @@ def _constant(path, name):
     return found.group(1)
 
 
+def _swift_constant(path, name):
+    text = open(path, encoding="utf-8").read()
+    found = re.search(r'^\s*static let %s\s*=\s*"([^"]+)"' % re.escape(name),
+                      text, re.M)
+    if not found:
+        raise SystemExit("Could not read %s from %s" % (name, path))
+    return found.group(1)
+
+
 APP_NAME = _constant(os.path.join(HERE, "dropdeck", "constants.py"), "APP_NAME")
-APP_VERSION = _constant(os.path.join(HERE, "dropdeck", "constants.py"), "APP_VERSION")
+APP_VERSION = _swift_constant(os.path.join(HERE, "mac", "Sources", "Constants.swift"),
+                              "appVersion")
 PUBLIC_KEY_B64 = _constant(os.path.join(HERE, "dropdeck", "appupdate.py"), "PUBLIC_KEY_B64")
 
 #: The shared TG Studios update key, on the Windows machine, and the Mac's own,
@@ -352,9 +370,10 @@ def build():
     with open(os.path.join(APP, "Contents", "Info.plist"), "rb") as fh:
         built = plistlib.load(fh).get("CFBundleShortVersionString")
     if built != APP_VERSION:
-        raise SystemExit("The bundle says %s but constants.py says %s. The two copies "
-                         "ship in lockstep: fix mac/Resources/Info.plist and "
-                         "mac/Sources/Constants.swift." % (built, APP_VERSION))
+        raise SystemExit("The bundle says %s but mac/Sources/Constants.swift says "
+                         "%s. Fix mac/Resources/Info.plist and "
+                         "mac/Sources/Constants.swift so the two agree."
+                         % (built, APP_VERSION))
 
     print("Running the built app's self test")
     result = subprocess.run([BINARY, "--selftest"], capture_output=True, text=True)
