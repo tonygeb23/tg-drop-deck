@@ -127,13 +127,14 @@ extension MainWindow {
         // Added out here rather than inside Preflighter, which is checked line
         // for line against the Windows copy and must stay identical.
         _ = sourceGroup.retryFailed(outputRate: group.sampleRate)
-        let trouble = sourceGroup.trouble
-        guard !trouble.isEmpty else { return report }
-        return Preflight(
-            target: report.target, lines: report.lines,
-            notes: report.notes + trouble.map {
-                PreflightNote(.warn, "A source is not on the air. \($0)")
-            })
+        let notes = sourceGroup.trouble.map {
+            PreflightNote(.warn, "A source is not on the air. \($0)")
+        } + sourceGroup.waitingForAProgram.map {
+            PreflightNote(.warn, "A source will be silent. \($0)")
+        }
+        guard !notes.isEmpty else { return report }
+        return Preflight(target: report.target, lines: report.lines,
+                         notes: report.notes + notes)
     }
 
     // ---------------------------------------------------------- the keys ---

@@ -1,5 +1,67 @@
 # Changelog
 
+## 3.5.28 for Mac, 8 September 2026
+
+**Two things a source could still get away with.**
+
+**A source set to capture a program that is not running says so before you go
+live.** From macOS 26 the capture for a program can be made before that
+program has started, and it waits for it. That is the right behaviour, and it
+is also a brand new way for a source to pass every check in the app and still
+send nothing: the capture is healthy, the program simply is not there. Every
+other kind of silent source is now caught, so this one is too.
+
+**The channel popup no longer lies to a screen reader.** For a captured
+program it sat dimmed on "Both, mixed together (a microphone)". Dimmed does
+not read as "does not apply" to somebody hearing it aloud, it reads as the
+setting in force, and since 3.5.27 that is the opposite of what happens: a
+captured program is always kept in stereo. It says stereo now. The choice the
+source has as a device is left untouched underneath, so switching it back to
+a device brings the real one straight back instead of quietly becoming
+stereo.
+
+498 checks, 0 failed. All nine cross checks against the Windows modules remain
+byte for byte identical.
+
+## 3.5.27 for Mac, 8 September 2026
+
+**A captured program goes out in stereo.**
+
+Reported by Tony: "Logic's audio was in mono when coming through YouTube."
+
+All of it was. Every captured program, for everybody, and the panel would not
+let you change it, because the channel popup is switched off for a program.
+
+The board's channel setting is meant for a device. A microphone on one leg of
+a stereo interface has to be mixed or picked, and the default is "both,
+mixed together", which is right for a microphone and wrong for everything
+else. It was being applied to captured programs as well, so a stereo mix
+arrived flat.
+
+There is nothing to choose for a program. The tap is already a stereo mixdown
+of that program's own output, so both channels are exactly what it is
+playing. They are kept as they are.
+
+**This is what Windows does too, though it gets there by accident.** Its
+channel setting only ever reaches a device input, because a program source
+uses a different capture class that has no channel attribute at all. The Mac
+applied it to both.
+
+A capture with more than two channels is now read frame by frame rather than
+as if it were interleaved stereo, which an aggregate device clocked by a
+multi channel interface would have handed over as noise.
+
+**Help, Check my audio sources now says whether each source is really in
+stereo.** A level meter cannot show you that: mono is two identical numbers
+and looks exactly like a healthy signal. Measured on Tony's Mac, Logic Pro
+now reads "in stereo, the two channels differ" and VoiceOver reads "the same
+in both ears", which is correct, because VoiceOver speech is mono unless its
+3D sounds are switched on. Nothing folds it any more, so when they are on it
+goes out in stereo.
+
+496 checks, 0 failed. All nine cross checks against the Windows modules remain
+byte for byte identical.
+
 ## 3.5.26 for Mac, 8 September 2026
 
 **Your stream key is remembered again.**

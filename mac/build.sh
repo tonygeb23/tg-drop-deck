@@ -88,6 +88,10 @@ fi
 # rather than presenting eighty empty buttons. It is the same audio the Windows
 # copy ships, referenced by relative path from its own board file.
 if [ -d ../demo ]; then
+  # Removed first, because `cp -R src dst` copies INTO dst when dst already
+  # exists, giving Resources/demo/demo and a download twice the size it should
+  # be. That reached the feed once, when two builds ran over the same folder.
+  rm -rf "${CONTENTS}/Resources/demo"
   cp -R ../demo "${CONTENTS}/Resources/demo"
 fi
 if [ -f Resources/AppIcon.icns ]; then

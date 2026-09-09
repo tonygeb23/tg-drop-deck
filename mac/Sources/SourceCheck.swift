@@ -141,6 +141,11 @@ enum SourceCheck {
                 let inDB = base.peakIn > 0 ? 20 * log10(Double(base.peakIn)) : -200
                 print(String(format: "   arriving from it  : %d frames, loudest %.4f (%.1f dB)",
                              base.framesIn, base.peakIn, inDB))
+                print("   in stereo         : "
+                    + (base.sawStereo ? "yes, the two channels differ"
+                       : base.peakIn > 0.0001
+                         ? "NO, both ears are identical"
+                         : "cannot tell yet, nothing loud enough"))
             }
             print(String(format: "   sound on the air  : peak %.4f (%.1f dB)",
                          peak, db))

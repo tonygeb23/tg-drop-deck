@@ -37,7 +37,8 @@ enum SourceHealth {
             let c = source.config
             let where_ = c.isProcess
                 ? (c.bundleID.map { running[$0] ?? $0 } ?? "no program chosen")
-                : (c.deviceUID ?? "no device chosen")
+                : (c.deviceUID.map { AudioDevices.name(forUID: $0) ?? $0 }
+                   ?? "no device chosen")
             let db = source.peakIn > 0 ? 20 * log10(Double(source.peakIn)) : -200
 
             if !(c.onAir || c.monitor) {
@@ -68,8 +69,17 @@ enum SourceHealth {
                         + "arriving is silence. Play something in it, or check it is not "
                         + "muted at its own end.")
             }
+            // Mono where stereo was expected is invisible on a level meter,
+            // so it is said. A program capture is always stereo now; a device
+            // folded on purpose is not a fault and does not read as one.
+            let sound = source.sawStereo
+                ? "in stereo"
+                : (c.isProcess ? "the same in both ears, which for a program is "
+                               + "either a mono program or nothing playing in stereo yet"
+                   : "the same in both ears, which is what \(c.channel.spoken) does")
             return Finding(name: c.name, good: true,
-                line: String(format: "%@, %@: on the air, %.0f decibels.", c.name, where_, db))
+                line: String(format: "%@, %@: on the air, %.0f decibels, %@.",
+                             c.name, where_, db, sound))
         }
     }
 
@@ -108,7 +118,6 @@ final class SourceHealthPanel: NSObject {
     private let micOnAir: Bool
     private let micOpen: Bool
     private var results: NSTextView!
-    private var listenButton: NSButton?
     private var busy = false
 
     init(group: SourceGroup, speaker: Speaker, micOnAir: Bool, micOpen: Bool) {
@@ -119,7 +128,10 @@ final class SourceHealthPanel: NSObject {
         super.init()
     }
 
+    /// `parent` is not used: an NSAlert run as a sheet cannot be run again in
+    /// a loop, and this panel is meant to be listened with more than once.
     func run(over parent: NSWindow?) {
+        _ = parent
         let alert = NSAlert()
         alert.messageText = "Check my audio sources"
         alert.informativeText =
@@ -138,15 +150,18 @@ final class SourceHealthPanel: NSObject {
         results = view
         alert.accessoryView = scroll
         alert.window.initialFirstResponder = results
-        ModalKeys.owner = alert.window
+        alert.buttons.first?.setAccessibilityLabel("Listen")
+        alert.buttons.last?.setAccessibilityLabel("Close")
 
         while true {
-            let pressed = parent.map { alert.beginSheetModal(for: $0) } == nil
-                ? alert.runModal() : alert.runModal()
-            guard pressed == .alertFirstButtonReturn else { break }
+            // The alert closes on any button, so it is run again. Everything it
+            // has found is held on this object, so nothing is lost. The same
+            // shape as Check my shot, and PanelKeys rather than runModal so
+            // Escape closes it and the text view keeps its own keys.
+            let answer = PanelKeys.run(alert)
+            guard answer == .alertFirstButtonReturn else { break }
             listen()
         }
-        ModalKeys.owner = nil
     }
 
     private func listen() {
@@ -160,8 +175,9 @@ final class SourceHealthPanel: NSObject {
             guard let id = app.bundleIdentifier else { continue }
             running[id] = app.localizedName ?? id
         }
-        // The main queue has to keep turning, or the dialog goes grey and a
-        // screen reader has nothing to read while it waits.
+        // The run loop has to keep turning while it listens, so the app stays
+        // alive and the announcement is actually spoken. Sleeping the thread
+        // here would freeze the whole app for six seconds.
         let until = Date().addingTimeInterval(SourceHealth.window)
         while Date() < until {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))

@@ -197,11 +197,17 @@ func foldToStereo(_ raw: UnsafePointer<Float>, frames: Int, channels: UInt32,
                   into out: UnsafeMutablePointer<Float>) -> Float {
     var loudest: Float = 0
     if channels >= 2 {
+        // Step by the REAL channel count, not by two. A capture with more than
+        // two channels, which an aggregate device clocked by a multi channel
+        // interface will hand over, would otherwise be read as interleaved
+        // stereo and come out as noise. For two channels this is the same
+        // arithmetic it always was.
+        let step = Int(channels)
         // Stereo is kept, not folded. Everything else lands in both ears,
         // because that is what a mono voice needs.
         if channel == .stereo {
             for i in 0..<frames {
-                let l = raw[i * 2] * gain, r = raw[i * 2 + 1] * gain
+                let l = raw[i * step] * gain, r = raw[i * step + 1] * gain
                 loudest = max(loudest, max(abs(l), abs(r)))
                 out[i * 2] = l
                 out[i * 2 + 1] = r
@@ -209,12 +215,14 @@ func foldToStereo(_ raw: UnsafePointer<Float>, frames: Int, channels: UInt32,
             return loudest
         }
         for i in 0..<frames {
-            let l = raw[i * 2], r = raw[i * 2 + 1]
             let v: Float
             switch channel {
-            case .left: v = l
-            case .right: v = r
-            default: v = (l + r) * 0.5
+            case .left: v = raw[i * step]
+            case .right: v = raw[i * step + 1]
+            default:
+                var sum: Float = 0
+                for c in 0..<step { sum += raw[i * step + c] }
+                v = sum / Float(step)
             }
             let scaled = v * gain
             loudest = max(loudest, abs(scaled))

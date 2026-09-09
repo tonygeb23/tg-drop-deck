@@ -87,6 +87,11 @@ class BaseSource: RunningSource {
     /// which look identical from the far end and have nothing in common.
     private(set) var framesIn = 0
     private(set) var peakIn: Float = 0
+    /// Whether the two channels have ever differed. A program folded to mono
+    /// puts the same number in both ears for ever, and that is invisible from
+    /// a level meter, which is how a stereo mix went out flat without anybody
+    /// being able to point at where.
+    private(set) var sawStereo = false
     var isRunning: Bool { false }
 
     let monitorRing = AudioRing(frames: C.micRingFrames)
@@ -109,7 +114,15 @@ class BaseSource: RunningSource {
     func setError(_ message: String?) { lastError = message }
 
     /// Start the arriving-audio meter again, for a fresh look at a source.
-    func resetMeter() { framesIn = 0; peakIn = 0 }
+    func resetMeter() { framesIn = 0; peakIn = 0; sawStereo = false }
+
+    /// How the incoming channels are folded down to the two that go out.
+    ///
+    /// The board's choice, for a device: a microphone on one leg of a stereo
+    /// interface has to be mixed or picked, and "both, mixed together" is the
+    /// right default for one. A captured PROGRAM overrides it, because there
+    /// is nothing to choose: see `ProcessSource`.
+    var foldChannel: MicChannel { config.channel }
 
     func grow(_ frames: Int) {
         guard frames > capacity else { return }
@@ -125,9 +138,18 @@ class BaseSource: RunningSource {
         grow(frames)
         let gain = config.muted ? 0 : dbToGain(config.gainDB)
         peak = foldToStereo(raw, frames: frames, channels: channels,
-                            channel: config.channel, gain: gain, into: stereo)
+                            channel: foldChannel, gain: gain, into: stereo)
         framesIn += frames
         peakIn = max(peakIn, peak)
+        // Sampled rather than every frame: this runs in the audio callback and
+        // one difference anywhere is the whole answer.
+        if !sawStereo {
+            var i = 0
+            while i < frames {
+                if stereo[i * 2] != stereo[i * 2 + 1] { sawStereo = true; break }
+                i += 64
+            }
+        }
 
         var out = stereo
         var count = frames
@@ -353,6 +375,23 @@ final class ProcessSource: BaseSource {
     private var captureRate: Double = C.defaultSampleRate
 
     override var isRunning: Bool { running }
+
+    /// **A captured program is always kept in stereo.**
+    ///
+    /// The tap is a stereo mixdown of that program's own output, so the two
+    /// channels are already exactly what the program is playing. Folding them
+    /// together would throw away half of a stereo mix for no reason, and there
+    /// is no microphone-on-one-leg case here to fold for.
+    ///
+    /// This is also what Windows does, though it arrives there by accident:
+    /// its channel setting is only ever applied to a device, because a program
+    /// source uses `ProcessCapture`, which has no channel attribute at all.
+    /// The Mac applied the board's channel to both, and the board's default is
+    /// "both, mixed together", so **every captured program went out in mono**
+    /// while the panel would not even let you change it: the channel popup is
+    /// disabled for a program, correctly, because the setting does not apply.
+    /// Reported by Tony: Logic Pro arrived on YouTube in mono.
+    override var foldChannel: MicChannel { .stereo }
 
     /// How a tap is asked for. **The only place it is built**, because getting
     /// this wrong is silent.
@@ -607,6 +646,24 @@ final class SourceGroup: AudioSource {
                let why = source.lastError ?? "it would not open"
                return "\(source.config.name): \(why)"
            }
+    }
+
+    /// Sources that are perfectly healthy and will still be silent.
+    ///
+    /// From macOS 26 a tap can be made for a program BEFORE that program is
+    /// running, and it waits for it. That is the right behaviour, and it is
+    /// also a new way for a source to pass every check and send nothing: the
+    /// capture is fine, the program simply is not there. Said before going
+    /// live rather than discovered afterwards on somebody's phone.
+    var waitingForAProgram: [String] {
+        all.compactMap { source in
+            let c = source.config
+            guard c.isProcess, c.onAir, source.isRunning,
+                  let bundle = c.bundleID, !bundle.isEmpty,
+                  AudioProcesses.find(bundleID: bundle) == nil else { return nil }
+            let program = bundle.components(separatedBy: ".").last ?? bundle
+            return "\(c.name) is set to capture \(program), which is not running"
+        }
     }
 
     /// Try the ones that are not running again.

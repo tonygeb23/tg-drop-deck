@@ -608,7 +608,98 @@ extension SelfTest {
               trouble.first?.hasPrefix("not a real device: ") == true
               && trouble.first?.hasSuffix("is not plugged in") == true)
         check("and the group agrees it is in trouble", troubleGroup.trouble.count == 1)
-        troubleGroup.stopAll()
+
+        func troubleGroup2() -> SourceGroup {
+            let g = SourceGroup()
+            g.replace(with: [wanted], outputRate: C.defaultSampleRate)
+            return g
+        }
+
+        // What Help, Check my audio sources says about that same source. The
+        // words matter as much as the fact: this is read aloud, and "NOT on
+        // the air" has to be the part that lands.
+        let second = troubleGroup2()
+        let findings = SourceHealth.read(SourceHealth.look(at: second), running: [:])
+        defer { second.stopAll(); troubleGroup.stopAll() }
+        check("the check says a source that would not open is not on the air",
+              findings.count == 1 && findings[0].good == false
+              && findings[0].line.contains("NOT on the air"))
+        check("and the report counts it",
+              SourceHealth.report(findings, micOnAir: true, micOpen: true)
+                  .contains("1 of your 1 other sources needs attention"))
+        check("and says when the microphone is open but not going out",
+              SourceHealth.report([], micOnAir: false, micOpen: true)
+                  .contains("it is NOT going out"))
+
+        // ---- A CAPTURED PROGRAM STAYS IN STEREO ---------------------------
+        //
+        // The board's channel setting is for a device: a microphone on one leg
+        // of a stereo interface has to be mixed or picked. It was being applied
+        // to captured programs too, and its default is "both, mixed together",
+        // so **every program went out in mono** while the panel would not let
+        // you change it, because the popup is disabled for a program. Reported
+        // by Tony: Logic Pro arrived on YouTube in mono. Windows keeps program
+        // captures in stereo, though by accident: its channel only ever
+        // reaches a device input.
+        var stereoWanted = SourceConfig()
+        stereoWanted.kind = "process"
+        stereoWanted.channel = .mix
+        check("a captured program is kept in stereo whatever the board says",
+              ProcessSource(config: stereoWanted).foldChannel == .stereo)
+        var deviceWanted = stereoWanted
+        deviceWanted.kind = "device"
+        check("and a device still does what the board says",
+              DeviceSource(config: deviceWanted).foldChannel == .mix)
+
+        // The fold itself, on known numbers.
+        let two: [Float] = [1.0, -0.5, 0.25, -0.75]     // 2 frames, L R L R
+        var folded = [Float](repeating: 0, count: 4)
+        _ = two.withUnsafeBufferPointer { input in
+            folded.withUnsafeMutableBufferPointer { output in
+                foldToStereo(input.baseAddress!, frames: 2, channels: 2,
+                             channel: .stereo, gain: 1, into: output.baseAddress!)
+            }
+        }
+        check("stereo keeps the two channels apart",
+              folded == [1.0, -0.5, 0.25, -0.75])
+        _ = two.withUnsafeBufferPointer { input in
+            folded.withUnsafeMutableBufferPointer { output in
+                foldToStereo(input.baseAddress!, frames: 2, channels: 2,
+                             channel: .mix, gain: 1, into: output.baseAddress!)
+            }
+        }
+        check("mixed puts the average in both", folded == [0.25, 0.25, -0.25, -0.25])
+
+        // More than two channels in, which an aggregate clocked by a multi
+        // channel interface hands over. Stepping by two would read frame two's
+        // first channel as frame one's right.
+        let four: [Float] = [1.0, -1.0, 0.5, 0.5,       // frame 1, four channels
+                             0.2, -0.2, 0.0, 0.0]       // frame 2
+        _ = four.withUnsafeBufferPointer { input in
+            folded.withUnsafeMutableBufferPointer { output in
+                foldToStereo(input.baseAddress!, frames: 2, channels: 4,
+                             channel: .stereo, gain: 1, into: output.baseAddress!)
+            }
+        }
+        check("four channels in gives the first two out, frame by frame",
+              folded == [1.0, -1.0, 0.2, -0.2])
+
+        // A tap made for a program that is not running is healthy AND silent,
+        // which is a combination nothing else in the app can tell apart.
+        var absent = SourceConfig()
+        absent.name = "a program nobody is running"
+        absent.kind = "process"
+        absent.bundleID = "com.example.definitely.not.running"
+        absent.onAir = true
+        let absentGroup = SourceGroup()
+        absentGroup.replace(with: [absent], outputRate: C.defaultSampleRate)
+        if absentGroup.all.first?.isRunning == true {
+            check("a capture waiting for a program that is not running is flagged",
+                  absentGroup.waitingForAProgram.count == 1)
+            check("and it names the program",
+                  absentGroup.waitingForAProgram.first?.contains("running") == true)
+        }
+        absentGroup.stopAll()
 
         // A source that is not wanted is not trouble. A laptop that moves
         // between desks has sources switched off on purpose and they must not

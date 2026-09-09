@@ -331,7 +331,13 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                                     .map { $0 + 1 }) ?? 0)
         programPopup.selectItem(at: (programs.firstIndex { $0.bundleID == c.bundleID }
                                      .map { $0 + 1 }) ?? 0)
-        channelPopup.selectItem(at: MicChannel.allCases.firstIndex(of: c.channel) ?? 0)
+        // A captured program is always kept in stereo, so the popup SAYS
+        // stereo rather than sitting dimmed on "both, mixed together". Dimmed
+        // does not mean "does not apply" to somebody reading it aloud: it
+        // reads as the setting in force, and it would be the opposite of what
+        // actually happens to that program's audio.
+        channelPopup.selectItem(at: MicChannel.allCases.firstIndex(
+            of: c.isProcess ? .stereo : c.channel) ?? 0)
         gainSlider.doubleValue = Double(c.gainDB)
         onAirBox.state = c.onAir ? .on : .off
         monitorBox.state = c.monitor ? .on : .off
@@ -343,6 +349,7 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     @objc private func fieldChanged() {
         guard selected >= 0, selected < working.count else { return }
         var c = working[selected]
+        let wasProcess = c.isProcess
         let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         if !name.isEmpty { c.name = name }
         c.kind = kindPopup.indexOfSelectedItem == 1 ? "process" : "device"
@@ -350,7 +357,15 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         c.deviceUID = d == 0 ? nil : devices[d - 1].uid
         let p = programPopup.indexOfSelectedItem
         c.bundleID = (p >= 1 && p <= programs.count) ? programs[p - 1].bundleID : nil
-        c.channel = MicChannel.allCases[max(0, channelPopup.indexOfSelectedItem)]
+        // Only a device has a channel to choose. A program shows stereo
+        // because that is what happens to it, and its stored choice is left
+        // untouched so switching the source back to a device brings the real
+        // one straight back rather than quietly becoming stereo.
+        if !c.isProcess && !wasProcess {
+            c.channel = MicChannel.allCases[max(0, channelPopup.indexOfSelectedItem)]
+        }
+        channelPopup.selectItem(at: MicChannel.allCases.firstIndex(
+            of: c.isProcess ? .stereo : c.channel) ?? 0)
         c.gainDB = Float(gainSlider.doubleValue.rounded())
         c.onAir = onAirBox.state == .on
         c.monitor = monitorBox.state == .on
