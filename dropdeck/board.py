@@ -222,6 +222,24 @@ class Board:
         #: presenter's headphones, and the show does not.
         self.mic_output_name = None
         self.mic_output_hostapi = None
+        # Sending the show to another program on this machine. Off until it
+        # is set up. See send.py: this is the on air mix out of a sound card,
+        # rather than one more place the pads can be routed to.
+        self.send_on = False
+        self.send_device_name = None
+        self.send_device_hostapi = None
+        self.send_gain_db = 0.0
+        #: The NAME of the one source the send leaves out. Mix minus: the
+        #: send to TeamTalk must not carry the TeamTalk capture, or everybody
+        #: in the call hears themselves. By name rather than by index,
+        #: because a source list gets reordered and an index would silently
+        #: start excluding somebody else.
+        self.send_minus = ""
+        #: Whether the presenter is listening to the send. Not saved as ON:
+        #: it is a confidence check you do during a show, like a mute, and
+        #: coming back tomorrow to a second copy of everything in your
+        #: headphones is worse than pressing the key again.
+        self.send_monitor = False
         #: Whether system-wide hotkeys are armed. Off by default: while they
         #: are on this app owns those combinations across the whole machine,
         #: so it has to be something the user turned on deliberately.
@@ -629,6 +647,11 @@ class Board:
             "mic_output_hostapi": self.mic_output_hostapi,
             "playlist": self.playlist.to_dict(),
             "drops": self.drops.to_dict(),
+            "send_on": bool(self.send_on),
+            "send_device_name": self.send_device_name,
+            "send_device_hostapi": self.send_device_hostapi,
+            "send_gain_db": float(self.send_gain_db),
+            "send_minus": self.send_minus or "",
             "global_hotkeys_on": bool(self.global_hotkeys_on),
             "device_name": self.device_name,
             "device_hostapi": self.device_hostapi,
@@ -730,6 +753,24 @@ class Board:
         board.mic_monitor = bool(data.get("mic_monitor", False))
         board.mic_output_name = data.get("mic_output_name")
         board.mic_output_hostapi = data.get("mic_output_hostapi")
+        board.send_on = bool(data.get("send_on", False))
+        board.send_device_name = data.get("send_device_name")
+        board.send_device_hostapi = data.get("send_device_hostapi")
+        try:
+            gain = float(data.get("send_gain_db", 0.0))
+            # NaN clamps to the MAXIMUM, not to zero: every comparison with
+            # NaN is False, so min(24.0, nan) is 24.0. A corrupt board file
+            # with NaN or Infinity in it therefore loaded as +24 dB, a
+            # sixteenfold boost into somebody's call, silently. Found by
+            # Mark, 10 September 2026.
+            if gain != gain or gain in (float("inf"), float("-inf")):
+                raise ValueError("not a real number")
+            board.send_gain_db = max(C.MIN_MIC_GAIN_DB,
+                                     min(C.MAX_MIC_GAIN_DB, gain))
+        except (TypeError, ValueError):
+            board.send_gain_db = 0.0
+        minus = data.get("send_minus")
+        board.send_minus = minus if isinstance(minus, str) else ""
         board.bed_fade_in = _fade(data.get("bed_fade_in"), C.FADE_IN_BED)
         board.bed_fade_out = _fade(data.get("bed_fade_out"), C.FADE_OUT_BED)
 

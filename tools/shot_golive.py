@@ -30,7 +30,8 @@ from dropdeck import constants as C
 from dropdeck import preflight
 from dropdeck.board import Board
 from dropdeck import colours
-from dropdeck.dialogs import (ColourChoiceDialog, ColoursDialog,
+from dropdeck.dialogs import (SendDialog,
+                              ColourChoiceDialog, ColoursDialog,
                               ShotCheckDialog,
                               GoLiveDialog, ScreenTextDialog,
                               SourceControlDialog, VideoSourceDialog)
@@ -132,7 +133,8 @@ def main():
             ("Go live", lambda: GoLiveDialog(frame, report), "go-live.png"),
             ("Video source",
              lambda: VideoSourceDialog(frame, board, live=True),
-             "video-source.png")):
+             "video-source.png"),
+            ("Send", lambda: SendDialog(frame, board), "send.png")):
         window = build()
         window.Show()
         app.Yield()

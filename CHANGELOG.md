@@ -1,5 +1,276 @@
 # Changelog
 
+## 3.7.0 for Windows, 10 September 2026
+
+**The picture gets recorded too, there is a cue sheet, and a source can be
+held back.**
+
+Tony asked for the first, Tyler for the second and Darrell for the third, all
+on the same day.
+
+## Recording the picture, Ctrl+Shift+R
+
+`Ctrl+R` still records the sound alone. **`Ctrl+Shift+R` records the picture
+and the sound together**, into one MP4, and neither needs you to be on air. It
+takes the same picture that would go out: if you are already live it uses the
+identical frames the stream is sending, so it costs almost nothing.
+
+**On sync, which is the whole feature, and which Tony cannot check by
+watching.** The sound is the master clock and the picture is fitted to it.
+Measured over three minutes of real recording, decoded back frame by frame
+with each frame carrying its own capture time in the picture:
+
+| | Clean | Camera unplugged for 8 seconds |
+|---|---|---|
+| Offset | 4.5 to 5.3 ms | 3.8 to 5.2 ms |
+| Drift | **0.10 ms per minute** | 0.43 ms per minute |
+| Delivered frame rate | 30.0000, one distinct gap | 30.0000, one distinct gap |
+| Colour | BT.709, tagged | BT.709, tagged |
+
+**Three things in the streaming code are right for a socket and wrong for a
+file, and all three were caught before any of this shipped.**
+
+The stream stamps frames in milliseconds because that is what its container
+carries. In an MP4 that gives frame gaps of 33.312, 33.313 and 33.375 ms: a
+variable frame rate file, which is a nuisance in an editor. Counting frames
+instead gave 1348 of 1349 gaps exactly identical.
+
+The stream pads to a bitrate because platforms publish floors. A file has no
+floor. The same ten seconds: 7.62 MB padded, **2.20 MB at constant quality**,
+and the smaller one looks better.
+
+And the stream returns without sending anything when a frame is missing, which
+is correct when a missed frame is simply not sent. In a file it stalls the
+video timeline while the sound runs on. Measured on an eight second camera
+outage: **the picture ended up 6.48 seconds ahead of the sound**, was still
+0.48 seconds out sixteen seconds later, and nothing was dropped, no gap
+appeared, every count was correct and nothing was logged anywhere. Here a
+missing picture repeats the last frame, which is also cheaper.
+
+**A crash costs the last second, not the recording.** Measured with the writer
+killed outright eight seconds in: a plain MP4 survived 0.0 seconds and would
+not open at all; this survives 7.0 of 8.0 and opens. It costs nothing in size.
+
+**And the one that nearly shipped.** The first version of this drained audio a
+quarter of a second at a time, copied from the audio recorder. That puts the
+sound **257 milliseconds late in every single file**, against a detectability
+threshold of 125 ms, and it survives every check the app has: the lengths
+match, nothing is dropped, nothing is announced and the file plays. It only
+shows up when somebody who can see watches it. Draining a frame at a time
+instead brought it to the five milliseconds above.
+
+## The cue sheet, Ctrl+Shift+C
+
+Tyler: "almost a dialog list that shows what song is coming up next, from top
+to bottom. songs will disappear after 10 seconds of instantly playing."
+
+Everything ticked in the running order, top to bottom, draining as the show
+runs. `N` says the next three in one sentence. `Enter` crosses into the track
+you are on. Your pads and every other key still work while it is open, which
+took carrying the whole keyboard map into the window.
+
+**The row you are standing on never moves**, and that is the load bearing
+rule. Removing a row above or below the cursor is completely silent. Removing
+the row **under** it makes NVDA say a bare "not selected", then read out a
+track you never chose, and "not selected" then sticks to every announcement
+until you arrow again. That was measured with a live accessibility hook and
+then confirmed against NVDA's own recorded speech. So that one row is held
+until you move off it.
+
+Two things it shows that the running order does not: a ticked track whose file
+has gone is listed and marked rather than silently left out, and the last row
+always says the running order ends.
+
+## Holding a source back
+
+Darrell: "when using external audio sources, there is some lag there ... in
+obs, we can adjust the offset for the source, so it does not lag as much."
+
+A delay per source, in milliseconds, up to two seconds. It says plainly what
+it cannot do: it can only ever make a source **later**, so a card running
+behind the others is fixed by holding the others back. OBS works the same way
+and it surprises everybody once.
+
+## And what Darrell actually ran into
+
+He ticked "Hear it yourself" and his source was not in the recording.
+Monitoring is what **you** hear; a recording takes the on air mix. That is the
+right design and nothing anywhere said so. **Both recording keys now name what
+is really in the file when they start**, including anything you can hear that
+is not on the air.
+
+## Also
+
+- `Where is everything going` moved from `Ctrl+Shift+R` to **`Ctrl+Shift+W`**,
+  so recording could have the key that pairs with `Ctrl+R`.
+- An unknown recording format used to become `.mp3` quietly, so the first
+  video recording wrote an MP4 into a file called `.mp3`. Found by the new
+  check on its first run.
+- A recording that is losing audio says so. Nothing ever read that counter.
+- F1 was missing every key added since 3.5.0 and is now derived from the
+  menus rather than hand kept.
+
+41 suites, 2537 checks, 0 failing. `tools/check_recording.py` is the proof:
+a real recording, decoded back, sync measured at five points across the run.
+
+Designed by Tiffany and Jackson working the same problem from the picture and
+the sound, and by Jessica, who disassembled NVDA's own shipped code to settle
+what a screen reader really does when a list changes underneath somebody.
+
+## 3.6.1 for Windows, source complete 10 September 2026, NOT YET RELEASED
+
+**Where your audio goes, made into one idea, and three faults that were
+destroying it in silence.**
+
+Tony, 10 September 2026: "program out to the cable. build that."
+
+**The main output is not your programme, and that is the whole of the
+confusion.** It carries your pads, your beds and your running order. Your
+microphone and every source you catch are not on it. Measured with the banks
+on one card and the monitor on another: the banks' card carried the pads and
+no microphone, and the monitor carried the microphone and no pads. **Neither
+output had the whole show.** So pointing the main output at a cable gives the
+other program a soundboard with no voice on it, and leaves you unable to hear
+your own soundboard.
+
+**`Ctrl+Shift+R` reads the whole routing out**, on or off air: which card your
+sounds play from, which card you listen on and whether it carries everything,
+where the show is being sent and what it is leaving out, and anything that is
+wrong with the arrangement. Three separate questions, one answer.
+
+**What you hear now carries every card.** Put a bank on a sound card of its
+own and you still hear it, through a bus that costs forty milliseconds on
+that one path and nothing at all on the ordinary one card setup.
+
+**A card doing two jobs is refused, out loud.** Sharing one between the
+programme output and a bank means that card carries the show twice, which the
+far end hears as a strange hollowness rather than as an obvious fault. One
+sound card doing everything is still perfectly legal, because that is what
+almost every setup is.
+
+## The three faults
+
+**Any output device change killed the send, permanently, and said nothing.**
+Change a device in Preferences while sending, and the other program stopped
+receiving audio and never got it back until the send was switched off and on.
+Two causes at once: the system default output was given a new bus name on
+every rebuild, orphaning its buffer, and a buffer was marked alive whenever
+anybody LOOKED at it rather than when audio was written to it, so an orphan
+holding a part block stayed alive for ever with a number too small to serve.
+Recorded off a real cable: 57.7 per cent of the audio missing, one gap 8.4
+seconds long and still going. It also leaked about 1.15 MB per device change,
+and it reached the recorder the same way. After the fix, the same test: zero
+gaps.
+
+**Muting or soloing anything while sending took your voice off the send.**
+Every Mute and Solo asked whether something was live or recording. A send is
+neither. So one press of Space in Source Control during a call removed the
+presenter, and unmuting did not put them back.
+
+**A monitor output that would not open sent your microphone wherever bank 1
+was pointed.** With bank 1 on a cable, that is into the call. The message said
+your audio had gone to the default output, which was not where it went.
+
+## Also
+
+- A send whose card has stopped no longer reports itself as running.
+- A send that starts at launch is announced, because a board file decides it.
+- `Ctrl+Shift+O` moved to the channel that speaks at every speech level. It
+  has no other effect, so it was a dead key for anyone who had turned the
+  talking down.
+- The On air menu shows whether you are sending and whether you are hearing it.
+- With no virtual cable on the machine, the send no longer quietly picks a
+  loudspeaker and calls that success.
+- NaN or Infinity in a board file loaded as +24 dB, a sixteenfold boost into
+  somebody's call. It loads as 0 now.
+- A source you named "My microphone" no longer shadows the real one.
+- The Output preferences page said "Pick a virtual cable here to feed a stream
+  while you keep listening on your own speakers." That was false of the
+  control it sat under. So did GETTING-STARTED.txt, under the exact heading
+  somebody hunting for this feature would read first.
+- F1 was missing eight keys the menus advertise, including everything added
+  since 3.5.0, and taught the pre 3.6.0 wiring. That list is now derived from
+  the menus rather than hand kept, so it cannot fall behind again.
+
+40 suites, 2492 checks, 0 failing. Found by Jackson, Mark and Ryder, who were
+pointed at the routing and told to break it.
+
+## 3.6.0 for Windows, source complete 9 September 2026, NOT YET RELEASED
+
+**Your show, out to another program on the same machine.**
+
+**On air, Send this show to another program, or `Alt+Shift+O`.** Point it at a
+virtual audio cable and set TeamTalk, Zoom, Discord or OBS to take the other
+end of that cable as its microphone. It sends the whole show: the pads, the
+beds, the running order at full level, your microphone with its processing,
+and every source Drop Deck is catching. Your speakers keep working, because
+the send is an output of its own rather than a re-routing of the one you
+listen on, and it does not need you to be on air or recording.
+
+Until now the only way to do this was to point the main output at a cable,
+and that sends the pads and the beds and **nothing else**: the microphone and
+every captured program live on the mix that only exists while something is
+live. So the show and the send were two different mixes, and the one going to
+the other program was missing the presenter.
+
+**It can leave one source out.** Broadcasting calls this mix minus, and it is
+the setting that matters most. If you capture TeamTalk as a source and you are
+sending to TeamTalk, a send that carried everything would hand TeamTalk its
+own audio back and everybody in the call would hear themselves a moment late.
+Choose the source to leave out and everything else still goes. If that source
+is later renamed or removed, `Ctrl+Shift+O` says so in as many words, rather
+than letting a call full of echo be a mystery.
+
+**`Ctrl+Shift+H` puts the send in your own headphones**, exactly as it is
+being handed over. A radio desk calls this a confidence feed. It goes to your
+monitor output only and can never find its way back into the send.
+
+**`Ctrl+Shift+O` says whether it is arriving.** Where it is going, what it is
+leaving out, whether it has had to rebuffer, and whether your ordinary output
+is keeping up.
+
+**And the fault that made all of this worth doing.** Every output this app has
+ever opened asked its sound card for a fixed block of 512 frames. On a real
+sound card that is fine. Into a virtual audio cable it loses audio, and it
+does it silently.
+
+Measured on a real cable, ten runs at each size, counting how much of a tone
+never reached the far end:
+
+| Output buffer | Runs that lost audio | Median lost | Worst |
+|---|---|---|---|
+| 512, what shipped | 7 of 10 | 2.67 per cent | 7.39 per cent |
+| 1024 | 6 of 10 | 0.06 per cent | 0.74 per cent |
+| 2048 | 0 of 10 | none | none |
+| Let the card choose | 0 of 10 | none | none |
+
+About six gaps a second, four milliseconds each, and a 1 kHz tone came back
+reading 974 Hz on a cycle count. Reported by Tony as "a change in pitch, a
+little choppiness" going into TeamTalk, which is exactly what a few per cent
+of missing audio sounds like.
+
+**PortAudio reported a perfectly healthy stream throughout**, which is why
+nothing ever said so. Outputs now ask the card for whatever suits it, which
+costs no extra latency at all, and Drop Deck times its own callback rather
+than taking the driver's word for it.
+
+**If the pitch still wanders, check both ends of your cable.** CABLE Input
+under Playback and CABLE Output under Recording are separate settings in
+Windows and it does not keep them in step. Set both to the same sample rate.
+
+`tools/check_send.py` is the proof: a real send into a real cable, recorded
+off the other end. Twenty seconds, no gaps at all, and the excluded source
+107.7 dB down.
+
+39 suites, 2454 checks, and the only one failing is a webcam brightness
+check that wants the room lit.
+
+Source complete and every check that does not need a lit room passes. Not built, not signed and not
+released: `APP_VERSION` stays at 3.5.2 until the installer exists, because
+an app claiming a version the feed cannot serve answers "you have the newest
+one" for ever. `tests/test_version_separation.py` is what enforces that, and
+it is what caught the bump being made too early here.
+
 ## 3.5.28 for Mac, 8 September 2026
 
 **Two things a source could still get away with.**

@@ -47,6 +47,77 @@ Inherited from the other TG Studios apps, and not negotiable here either:
 
 And specific to this one:
 
+- **An output stream asks the sound card for NOTHING, and that is load
+  bearing.** `C.OUTPUT_BLOCKSIZE` is zero, which means PortAudio calls back
+  with however many frames the card is ready for. Every output shipped with a
+  fixed 512 until 3.6.0 and on a virtual audio cable that quietly destroyed
+  the sound.
+
+  Measured 9 September 2026, Drop Deck's own mixer playing a 1 kHz tone into
+  VB-CABLE with the far end of the cable recorded and analysed, ten runs at
+  each size, counting how much of the tone never arrived:
+
+  | Output buffer | Runs that lost audio | Median lost | Worst |
+  |---|---|---|---|
+  | 512 | 7 of 10 | 2.67 per cent | 7.39 per cent |
+  | 1024 | 6 of 10 | 0.06 per cent | 0.74 per cent |
+  | 2048 | 0 of 10 | none | none |
+  | 0 | 0 of 10 | none | none |
+
+  **Zero is not a trade of latency for reliability**, which is the reason it
+  is zero rather than 2048: PortAudio reported the same 22 ms with zero as
+  with 512, and 85 ms with 2048. A soundboard cannot spend 85 ms on the way
+  to a pad.
+
+  What it sounded like: about six gaps a second, four milliseconds each, so a
+  1 kHz tone read 974 Hz on a cycle count. Tony, 9 September 2026: "a change
+  in pitch, a little choppiness" going into TeamTalk.
+
+  **PortAudio reported no underrun at all throughout**, which is why nothing
+  ever said so, and why `Mixer._callback` now times itself against
+  `C.LATE_BLOCK_FACTOR` rather than taking the driver's word for it. Do not
+  put a number back here without repeating that measurement.
+  `C.BLOCKSIZE` is a different thing and is still 512: it is the microphone's
+  input stream and the size every test renders by hand.
+
+  **Zero is not worse anywhere**, which was checked and not assumed.
+  PortAudio's reported output latency: the system default output 209 ms at
+  512 and 180 ms at zero, the same speakers under WASAPI 23 ms and 22 ms,
+  the cable 22 ms either way.
+
+  **And that measurement found a separate thing worth knowing: the Windows
+  system default output goes through MME, and MME is about two hundred
+  milliseconds however it is asked.** The same sound card chosen explicitly
+  under WASAPI is twenty two. On a soundboard, whose whole promise is that
+  nothing goes between a keypress and a sound, that is a ninefold difference
+  sitting behind the word "default". `output_devices()` already lists WASAPI
+  first. Whether the app should stop resolving "system default" through
+  PortAudio's default host API is an open question and Tony's to answer.
+
+- **A source is read ONCE per callback, so mix minus is a SUBTRACTION.**
+  `SourceGroup.read_air_minus` returns the air sum and the same sum less one
+  member, off the single read everything else already does. Reading a source
+  takes the audio away from it, so summing twice would give each sum half a
+  voice, and that is not an optimisation to undo: it is the only way both
+  sums can be right. Everything upstream of `_soft_clip` is a plain addition,
+  which is what makes the subtraction exact, so **the two sums must both be
+  finished before either is soft clipped** and a shared array must never be
+  clipped twice.
+
+- **The confidence feed cannot loop, and the reason is one method.**
+  `send.Confidence.read_air` returns zeros. `SourceGroup` sums `read` into
+  what the presenter hears and `read_air` into what goes out, so a member
+  that answers nothing to the second one is heard and never sent. That is why
+  it is an `extras` member of the group rather than anything cleverer, and it
+  is why hearing the send cannot put the send inside itself.
+
+- **A mix minus that is not happening must never look like one that is.**
+  `board.send_minus` names a source, by NAME, because a list gets reordered
+  and an index would silently start excluding somebody else. A name matching
+  nothing means everything goes out, and `DropDeckFrame.send_report` says so
+  in as many words. Without that sentence, a source renamed on a Tuesday is a
+  call full of echo on a Wednesday with nothing anywhere to explain it.
+
 - **The bank NAMES are the user's; the bank BEHAVIOUR is not.**
   `board.bank_names` is a `{bank: name}` dict shared by reference with every
   `Slot`, which is why renaming a bank is one assignment and eighty labels
@@ -522,6 +593,7 @@ dropdeck/
   vision.py      asking a model that can see what the shot looks like
   colours.py     the brand, by name, and whether a pair can actually be read
   health.py      noticing the picture has gone black or frozen, and saying so
+  send.py        the on air mix out of a sound card, for another program here
 tools/
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
@@ -529,6 +601,9 @@ tools/
   check_keyboard.py  real keystrokes into the real window. Run it by hand
   check_switching.py a real time broadcast that changes picture, then decodes
                      what arrived. The counterpart to check_stream_quality
+  check_send.py      a real send into a real virtual cable, recorded off the
+                     other end and counted for gaps. The only check that can
+                     prove the thing 3.6.0 was built to fix
   check_video_key.py real Alt+Shift+V into the real window, with a known good
                      key first as a control. Run it by hand
   shot_golive.py     pictures of the two 3.4.1 windows, and a layout audit

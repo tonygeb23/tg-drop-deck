@@ -42,7 +42,10 @@ FORMATS = [
 FORMAT_KEYS = [key for key, _label in FORMATS]
 DEFAULT_FORMAT = "mp3"
 
-EXTENSIONS = {"wav": ".wav", "mp3": ".mp3", "aac": ".aac", "opus": ".ogg"}
+EXTENSIONS = {"wav": ".wav", "mp3": ".mp3", "aac": ".aac", "opus": ".ogg",
+              # Registered here rather than in videorecord.py so next_path
+              # has one table to look in and cannot fall back to a guess.
+              "mp4": ".mp4"}
 
 #: The stem of every file, with the number after it. Kept out of the code that
 #: builds a name so it can be changed in one place.
@@ -87,7 +90,13 @@ def next_path(folder, fmt=DEFAULT_FORMAT):
     in the folder rather than keeping a counter, so deleting last week's
     recordings does not start it over the top of anything.
     """
-    extension = EXTENSIONS.get(fmt, ".mp3")
+    # An unknown format used to become ".mp3" quietly, so the video recorder
+    # asking for "mp4" wrote an MP4 container into a file called .mp3 and
+    # nothing said a word. A format nobody has registered is a mistake, not a
+    # default. Found 10 September 2026 by the recording check, first run.
+    if fmt not in EXTENSIONS:
+        raise ValueError("no extension is registered for the format %r" % fmt)
+    extension = EXTENSIONS[fmt]
     highest = 0
     pattern = re.compile(re.escape(STEM.strip()) + r"\s*(\d+)", re.I)
     try:

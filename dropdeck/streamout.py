@@ -115,8 +115,14 @@ class AirBus:
         n = len(block)
         if not n:
             return
+        now = time.monotonic()
         with self._lock:
             ring = self._ring_for(key)
+            # A ring is alive because somebody WRITES to it. This used to be
+            # stamped inside available(), which is a read, so a ring nobody
+            # was writing to marked itself alive every time it was looked at
+            # and could never age out. See available().
+            ring["seen"] = now
             buf = ring["buf"]
             if n >= self.frames:
                 buf[:] = block[-self.frames:]
@@ -177,12 +183,30 @@ class AirBus:
             if not self._rings:
                 return 0
             alive = []
-            for ring in self._rings.values():
-                if ring["filled"]:
-                    ring["seen"] = now
-                    alive.append(ring["filled"])
-                elif now - ring.get("seen", now) <= self._patience:
-                    alive.append(0)
+            dead = []
+            for key, ring in self._rings.items():
+                if now - ring.get("seen", now) > self._patience:
+                    # Nobody has written to this for longer than the ring is
+                    # long. It is a card that has been unplugged, or a mixer
+                    # a device change replaced.
+                    dead.append(key)
+                    continue
+                alive.append(ring["filled"])
+            # **This is what fixes a send that dies on a device change.** A
+            # ring left holding fewer frames than a block is wanted was
+            # "alive" for ever with a number too small to serve, and
+            # Send._callback refuses to read a short ring, so nothing ever
+            # drained the residue and nothing ever reached zero. The stream
+            # stopped, permanently, and said nothing whatsoever. Found by
+            # Mark, 10 September 2026, reproduced 5 times out of 5 and
+            # recorded off the far end of a real cable: 57.7 per cent of the
+            # audio missing, one gap 8.4 seconds long and still going.
+            #
+            # Dropping the ring also stops the leak: one 1.15 MB buffer per
+            # device change, never freed while the send ran.
+            for key in dead:
+                del self._rings[key]
+                self._rates.pop(key, None)
             return min(alive) if alive else 0
 
     def read(self, frames):
@@ -1136,6 +1160,13 @@ class RtmpDestination(Destination):
         """Where the master clock has got to."""
         return self._apts / float(self.samplerate or 1)
 
+    #: Where the composited picture is offered, for a recording to take the
+    #: SAME frames that are going out rather than building its own. None is
+    #: the ordinary state and costs one attribute read per frame. The same
+    #: shape as self.overlay and self.watcher, which are read the same way a
+    #: few lines below.
+    frame_tap = None
+
     def _pump_video(self, audio_seconds=0.0):
         """Send whatever frames the audio clock has now paid for.
 
@@ -1155,6 +1186,15 @@ class RtmpDestination(Destination):
             picture = self._picture()
             if picture is None:
                 return
+            tap = self.frame_tap
+            if tap is not None:
+                # The composited frame, overlay and all, a moment before it
+                # is encoded. Guarded like everything else on this path: a
+                # recording must never be able to take the broadcast down.
+                try:
+                    tap.put(picture)
+                except Exception:
+                    pass
             frame = av.VideoFrame.from_ndarray(picture, format="rgb24")
             # dst_colorspace, and it is not optional. Measured 8 September
             # 2026: without it swscale converts with the BT.601 matrix, so

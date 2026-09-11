@@ -24,6 +24,7 @@ from . import dsp
 from . import camera
 from . import framing
 from . import colours
+from . import cuesheet
 from . import overlay
 from . import preflight
 from . import proccapture
@@ -758,7 +759,7 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
 
         self._note(panel, sizer,
-                   "Pick a virtual cable here to feed a stream or a recorder\n"
+                   "Everything plays here unless a bank below is pointed\n"
                    "while you keep listening on your own speakers.")
 
         # Per-bank outputs.
@@ -4089,6 +4090,31 @@ class SourcesDialog(wx.Dialog):
         self.monitor.Bind(wx.EVT_CHECKBOX, self._on_edit)
         outer.Add(self.monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # Darrell, 10 September 2026: "when using external audio sources,
+        # there is some lag there ... in obs, we can adjust the offset for the
+        # source, so it does not lag as much."
+        delay_row = wx.BoxSizer(wx.HORIZONTAL)
+        delay_row.Add(wx.StaticText(self, label="Hold this source bac&k, "
+                                               "milliseconds"), 0,
+                      wx.ALIGN_CENTRE_VERTICAL | wx.RIGHT, 8)
+        self.delay = wx.SpinCtrl(self, min=0, max=int(C.MAX_SOURCE_DELAY_MS),
+                                 initial=0)
+        name_field(self.delay, "Hold this source back, milliseconds")
+        self.delay.Bind(wx.EVT_SPINCTRL, self._on_edit)
+        delay_row.Add(self.delay, 0)
+        outer.Add(delay_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Said out loud, because it surprises everybody once and it is the
+        # difference between the control working and the control seeming
+        # broken.
+        why = wx.StaticText(
+            self, label=("This can only make a source LATER. If a capture "
+                         "card is running BEHIND everything else, hold the "
+                         "other sources back instead. OBS works the same "
+                         "way."))
+        why.Wrap(self.FromDIP(520))
+        outer.Add(why, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         row = wx.StdDialogButtonSizer()
         ok = wx.Button(self, wx.ID_OK)
         ok.SetDefault()
@@ -4162,6 +4188,10 @@ class SourcesDialog(wx.Dialog):
             self.channel.SetSelection(keys.index(channel)
                                       if channel in keys else 0)
             self.gain.SetValue(int(round(float(entry.get("gain_db", 0.0) or 0))))
+            try:
+                self.delay.SetValue(int(float(entry.get("delay_ms", 0) or 0)))
+            except (TypeError, ValueError):
+                self.delay.SetValue(0)
             self.on_air.SetValue(bool(entry.get("on_air", True)))
             self.monitor.SetValue(bool(entry.get("monitor", False)))
             self._show_for_kind(entry.get("program", "") if on else "")
@@ -4247,6 +4277,7 @@ class SourcesDialog(wx.Dialog):
                 entry["channel"] = self.CHANNELS[
                     max(0, self.channel.GetSelection())][0]
                 entry["gain_db"] = float(self.gain.GetValue())
+                entry["delay_ms"] = float(self.delay.GetValue())
                 entry["on_air"] = self.on_air.GetValue()
                 entry["monitor"] = self.monitor.GetValue()
                 self._write_row(index)
@@ -4277,6 +4308,7 @@ class SourcesDialog(wx.Dialog):
                              "kind": sources.Source.DEVICE,
                              "device_name": "", "device_hostapi": "",
                              "program": "", "gain_db": 0.0, "channel": "mix",
+                             "delay_ms": 0.0,
                              "on_air": True, "monitor": False})
         self._refresh(len(self.entries) - 1)
         self.name.SetFocus()
@@ -5833,3 +5865,469 @@ class ColoursDialog(wx.Dialog):
         speaker = getattr(self.frame, "announce", None)
         if speaker is not None:
             speaker(said)
+
+
+class SendDialog(wx.Dialog):
+    """Sending this show to another program on the same machine. Alt+Shift+O.
+
+    Tony, 9 September 2026, on getting Drop Deck into TeamTalk: "I sent the
+    main output to vb cable, and team talk's input to vb cable ... I want a
+    way to monitor what [is going out]."
+
+    Pointing the main output at a cable was the only way to do it before, and
+    it sends the pads, the beds and the playlist and nothing else: the
+    microphone and every captured program live on the air mix, which only
+    exists while something is live or recording. A send is that air mix, out
+    of a sound card, on its own.
+
+    Four things on this page, and every one of them is here because of
+    something that goes wrong without it.
+
+    - **Which output.** A virtual audio cable, nearly always. The other
+      program then takes the other end of that cable as its microphone.
+    - **What to leave out.** Mix minus. Tony's board captures TeamTalk and
+      puts it on the air, so a send that carried everything would hand
+      TeamTalk its own audio back and everybody in the call would hear
+      themselves. This is the control that stops it, and it defaults to
+      nothing only because a board with no captured programs needs nothing.
+    - **The level.** The other program has its own gain and its own limiter,
+      and a send arriving too hot is distortion nobody upstream can hear.
+    - **Whether you hear it.** A confidence feed, the way a desk has one. It
+      goes to the monitor output and never to the send, so it cannot come
+      back round.
+
+    And a line at the bottom saying whether the send is arriving clean, which
+    is the question that had no answer at all: a fixed output buffer was
+    losing a measured seven per cent of the audio into a cable and PortAudio
+    reported a perfectly healthy stream throughout.
+    """
+
+    #: What the "leave out" box calls the microphone. Stored on the board as
+    #: this exact string, so it cannot collide with a source somebody has
+    #: named: a source called "The microphone" would be found first by name
+    #: and excluded, which is the same answer anyway.
+    MIC_LABEL = "My microphone"
+    NOTHING_LABEL = "Nothing, send everything"
+
+    def __init__(self, parent, board):
+        super().__init__(parent, title="Send audio to another program")
+        self.frame = parent
+        self.board = board
+        self.devices = output_devices()
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        note = wx.StaticText(
+            self, label=("This sends your whole show, the pads, the beds, the "
+                         "playlist, your microphone and every source you are "
+                         "catching, out of a sound card. Choose a virtual "
+                         "audio cable here and set the other program's "
+                         "microphone to the other end of the same cable."))
+        note.Wrap(self.FromDIP(520))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        self.on = wx.CheckBox(self, label="&Send this show to another program")
+        self.on.SetValue(bool(board.send_on))
+        self.on.Bind(wx.EVT_CHECKBOX, lambda _e: self._sync())
+        outer.Add(self.on, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        grid = wx.FlexGridSizer(0, 2, 8, 10)
+        grid.AddGrowableCol(1, 1)
+
+        grid.Add(wx.StaticText(self, label="Send it out o&f"), 0,
+                 wx.ALIGN_CENTRE_VERTICAL)
+        # A wx.Choice sizes itself to its LONGEST entry, and a WASAPI device
+        # name with its host API after it is enormous: unpinned, this one
+        # dragged the whole dialog out to 771 px where every other window in
+        # the app is 560 to 640. Pinned, the popup still shows the full name
+        # and a screen reader still reads it.
+        wide = (self.FromDIP(330), -1)
+        self.device = wx.Choice(self, choices=self._device_labels(), size=wide)
+        self.device.SetName("Send it out of")
+        self.device.SetSelection(self._device_index())
+        grid.Add(self.device, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="&Leave out of the send"), 0,
+                 wx.ALIGN_CENTRE_VERTICAL)
+        self.minus = wx.Choice(self, choices=self._minus_labels(), size=wide)
+        self.minus.SetName("Leave out of the send")
+        self.minus.SetSelection(self._minus_index())
+        grid.Add(self.minus, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Send le&vel, decibels"), 0,
+                 wx.ALIGN_CENTRE_VERTICAL)
+        self.gain = wx.SpinCtrlDouble(self, min=C.MIN_MIC_GAIN_DB,
+                                      max=C.MAX_MIC_GAIN_DB, inc=1.0,
+                                      initial=float(board.send_gain_db))
+        self.gain.SetDigits(0)
+        name_field(self.gain, "Send level, decibels")
+        grid.Add(self.gain, 0)
+
+        outer.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        explain = ("Leave out whichever program you are sending TO. "
+                   "Sending a program its own audio back is how everybody in "
+                   "a call ends up hearing themselves.")
+        if not getattr(self.frame, "sources", []):
+            # The list is Nothing and My microphone, and neither is the answer.
+            # Say where the answer comes from, because it is made in another
+            # window entirely and nothing here said so.
+            explain += (" There is nothing to leave out yet. To leave a "
+                        "program out you have to be catching it first: On "
+                        "air, Audio sources, Alt+Shift+S, and take audio "
+                        "from one program. Use the program option rather "
+                        "than a cable, because your cable is carrying this "
+                        "send.")
+        why = wx.StaticText(self, label=explain)
+        why.Wrap(self.FromDIP(520))
+        outer.Add(why, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.hear = wx.CheckBox(self, label="Let me &hear the send")
+        self.hear.SetValue(bool(board.send_monitor))
+        outer.Add(self.hear, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.doing = wx.StaticText(self, label="")
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        row = wx.StdDialogButtonSizer()
+        ok = wx.Button(self, wx.ID_OK, "&OK")
+        ok.SetDefault()
+        row.AddButton(ok)
+        row.AddButton(wx.Button(self, wx.ID_CANCEL, "&Cancel"))
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self._sync()
+        self.on.SetFocus()
+
+    # ------------------------------------------------------------- choices --
+    def _device_labels(self):
+        return ["%s (%s)" % (d["name"], d["hostapi"]) for d in self.devices]
+
+    def _device_index(self):
+        """The saved device, by name, or the first cable-looking thing.
+
+        Remembered by NAME like every other device in this app, because an
+        index moves the moment somebody plugs a headset in. With nothing
+        saved it lands on a virtual cable if the machine has one, which is
+        what somebody opening this page for the first time is looking for.
+        """
+        for index, dev in enumerate(self.devices):
+            if (dev["name"] == self.board.send_device_name
+                    and (not self.board.send_device_hostapi
+                         or dev["hostapi"] == self.board.send_device_hostapi)):
+                return index
+        if not self.board.send_device_name:
+            for index, dev in enumerate(self.devices):
+                if "cable" in dev["name"].lower():
+                    return index
+            # No cable on this machine. Choose NOTHING rather than the first
+            # entry, which on a WASAPI first list is a real loudspeaker: the
+            # old code picked it and the app then said "Sending to Speakers"
+            # as though that were the point. _describe says what is missing.
+            return wx.NOT_FOUND
+        return 0 if self.devices else wx.NOT_FOUND
+
+    def _has_cable(self):
+        return any("cable" in dev["name"].lower() for dev in self.devices)
+
+    def _minus_labels(self):
+        names = [self.NOTHING_LABEL, self.MIC_LABEL]
+        names += [s.name for s in getattr(self.frame, "sources", [])]
+        return names
+
+    def _minus_index(self):
+        wanted = (self.board.send_minus or "").strip()
+        if not wanted:
+            return 0
+        labels = self._minus_labels()
+        for index, label in enumerate(labels):
+            if label.strip().lower() == wanted.lower():
+                return index
+        # A source that has since been renamed or removed. Say nothing here,
+        # because the mix minus is reported on the status line below and a
+        # dialog is not the place to be told about it twice.
+        return 0
+
+    # -------------------------------------------------------------- living --
+    def _sync(self, _event=None):
+        on = self.on.GetValue()
+        for control in (self.device, self.minus, self.gain, self.hear):
+            control.Enable(on)
+        self._describe()
+
+    def _describe(self):
+        send = getattr(self.frame, "send", None)
+        if not self._has_cable():
+            self.doing.SetLabel(
+                "I cannot see a virtual audio cable on this machine. VB-CABLE "
+                "is free and takes two minutes to install. See the user guide, "
+                "Sending your show to another program.")
+            return
+        if not self.on.GetValue():
+            self.doing.SetLabel("Nothing is being sent.")
+            return
+        if send is None:
+            self.doing.SetLabel("The send starts when you press OK.")
+            return
+        self.doing.SetLabel(send.report())
+
+    # --------------------------------------------------------------- result --
+    def result(self):
+        """What the user chose, as the board would store it."""
+        index = self.device.GetSelection()
+        dev = (self.devices[index]
+               if 0 <= index < len(self.devices) else None)
+        pick = self.minus.GetStringSelection()
+        return {
+            "send_on": bool(self.on.GetValue()),
+            "send_device_name": dev["name"] if dev else None,
+            "send_device_hostapi": dev["hostapi"] if dev else None,
+            "send_gain_db": float(self.gain.GetValue()),
+            "send_minus": "" if pick == self.NOTHING_LABEL else pick,
+            "send_monitor": bool(self.hear.GetValue()),
+        }
+
+
+class CueSheetDialog(wx.Dialog):
+    """What is coming up next. Ctrl+Shift+C.
+
+    Tyler, a listener, 10 September 2026: "almost a dialog list that shows
+    what song is coming up next, from top to bottom. songs will disappear
+    after 10 seconds of instantly playing."
+
+    Modeless, so a presenter can leave it open and work. The rules about WHAT
+    is in it live in `cuesheet.py`, which imports no wx; this is the window
+    that shows them.
+
+    ## Three things here are load bearing, and each was measured
+
+    **The row the user is standing on never changes and never disappears.**
+    Jessica measured the WinEvents from a real list control, 10 September
+    2026: deleting a row above or below the focused one raises a DESTROY and
+    nothing else, so NVDA says nothing at all. Deleting the FOCUSED row
+    raises DESTROY, SELECTIONREMOVE and then FOCUS on a different item, and
+    the selection is lost entirely. NVDA acts on a focus event, so it stops
+    mid sentence and reads out a track the presenter never chose, on air, at
+    the moment a song changes. So a removal that would take the focused row
+    is held until they arrow off it. `cuesheet.apply_changes` is that rule.
+
+    **`DeleteAllItems` is never called while this has focus.** A full rebuild
+    always ends in a focus event, measured, so the row is re-read even though
+    the user never moved. Rows are added and removed one at a time.
+
+    **This window carries the frame's accelerator table, and forwards it.**
+    Measured: a second top level window inherits nothing, so with this open
+    the pads would be dead, Ctrl+B would be dead and Ctrl+L would be dead.
+    For an app whose first rule is that nothing goes between a keypress and a
+    sound, that is not acceptable. The table is copied in and every command
+    is handed back to the frame.
+
+    The clock above the list is a `wx.StaticText` on purpose. A counting
+    number inside a row would be a name change every second, and a name
+    change on the focused row makes NVDA start again. A static text is never
+    the focus object, so it is silent by construction and still readable with
+    the review cursor.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent, title="Coming up",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.frame = parent
+        self._rows = []
+        self._closing = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self.clock = wx.StaticText(self, label="")
+        self.clock.SetMinSize((-1, self.clock.GetTextExtent("Ay")[1] * 2 + 4))
+        outer.Add(self.clock, 0, wx.EXPAND | wx.ALL, 10)
+
+        outer.Add(wx.StaticText(self, label="Co&ming up"), 0,
+                  wx.LEFT | wx.RIGHT, 10)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+                                size=(640, 260))
+        self.list.SetName("Coming up")
+        # Title is column 0 because that is what first letter navigation
+        # searches, and no position number goes in front of it. Same rule as
+        # the running order, and for the same reason.
+        self.list.InsertColumn(0, "Title", width=240)
+        self.list.InsertColumn(1, "Artist", width=160)
+        self.list.InsertColumn(2, "Kind", width=70)
+        self.list.InsertColumn(3, "Length", width=100)
+        # Empty on every ordinary row, and that is deliberate: NVDA skips an
+        # empty cell when it builds the line it reads out, so this costs
+        # nothing except where it has something to say.
+        self.list.InsertColumn(4, "Status", width=110)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activate)
+        self.list.Bind(wx.EVT_LIST_ITEM_FOCUSED, self._on_focused)
+        self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
+        outer.Add(self.list, 1, wx.EXPAND | wx.ALL, 10)
+
+        self.summary = wx.StaticText(self, label="")
+        outer.Add(self.summary, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        note = wx.StaticText(
+            self, label=("Enter crosses into the track you are on. N says the "
+                         "next three. Escape closes this."))
+        note.Wrap(self.FromDIP(600))
+        outer.Add(note, 0, wx.ALL, 10)
+
+        row = wx.StdDialogButtonSizer()
+        row.AddButton(wx.Button(self, wx.ID_CANCEL, "&Close"))
+        row.Realize()
+        outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self.adopt_accelerators()
+
+        # Both, and idempotent. EVT_CLOSE alone misses the Close button and
+        # Escape on wx 4.2.5, and a timer firing into a destroyed window is
+        # an access violation rather than an exception.
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_BUTTON, self._on_close, id=wx.ID_CANCEL)
+
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_tick, self.timer)
+        self.timer.Start(C.CUE_REFRESH_MS)
+
+        self.refresh(force=True)
+        self.list.SetFocus()
+
+    # -------------------------------------------------------------- keys --
+    def adopt_accelerators(self):
+        """Carry the frame's whole keyboard map, and hand it back.
+
+        Without this the pads do nothing while this window has focus, which
+        would make the cue sheet the one place in the app where a key between
+        you and a sound does not work.
+        """
+        try:
+            entries = list(getattr(self.frame, "_accelerators", []) or [])
+            if entries:
+                self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+        except Exception:
+            pass
+
+    def _forward(self, event):
+        handler = getattr(self.frame, "ProcessEvent", None)
+        if handler is not None:
+            handler(event)
+
+    def _on_key(self, event):
+        code = event.GetKeyCode()
+        if code in (ord("N"), ord("n")) and not event.HasAnyModifiers():
+            # A question, so announce_answer: it speaks at every speech level
+            # because a key whose only job is to answer is broken when quiet.
+            self.frame.announce_answer(cuesheet.next_few(self._rows))
+            return
+        event.Skip()
+
+    # ------------------------------------------------------------- rows --
+    def _tracks(self):
+        player = getattr(self.frame, "player", None)
+        playlist = getattr(player, "playlist", None) or getattr(
+            self.frame.board, "playlist", None)
+        return list(getattr(playlist, "tracks", []) or [])
+
+    def _focused_title(self):
+        if wx.Window.FindFocus() is not self.list:
+            return None
+        at = self.list.GetFirstSelected()
+        if at < 0 or at >= len(self._rows):
+            return None
+        return self._rows[at].title
+
+    def refresh(self, force=False):
+        tracks = [_CueTrack(t) for t in self._tracks()]
+        player = getattr(self.frame, "player", None)
+        wanted = cuesheet.build(
+            tracks,
+            playing_index=getattr(player, "index", None) if player else None,
+            played_for=float(getattr(player, "played_for", 0.0) or 0.0))
+        focused = None if force else self._focused_title()
+        rows = cuesheet.apply_changes(self._rows, wanted, focused)
+        self._write(rows)
+        self._rows = rows
+        self.summary.SetLabel(cuesheet.summary(tracks, rows))
+
+    def _write(self, rows):
+        """One row at a time. Never DeleteAllItems while this has focus."""
+        while self.list.GetItemCount() > len(rows):
+            self.list.DeleteItem(self.list.GetItemCount() - 1)
+        for index, row in enumerate(rows):
+            cells = row.cells()
+            if index >= self.list.GetItemCount():
+                self.list.InsertItem(index, cells[0])
+            elif self.list.GetItemText(index, 0) != cells[0]:
+                self.list.SetItem(index, 0, cells[0])
+            for column in range(1, 5):
+                if self.list.GetItemText(index, column) != cells[column]:
+                    self.list.SetItem(index, column, cells[column])
+
+    # ------------------------------------------------------------ events --
+    def _on_focused(self, event):
+        event.Skip()
+        # They have moved, so anything that was being held can land now.
+        wx.CallAfter(self._settle)
+
+    def _settle(self):
+        if self._closing or not self:
+            return
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def _on_tick(self, _event):
+        # Wrapped, because a timer swallows whatever its callback raises and
+        # that cost this app two releases of silence at startup.
+        if self._closing or not self:
+            return
+        try:
+            self.clock.SetLabel(self.frame.cue_clock_line())
+            self.refresh()
+        except Exception:
+            pass
+
+    def _on_activate(self, _event):
+        at = self.list.GetFirstSelected()
+        if at < 0 or at >= len(self._rows):
+            return
+        row = self._rows[at]
+        if row.index is None or row.missing:
+            return
+        segue = getattr(self.frame, "segue_playlist", None)
+        if segue is not None:
+            segue(row.index)
+
+    def _on_close(self, event=None):
+        if self._closing:
+            return
+        self._closing = True
+        try:
+            self.timer.Stop()
+        except Exception:
+            pass
+        self.Destroy()
+
+
+class _CueTrack:
+    """A playlist Track, in the shape cuesheet.build wants.
+
+    A shim rather than reaching into Track from cuesheet.py, which keeps that
+    module free of anything it would have to be kept in step with.
+    """
+
+    def __init__(self, track):
+        self.title = getattr(track, "title_text", None) or getattr(
+            track, "title", "") or ""
+        self.artist = getattr(track, "artist_text", None) or getattr(
+            track, "artist", "") or ""
+        kind = getattr(track, "kind", "")
+        self.kind = "Drop" if kind == C.TRACK_DROP else "Song"
+        self.duration = float(getattr(track, "duration", 0.0) or 0.0)
+        self.ticked = bool(getattr(track, "enabled", True))
+        self.missing = bool(getattr(track, "is_missing", False))

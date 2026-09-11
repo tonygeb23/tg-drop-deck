@@ -142,6 +142,10 @@ def main():
         "Space": "per control - a pad plays, a list row ticks",
         "Delete": "routed by view in _focused_action",
         "Escape": "menu accelerator on Stop everything",
+        # The cue sheet's own key handler, CueSheetDialog._on_key. A bare
+        # letter cannot go in the frame's accelerator table without taking it
+        # away from first letter navigation everywhere else.
+        "N": "the cue sheet's own key handler",
         "Alt+Up": "the playlist list's own key handler",
         "Alt+Down": "the playlist list's own key handler",
         # All five are the running order's own, and all five are proved a

@@ -10,6 +10,7 @@ the tests drive it: call ``render`` yourself and inspect the samples.
 from __future__ import annotations
 
 import threading
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -18,9 +19,20 @@ import sounddevice as sd
 from . import constants as C
 from .engine import (CHANNELS, MemoryVoice, StreamVoice, cue_tone, db_to_gain,
                      load_audio, probe)
+# The monitor bus is an AirBus. Same problem, same answer: several audio
+# callbacks on several clocks writing, one draining, nothing allowed to block.
+# streamout imports engine and constants only, so there is no cycle here.
+from .streamout import AirBus
 
 #: Decoded audio we keep around so a repeat press is instant. Short sounds only.
 _CACHE_BUDGET_BYTES = 256 * 1024 * 1024
+
+#: What the system default output is called on a bus. A NAME rather than
+#: None, because Mixer turns a key of None into id(self), and id(self) is a
+#: different number every time the outputs are rebuilt. Every rebuild
+#: therefore orphaned the default output's ring on the send bus and started a
+#: fresh one, which is half of why a send died on any device change.
+DEFAULT_DEVICE_KEY = "the system default output"
 
 
 def output_devices():
@@ -120,7 +132,7 @@ class Mixer:
     """Sums every playing voice into one output stream."""
 
     def __init__(self, device=None, open_stream=True, samplerate=None,
-                 duck_bus=None, key=None):
+                 duck_bus=None, key=None, blocksize=None):
         self._lock = threading.Lock()
         self._voices = []
         self._cache = OrderedDict()
@@ -128,6 +140,12 @@ class Mixer:
 
         self.device = device
         self.samplerate = samplerate or self._device_rate(device)
+        #: How many frames the card is asked for. None means C.OUTPUT_BLOCKSIZE,
+        #: which is zero, which means "you choose". Read the note there before
+        #: putting a number back: a fixed 512 lost several per cent of the
+        #: audio going into a virtual cable, measured, and said nothing.
+        self.blocksize = (C.OUTPUT_BLOCKSIZE if blocksize is None
+                          else int(blocksize))
         self.stream = None
         self.last_error = None
 
@@ -163,6 +181,37 @@ class Mixer:
         #: presenter on speakers monitors nothing and is still on air.
         self.air_source = None
 
+        #: Where the same mix goes when it is being sent to another program on
+        #: this machine, or None. Shaped exactly like air_tap, and separate
+        #: from it so a send works with nothing live and nothing recording.
+        #: See send.py.
+        self.send_tap = None
+
+        #: Where this mixer's own program block goes so that a monitor on
+        #: ANOTHER sound card can hear it, or None. Set on every mixer except
+        #: the monitor's own, which would otherwise hear itself twice.
+        self.monitor_tap = None
+
+        #: The other cards' program blocks, for this mixer to add into what
+        #: comes out of it. Only ever set on the monitor mixer. An AirBus,
+        #: because the problem is identical: several callbacks on several
+        #: clocks writing, one callback draining, and nothing allowed to block.
+        self.monitor_feed = None
+        self._monitor_primed = False
+        self._monitor_prime = int(self.samplerate * C.MONITOR_PRIME_SECONDS)
+        #: Times the monitor feed ran dry. Only ever a monitoring fault: the
+        #: show itself is unaffected, which is why it is counted separately
+        #: from anything on the air.
+        self.monitor_gaps = 0
+
+        #: The one source the send leaves out. Mix minus: feeding a captured
+        #: program its own audio back is an echo of itself, so the send to
+        #: TeamTalk must not carry the TeamTalk capture. It has to be a
+        #: subtraction off the single read rather than a second sum, because
+        #: reading a source takes the audio away from it. See
+        #: sources.SourceGroup.read_air_minus.
+        self.send_minus = None
+
         #: The cue, made once per shape, level and samplerate. See play_cue.
         self._cue_tone = None
         self._cue_key = None
@@ -184,6 +233,18 @@ class Mixer:
         self.peak = 0.0
         self.underruns = 0
 
+        #: Callbacks that arrived later than they should have. PortAudio's
+        #: own underrun flag reported nothing at all through a seven per cent
+        #: loss on a virtual cable, so this app times its own callback rather
+        #: than take the driver's word for it. See C.LATE_BLOCK_FACTOR.
+        self.late_blocks = 0
+        self.blocks = 0
+        #: The worst gap between two callbacks, in seconds, and the last
+        #: block size seen. Both only for saying out loud what happened.
+        self.worst_gap = 0.0
+        self.last_frames = 0
+        self._last_callback = None
+
         if open_stream:
             self.start()
 
@@ -202,13 +263,17 @@ class Mixer:
     def start(self):
         """Open the output stream. Returns True if audio is actually running."""
         self.stop_stream()
+        self._last_callback = None
+        self.late_blocks = 0
+        self.blocks = 0
+        self.worst_gap = 0.0
         try:
             self.stream = sd.OutputStream(
                 device=self.device,
                 samplerate=self.samplerate,
                 channels=CHANNELS,
                 dtype="float32",
-                blocksize=C.BLOCKSIZE,
+                blocksize=self.blocksize,
                 callback=self._callback,
             )
             self.stream.start()
@@ -510,8 +575,12 @@ class Mixer:
         """Mix one block. Public so tests can run the whole engine silently."""
         mix = np.zeros((frames, CHANNELS), dtype=np.float32)
         tap = self.air_tap
+        send_tap = self.send_tap
+        # The same sum serves the stream, the recorder and the send. It is
+        # built when ANY of them wants it: a send works with nothing live and
+        # nothing recording, which is the whole point of it.
         air = (np.zeros((frames, CHANNELS), dtype=np.float32)
-               if tap is not None else None)
+               if (tap is not None or send_tap is not None) else None)
         with self._lock:
             voices = list(self._voices)
         if voices:
@@ -547,6 +616,28 @@ class Mixer:
             self._duck = 1.0
             self.duck_bus.publish(self.key, False)
 
+        # What this card is playing, offered to a monitor on another card.
+        # Taken HERE, after the voices and before anything that belongs only
+        # to the presenter: a monitor wants the show, not a second copy of
+        # somebody's headphone feed.
+        monitor_tap = self.monitor_tap
+        if monitor_tap is not None:
+            try:
+                monitor_tap.write(self.key, mix, self.samplerate)
+            except Exception:
+                pass          # a monitor must never take the show down
+
+        # And the other way round, on the one card the presenter listens on:
+        # every OTHER card's show, added to this one's. This is what makes a
+        # monitor carry the whole programme rather than only whatever happens
+        # to be routed to it.
+        feed = self.monitor_feed
+        if feed is not None:
+            try:
+                mix += self._from_monitor(frames, feed)
+            except Exception:
+                pass
+
         # Monitoring is added AFTER the duck. The point of the duck is to get
         # the music out from under the voice; ducking the voice as well would
         # undo it.
@@ -563,13 +654,32 @@ class Mixer:
             _soft_clip(mix)
 
         if air is not None:
-            self._to_air(air, frames, tap)
+            self._to_air(air, frames, tap, send_tap)
 
         if any(v.finished for v in voices):
             self._reap()
         return mix
 
-    def _to_air(self, air, frames, tap):
+    def _from_monitor(self, frames, feed):
+        """One block of the other cards' show. Never blocks, never raises.
+
+        Primed the way the send is, and for the same reason: two sound cards
+        run on two clocks, so a ring read the moment it is created is a ring
+        that is empty. Running dry re-primes rather than starving on every
+        block from then on, because one short silence beats a permanent
+        stutter in the ears of somebody who cannot see a meter.
+        """
+        if not self._monitor_primed:
+            if feed.available() < self._monitor_prime:
+                return 0.0
+            self._monitor_primed = True
+        if feed.available() < frames:
+            self._monitor_primed = False
+            self.monitor_gaps += 1
+            return 0.0
+        return feed.read(frames)
+
+    def _to_air(self, air, frames, tap, send_tap=None):
         """Finish the on air block and hand it over. Never raises.
 
         This runs inside the audio callback, so it does exactly two cheap
@@ -577,27 +687,83 @@ class Mixer:
         socket, happens on the streaming thread at the other end of the tap.
         A stream that cannot keep up must never become a gap in the sound
         coming out of the speakers.
+
+        The send gets the same block, unless it is leaving a source out, in
+        which case it gets one of its own. Both are finished before either is
+        handed over: soft clipping is in place, so a shared array must not be
+        clipped twice.
         """
         mic = self.air_source
+        send = air if send_tap is not None else None
         if mic is not None:
             try:
-                air += mic.read_air(frames)
+                minus = self.send_minus if send_tap is not None else None
+                if minus is not None and hasattr(mic, "read_air_minus"):
+                    # One read, two sums. See sources.SourceGroup.
+                    total, without = mic.read_air_minus(frames, minus)
+                    if without is not total:
+                        send = air + without
+                    air += total
+                else:
+                    air += mic.read_air(frames)
             except Exception:
                 pass          # a microphone must never take the show down
         if frames and float(np.abs(air).max()) > C.SOFT_CLIP_FROM:
             _soft_clip(air)
-        try:
-            # With the rate, because a bank on a card that would only open at
-            # 44100 has to be converted before it is summed with a main output
-            # at 48000, not simply added as though they matched.
-            tap.write(self.key, air, self.samplerate)
-        except Exception:
-            pass
+        if send is not None and send is not air:
+            if frames and float(np.abs(send).max()) > C.SOFT_CLIP_FROM:
+                _soft_clip(send)
+        # With the rate, because a bank on a card that would only open at
+        # 44100 has to be converted before it is summed with a main output
+        # at 48000, not simply added as though they matched.
+        if tap is not None:
+            try:
+                tap.write(self.key, air, self.samplerate)
+            except Exception:
+                pass
+        if send_tap is not None and send is not None:
+            try:
+                send_tap.write(self.key, send, self.samplerate)
+            except Exception:
+                pass
 
     def _callback(self, outdata, frames, time_info, status):
         if status:
             self.underruns += 1
+        # Timed here rather than trusted to the driver. Two perf_counter calls
+        # and a compare, which is nothing beside the mixing below, and it is
+        # the only reason this app can say "that output is not keeping up"
+        # instead of shrugging: PortAudio reported a clean stream through a
+        # measured seven per cent loss into a virtual cable.
+        now = time.perf_counter()
+        previous, self._last_callback = self._last_callback, now
+        self.blocks += 1
+        self.last_frames = frames
+        if previous is not None and frames:
+            gap = now - previous
+            if gap > self.worst_gap:
+                self.worst_gap = gap
+            if gap > (frames / float(self.samplerate)) * C.LATE_BLOCK_FACTOR:
+                self.late_blocks += 1
         outdata[:] = self.render(frames)
+
+    # -------------------------------------------------------------- health --
+    @property
+    def late_share(self):
+        """What fraction of blocks arrived late. Zero when nothing has run."""
+        return (self.late_blocks / float(self.blocks)) if self.blocks else 0.0
+
+    def keeping_up(self):
+        """Is this output healthy, and one line saying why if it is not."""
+        if self.stream is None:
+            return False, self.last_error or "not running"
+        if self.underruns:
+            return False, "%d dropouts reported by the sound card" % self.underruns
+        if self.late_blocks and self.late_share > C.LATE_BLOCK_WARN_SHARE:
+            return False, ("%d of %d blocks arrived late, worst gap %d "
+                           "milliseconds" % (self.late_blocks, self.blocks,
+                                             round(self.worst_gap * 1000)))
+        return True, "keeping up"
 
 
 def resolve_device(spec):
@@ -628,6 +794,11 @@ def device_spec(index):
         if dev["index"] == index:
             return {"name": dev["name"], "hostapi": dev["hostapi"]}
     return None
+
+
+def _key_for(device):
+    """A bus key that survives a rebuild. See DEFAULT_DEVICE_KEY."""
+    return DEFAULT_DEVICE_KEY if device is None else device
 
 
 class MixerGroup:
@@ -661,6 +832,14 @@ class MixerGroup:
         #: not. None means whatever bank 1 is using.
         self.monitor_device = monitor_device
         self._monitor_source = None
+        #: Whether the monitor card carries EVERY card's show or only its own.
+        #: On by default, because the alternative is a presenter who cannot
+        #: hear half of what is going out. Measured 10 September 2026: banks
+        #: on one card and the monitor on another gave the banks' card the
+        #: pads with no microphone, and the monitor the microphone with no
+        #: pads. Neither output had the whole show.
+        self.monitor_everything = True
+        self._monitor_bus = None
         self.open_stream = open_stream
         self.duck_bus = DuckBus()
         self._mixers = {}
@@ -680,28 +859,106 @@ class MixerGroup:
         wanted.add(self.monitor_device)
         for device in sorted(wanted, key=lambda d: (d is not None, d)):
             mixer = Mixer(device=device, open_stream=self.open_stream,
-                          duck_bus=self.duck_bus, key=device)
+                          duck_bus=self.duck_bus, key=_key_for(device))
             # A remembered device that is gone, or held exclusively by something
             # else, must not leave that bank silent with no explanation. Fall
             # back to the default output and record why, so the frame can say so.
             if self.open_stream and mixer.stream is None and device is not None:
-                self.problems.append(
-                    "%s could not be opened, so those sounds are going to the "
-                    "default output instead" % describe_device(device))
+                # WHICH role was on that card decides what just happened and
+                # what has to be said. This used to remap the banks and say
+                # "those sounds", whatever the card was for.
+                #
+                # **The monitor was never remapped at all**, and that is the
+                # part that was dangerous rather than merely untidy.
+                # `monitor_mixer` is `_mixers.get(monitor_device) or primary`,
+                # so a monitor device left pointing at a card that would not
+                # open silently resolves to BANK 1's output. With bank 1 on a
+                # virtual cable, which is exactly the setup this is for, the
+                # presenter's microphone and the end of track cue go straight
+                # into whatever program is listening to that cable, and the
+                # message said they had gone to the default output. Found by
+                # Jackson, 10 September 2026, measured with a sleeping
+                # Bluetooth headset.
+                was_bank = any(dev == device
+                               for dev in self.bank_devices.values())
+                was_monitor = (self.monitor_device == device)
                 mixer.close()
                 for bank, dev in list(self.bank_devices.items()):
                     if dev == device:
                         self.bank_devices[bank] = None
+                if was_monitor:
+                    self.monitor_device = None
+                where = describe_device(device)
+                if was_monitor and was_bank:
+                    self.problems.append(
+                        "%s could not be opened, so those sounds and what you "
+                        "hear are both going to the default output instead"
+                        % where)
+                elif was_monitor:
+                    self.problems.append(
+                        "%s could not be opened, so what you hear is going to "
+                        "the default output instead. Check where that is "
+                        "before you say anything you would not broadcast"
+                        % where)
+                else:
+                    self.problems.append(
+                        "%s could not be opened, so those sounds are going to "
+                        "the default output instead" % where)
                 if None in self._mixers:
                     continue
                 device = None
                 mixer = Mixer(device=None, open_stream=self.open_stream,
-                              duck_bus=self.duck_bus, key=None)
+                              duck_bus=self.duck_bus, key=_key_for(None))
             self._mixers.setdefault(device, mixer)
 
         if not self._mixers:
             self._mixers[None] = Mixer(device=None, open_stream=self.open_stream,
-                                       duck_bus=self.duck_bus, key=None)
+                                       duck_bus=self.duck_bus,
+                                       key=_key_for(None))
+        self._wire_monitor()
+
+    def _wire_monitor(self):
+        """Give the card the presenter listens on every other card's show.
+
+        One bus, written by every mixer except the monitor's own and drained
+        by that one. The monitor mixer is left out of its own bus for the
+        obvious reason: what it plays already comes out of the card it is
+        playing on, and putting it through the ring as well would be a second
+        copy of itself a few milliseconds late.
+
+        **With one sound card this does nothing at all**, which is the
+        ordinary case: there are no other mixers, so there is no bus, no ring
+        and no added latency on the path between a key and a sound.
+        """
+        for mixer in self._mixers.values():
+            mixer.monitor_tap = None
+            mixer.monitor_feed = None
+        self._monitor_bus = None
+        if not self.monitor_everything:
+            return
+        monitor = self.monitor_mixer
+        others = [m for m in self._mixers.values() if m is not monitor]
+        if not others:
+            return
+        bus = AirBus(monitor.samplerate, seconds=C.MONITOR_RING_SECONDS)
+        self._monitor_bus = bus
+        monitor.monitor_feed = bus
+        for mixer in others:
+            mixer.monitor_tap = bus
+
+    def set_monitor_everything(self, on):
+        """Turn the full programme monitor on or off, and rewire."""
+        on = bool(on)
+        if on == self.monitor_everything:
+            return False
+        self.monitor_everything = on
+        self._wire_monitor()
+        return True
+
+    @property
+    def monitor_gaps(self):
+        """Times the monitor feed ran dry. A monitoring fault, never an air one."""
+        return sum(m.monitor_gaps for m in self._mixers.values())
 
     @property
     def mixers(self):
@@ -733,6 +990,11 @@ class MixerGroup:
         # fixed it.
         air_tap = self.air_tap
         air_source = self.air_source
+        # The send is carried across for exactly the reason above, and it is
+        # easier to lose: a send runs with nothing live, so a device change
+        # would silently take it off with no stream to notice.
+        send_tap = self.send_tap
+        send_minus = self.send_minus
         monitor_only = self.playlist_monitor_only
         self.stop_all(fade_out=0.0)
         self.bank_devices = dict(bank_devices or {})
@@ -751,6 +1013,13 @@ class MixerGroup:
         if air_tap is not None:
             self.air_tap = air_tap
             self.air_source = air_source
+        if send_tap is not None:
+            self.send_tap = send_tap
+            self.send_minus = send_minus
+            # The sources are read by whichever mixer holds air_source, and
+            # with nothing live that would be nobody at all.
+            if air_source is not None and self.air_source is None:
+                self.air_source = air_source
         return not self.problems
 
     def distinct_device_count(self):
@@ -894,6 +1163,32 @@ class MixerGroup:
         self.primary.air_source = source
 
     @property
+    def send_tap(self):
+        """Where the send takes the mix from, across every card at once."""
+        return self.primary.send_tap
+
+    @send_tap.setter
+    def send_tap(self, tap):
+        # Every card, the same as air_tap: a bank routed to its own output is
+        # still part of the show and still has to reach whoever is being sent
+        # it. See the program bus note in CLAUDE.md.
+        for mixer in self._mixers.values():
+            mixer.send_tap = tap
+
+    @property
+    def send_minus(self):
+        return self.primary.send_minus
+
+    @send_minus.setter
+    def send_minus(self, source):
+        # Only on the mixer that actually reads the sources, which is the same
+        # one air_source is on. Setting it anywhere else would be a promise
+        # nothing keeps.
+        for mixer in self._mixers.values():
+            mixer.send_minus = None
+        self.primary.send_minus = source
+
+    @property
     def playlist_monitor_only(self):
         return self.primary.playlist_monitor_only
 
@@ -957,6 +1252,18 @@ class MixerGroup:
     @property
     def underruns(self):
         return sum(m.underruns for m in self._mixers.values())
+
+    @property
+    def late_blocks(self):
+        return sum(m.late_blocks for m in self._mixers.values())
+
+    def keeping_up(self):
+        """Are all the outputs healthy, and the first reason one is not."""
+        for mixer in self._mixers.values():
+            ok, why = mixer.keeping_up()
+            if not ok:
+                return False, "%s: %s" % (describe_device(mixer.device), why)
+        return True, "keeping up"
 
     @property
     def peak(self):

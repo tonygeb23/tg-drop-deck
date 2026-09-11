@@ -244,6 +244,29 @@ for shortcut in ("Ctrl+M", "Ctrl+Shift+M", "Ctrl+Shift+P", "Ctrl+Shift+S",
                  "Alt+D", "Ctrl+F2", "Ctrl+V", "Ctrl+F12"):
     check("F1 help documents %s" % shortcut, shortcut in C.KEYBOARD_HELP)
 
+# The eight above were a hand kept list, and a hand kept list is exactly how
+# F1 fell eight keys behind the menus without one check failing. Derive it
+# instead: every key a MENU advertises has to be in F1, because F1 is what
+# the app itself calls the list of keys.
+#
+# One exemption, with its reason, the same shape check_guide.py uses.
+NOT_IN_F1 = {
+    "Alt+F4": "closes a window in every Windows program, so it is not this "
+              "app's key to document",
+}
+advertised = set()
+for position in range(bar.GetMenuCount()):
+    for _path, item in walk(bar.GetMenu(position)):
+        label = item.GetItemLabel()
+        if chr(9) in label:
+            advertised.add(label.split(chr(9))[1].strip())
+undocumented = sorted(key for key in advertised
+                      if key not in C.KEYBOARD_HELP and key not in NOT_IN_F1)
+check("every key the menus advertise is in F1, with no hand kept list",
+      not undocumented, undocumented)
+check("and there are plenty of them to check", len(advertised) >= 30,
+      len(advertised))
+
 # ---------------------------------------------------------------------------
 print("No two commands share an id")
 

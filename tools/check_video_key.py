@@ -102,6 +102,23 @@ KEYS = {
                 (wx.WXK_ALT, wx.WXK_SHIFT), "C"),
     "shot": ("Alt+Shift+D", "the shot check", "_on_shot_check",
              (wx.WXK_ALT, wx.WXK_SHIFT), "D"),
+    # The send, added in 3.6.0. Three more ids in the 400s block, which is
+    # the reason above, and Alt+Shift+O is one more chord built on the pair
+    # of modifiers Windows itself uses for switching keyboard layout.
+    "send": ("Alt+Shift+O", "the send setup", "_on_send_setup",
+             (wx.WXK_ALT, wx.WXK_SHIFT), "O"),
+    "sendstatus": ("Ctrl+Shift+O", "how the send is doing", "_on_send_status",
+                   (wx.WXK_CONTROL, wx.WXK_SHIFT), "O"),
+    "sendhear": ("Ctrl+Shift+H", "hearing the send", "_on_send_monitor",
+                 (wx.WXK_CONTROL, wx.WXK_SHIFT), "H"),
+    "routing": ("Ctrl+Shift+W", "where everything is going", "_on_routing",
+                (wx.WXK_CONTROL, wx.WXK_SHIFT), "W"),
+    # 3.7.0. Both new keys, both on chords Windows has opinions about.
+    "videorec": ("Ctrl+Shift+R", "recording the picture",
+                 "toggle_video_recording",
+                 (wx.WXK_CONTROL, wx.WXK_SHIFT), "R"),
+    "cue": ("Ctrl+Shift+C", "the cue sheet", "_on_cue_sheet",
+            (wx.WXK_CONTROL, wx.WXK_SHIFT), "C"),
 }
 
 

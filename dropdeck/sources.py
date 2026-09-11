@@ -50,7 +50,7 @@ class Source:
 
     def __init__(self, name="", device_name="", device_hostapi="",
                  gain_db=0.0, monitor=False, on_air=True, channel="mix",
-                 samplerate=None, kind=DEVICE, program=""):
+                 samplerate=None, kind=DEVICE, program="", delay_ms=0.0):
         self.name = name or "Source"
         self.kind = kind if kind in (self.DEVICE, self.PROGRAM) else self.DEVICE
         #: Remembered by NAME, like every other device in this app. An index
@@ -73,6 +73,33 @@ class Source:
             self.input.channel = (channel if channel in ("mix", "left", "right")
                                   else "mix")
         self.last_error = None
+
+        #: How far this source is held back, in milliseconds. Darrell's
+        #: request: a capture card arrives whenever its own hardware gets
+        #: round to it. See _DelayLine, which also says what this cannot do.
+        #: A line per tap, because what you hear and what goes out are read
+        #: separately and each consumes what it takes.
+        self._delay_ms = 0.0
+        self._delay_monitor = _DelayLine()
+        self._delay_air = _DelayLine()
+        self.delay_ms = delay_ms
+
+    @property
+    def delay_ms(self):
+        return self._delay_ms
+
+    @delay_ms.setter
+    def delay_ms(self, value):
+        try:
+            value = float(value or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        value = max(0.0, min(C.MAX_SOURCE_DELAY_MS, value))
+        self._delay_ms = value
+        rate = getattr(self.input, "output_rate", None) or C.DEFAULT_SAMPLERATE
+        frames = int(round(value * rate / 1000.0))
+        self._delay_monitor.set_frames(frames)
+        self._delay_air.set_frames(frames)
 
     #: Silenced by hand, from the source control list. Never saved: a mute
     #: is something you do during a show, and coming back tomorrow to a
@@ -154,6 +181,8 @@ class Source:
                 parts.append("you hear it")
         if self.gain_db:
             parts.append("%+.0f dB" % self.gain_db)
+        if self.delay_ms:
+            parts.append("held back %d ms" % int(self.delay_ms))
         chosen = self.program if self.is_program else self.device_name
         if chosen and not self.is_open:
             parts.append(self.last_error or "not open")
@@ -216,10 +245,10 @@ class Source:
 
     # --------------------------------------------------------------- audio --
     def read(self, frames):
-        return self.input.read(frames)
+        return self._delay_monitor.feed(self.input.read(frames))
 
     def read_air(self, frames):
-        return self.input.read_air(frames)
+        return self._delay_air.feed(self.input.read_air(frames))
 
     # ------------------------------------------------------------- storage --
     def to_dict(self):
@@ -228,6 +257,7 @@ class Source:
                 "device_hostapi": self.device_hostapi,
                 "program": self.program,
                 "gain_db": float(self.gain_db), "channel": self.channel,
+                "delay_ms": float(self.delay_ms),
                 "monitor": bool(self.wanted_monitor),
                 "on_air": bool(self.wanted_on_air)}
 
@@ -248,7 +278,58 @@ class Source:
                    monitor=bool(data.get("monitor", False)),
                    on_air=bool(data.get("on_air", True)),
                    channel=str(data.get("channel") or "mix"),
+                   delay_ms=data.get("delay_ms", 0.0),
                    samplerate=samplerate)
+
+
+class _DelayLine:
+    """Holds a source back by a fixed number of frames.
+
+    Darrell, a listener, 10 September 2026: "when using external audio
+    sources, there is some lag there. For example, I would stream my capture
+    card as an audio or video source for game audio. In obs, we can adjust
+    the offset for the source, so it does not lag as much. Could this be done
+    in drop deck?"
+
+    Yes, and this is it. A capture card, a console, a games call over a cable:
+    each arrives whenever its own hardware gets round to it, and nothing in
+    the world lines them up for you.
+
+    **What this can and cannot do, said plainly because the UI has to say it
+    too.** It can only ever make a source LATER. Nothing can make live audio
+    arrive earlier than it does, so a source that is running behind is
+    corrected by delaying everything it is out with, not by delaying it.
+    That is also how OBS works and it surprises everybody once.
+
+    Its own line per tap, because what you hear and what goes out are read
+    separately and each consumes what it takes.
+    """
+
+    def __init__(self, frames=0):
+        self._frames = 0
+        self._held = np.zeros((0, CHANNELS), dtype=np.float32)
+        self.set_frames(frames)
+
+    def set_frames(self, frames):
+        frames = max(0, int(frames))
+        if frames == self._frames:
+            return
+        self._frames = frames
+        # Start again rather than stretch what is held: a delay changed mid
+        # show is somebody lining a source up by ear, and a click while they
+        # do it is better than an answer that keeps sliding.
+        self._held = np.zeros((frames, CHANNELS), dtype=np.float32)
+
+    @property
+    def frames(self):
+        return self._frames
+
+    def feed(self, block):
+        if not self._frames or block is None or not len(block):
+            return block
+        both = np.concatenate([self._held, block])
+        out, self._held = both[:len(block)], both[len(block):]
+        return out
 
 
 class SourceGroup:
@@ -264,9 +345,10 @@ class SourceGroup:
     mixer holds this and not the sources themselves.
     """
 
-    def __init__(self, mic=None, sources=None):
+    def __init__(self, mic=None, sources=None, extras=None):
         self.mic = mic
         self.sources = list(sources or [])
+        self.extras = list(extras or [])
 
     def __len__(self):
         return len(self.sources) + (1 if self.mic is not None else 0)
@@ -274,34 +356,76 @@ class SourceGroup:
     def __bool__(self):
         return bool(len(self))
 
-    def _sum(self, frames, what):
+    def _members(self):
+        """Everything summed here, in order.
+
+        ``extras`` are feeds the presenter hears and the listener never does.
+        A confidence monitor of the send is the one so far. They are summed
+        into ``read`` and left out of ``read_air`` by answering zeros to it,
+        which is what makes it impossible for one to arrive back in the mix
+        it came from.
+        """
+        return (([self.mic] if self.mic is not None else [])
+                + self.sources + list(self.extras))
+
+    def _sum(self, frames, what, minus=None):
+        """Sum every member once. Optionally a second sum, less one member.
+
+        One read, because reading a source TAKES the audio away from it: two
+        passes over the same sources would give each sum half a voice. So the
+        second sum is the first with one member's own block subtracted, which
+        is exact, everything here being a plain addition.
+        """
         block = None
-        for source in ([self.mic] if self.mic is not None else []) + self.sources:
+        taken = None
+        for source in self._members():
             try:
                 piece = getattr(source, what)(frames)
             except Exception:
                 continue      # one bad input must never take the show down
             if piece is None or not len(piece):
                 continue
+            if source is minus:
+                taken = piece
             if block is None:
                 block = piece.copy()
             else:
                 block += piece
-        return block
+        return block, taken
 
     def read(self, frames):
         """What the presenter hears. Zeros when nothing is monitored."""
-        block = self._sum(frames, "read")
+        block, _ = self._sum(frames, "read")
         if block is None:
             return np.zeros((frames, CHANNELS), dtype=np.float32)
         return block
 
     def read_air(self, frames):
         """What the listener hears."""
-        block = self._sum(frames, "read_air")
+        block, _ = self._sum(frames, "read_air")
         if block is None:
             return np.zeros((frames, CHANNELS), dtype=np.float32)
         return block
+
+    def read_air_minus(self, frames, minus=None):
+        """The on air sum, and the same sum without one source in it.
+
+        This is mix minus. Feeding a program back its own audio is how a call
+        gets an echo of itself, so a send that carries a captured program has
+        to leave that program out, and it has to do it off the one read
+        everything else is already using.
+
+        Returns a pair, always. With no ``minus``, or a ``minus`` that
+        contributed nothing this block, the two are the same array rather
+        than a copy: nothing downstream may write into either in place.
+        """
+        block, taken = self._sum(frames, "read_air", minus=minus)
+        if block is None:
+            block = np.zeros((frames, CHANNELS), dtype=np.float32)
+            return block, block
+        if taken is None:
+            return block, block
+        return block, block - taken
 
 
 def available_inputs():

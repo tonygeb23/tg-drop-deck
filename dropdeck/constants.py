@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.5.2"
+APP_VERSION = "3.7.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -291,7 +291,64 @@ DEFAULT_DUCK_DB = -9.0
 DUCK_ATTACK = 0.12
 DUCK_RELEASE = 0.70
 
+#: How many frames a block of audio is, wherever this app chooses the number
+#: for itself: the microphone's input stream, and every test that renders the
+#: mixer by hand.
 BLOCKSIZE = 512
+
+#: What the OUTPUT stream asks for, and it deliberately asks for nothing.
+#:
+#: Zero means "whatever suits this device", and PortAudio then calls back with
+#: however many frames the card is actually ready for. Every output shipped
+#: with a fixed 512 until 3.6.0, and on a virtual audio cable that quietly
+#: destroyed the sound.
+#:
+#: Measured on Tony's machine, 9 September 2026, Drop Deck's own mixer playing
+#: a 1 kHz tone into VB-CABLE and the far end of the cable recorded and
+#: analysed. Ten runs at each size, counting how much of the tone never
+#: arrived:
+#:
+#:   512   7 of 10 runs lost audio, median 2.67 per cent, worst 7.39
+#:   1024  6 of 10 runs lost audio, median 0.06 per cent, worst 0.74
+#:   2048  0 of 10 runs lost audio
+#:   0     0 of 10 runs lost audio, and the SAME 22 ms latency as 512
+#:
+#: So this is not a trade of latency for reliability. Zero gives both, which
+#: is why it is zero rather than 2048.
+#:
+#: And it is not worse anywhere else either, which was checked rather than
+#: assumed. PortAudio's reported output latency on the same machine:
+#:
+#:   the system default output (a Yeti on MME)   512: 209 ms   0: 180 ms
+#:   the same Yeti on WASAPI                     512:  23 ms   0:  22 ms
+#:   CABLE Input on WASAPI                       512:  22 ms   0:  22 ms
+#:
+#: Which turned up something worth knowing on its own: **the Windows system
+#: default output goes through MME, and MME is about two hundred milliseconds
+#: whatever it is asked for.** The same speakers chosen explicitly under
+#: WASAPI are twenty two. Anybody who cares about the gap between a key and a
+#: sound should pick the WASAPI entry in Preferences, Output rather than
+#: leaving it on the system default. output_devices() already lists WASAPI
+#: first for this reason.
+#:
+#: What it sounded like: about six gaps a second, four milliseconds each, so
+#: a 1 kHz tone came back reading 974 Hz on a cycle count. Tony reported it as
+#: "a change in pitch, a little choppiness" going into TeamTalk, and that is
+#: exactly what a few per cent of missing audio sounds like. PortAudio
+#: reported NO underrun throughout, which is why nothing ever said so and why
+#: Mixer now times its own callback. See mixer.Mixer.late_blocks.
+OUTPUT_BLOCKSIZE = 0
+
+#: A callback that arrives later than this multiple of its own length has
+#: been late. Not an error on its own: one late block is a scheduling
+#: hiccup. It is counted so that "is this output actually keeping up" is a
+#: question the app can answer instead of guess.
+LATE_BLOCK_FACTOR = 1.8
+
+#: And how many of them, as a share of all blocks, before it is worth saying
+#: anything. One in two hundred is a machine having a moment. One in fifty is
+#: audible, and it is roughly what the 512 frame output was doing.
+LATE_BLOCK_WARN_SHARE = 0.005
 
 #: Where the output starts rounding off rather than being sawn flat. A
 #: crossfade is two songs at once and two songs are louder than one, so the
@@ -420,6 +477,7 @@ THE PLAYLIST - a running order that cues itself
   Alt+Up / Alt+Down         Move it up or down the order
   Alt+Home / Alt+End        Send it to the top of the order, or the end
   Shift+A / Shift+U         Tick every track, or untick every track
+  Ctrl+Shift+Enter          Play the running order from the top
   Ctrl+Shift+L              Go to whatever is on air
   First letter              Jumps to the next track whose title starts with
                             it, the way any Windows list does
@@ -488,6 +546,10 @@ OTHER THINGS ON THE AIR
   Alt+Shift+S, or the On air menu, Audio sources. Anything Windows offers as
   an input can go out with you: a second microphone, a hardware mixer, or one
   program's audio on its own.
+  HOLD THIS SOURCE BACK. A capture card or a console arrives whenever its own
+  hardware gets round to it. Set a delay in milliseconds to line it up. It can
+  only ever make a source LATER: if one is running BEHIND the others, hold the
+  others back instead. OBS works the same way.
   A PROGRAM. Take audio from, One program, then pick it from the list. Windows
   hands over exactly what that program is playing and nothing else, with
   nothing to set up in the program and no driver to install. The list shows
@@ -517,11 +579,29 @@ OTHER THINGS ON THE AIR
   Sources are never ducked and never go through the voice processing. Both of
   those belong to your microphone.
 
-FEEDING OBS, OR ANY OTHER PROGRAM
-  The other direction, and it needs nothing new. Preferences, Output, sends
-  any bank to a sound card of its own, so point one at a virtual audio cable
-  and add that cable in OBS as an audio input. Twitch and YouTube then get the
-  soundboard along with everything else OBS is capturing.
+FEEDING TEAMTALK, ZOOM, OBS, OR ANY OTHER PROGRAM
+  Alt+Shift+O, Send this show to another program. Point it at a virtual audio
+  cable and set the other program's microphone to the other end of that same
+  cable. It sends the whole show: pads, beds, running order, your microphone
+  and every source you are catching, and it does not need you to be on air.
+  It can leave one source out, so sending to a program you are also capturing
+  does not hand that program its own audio back.
+  Ctrl+Shift+H hears exactly what is going. Ctrl+Shift+O says whether it is
+  arriving cleanly. Ctrl+Shift+R reads out where everything is going.
+  Do NOT point Preferences, Output at a cable for this. That output carries
+  your sounds and NOT your microphone, so the other program would get a
+  soundboard with no voice on it.
+
+WHERE YOUR AUDIO GOES
+  Three separate questions, and Ctrl+Shift+R answers all three at once.
+  Preferences, Output is where your SOUNDS play, and a bank can have a card
+  of its own if you ride levels on a desk.
+  Preferences, Microphone, Hear yourself through is what YOU hear. It carries
+  every card's show, so putting a bank on another card does not make you deaf
+  to it.
+  Alt+Shift+O is the whole show OUT of this machine, for another program.
+  The programme output wants a card nothing else is using. Sharing one means
+  that card carries the show twice, and Drop Deck will say so.
 
 SAVING A RUNNING ORDER
   Playlist menu, Save the running order, writes it as an M3U playlist file.
@@ -610,6 +690,44 @@ PUTTING THE SHOW ON THE INTERNET
   Alt+Ctrl+Shift+S          Source control, for while you are on air: mute,
                             solo, rename or remove, without leaving the
                             keyboard
+
+THE PICTURE, WHEN YOU ARE STREAMING VIDEO
+  Alt+Shift+T               Screen text: your station name, what is playing,
+                            a clock or your own words, in four named places
+  Alt+Shift+C               Colours: your background, your words and your
+                            accent, each one scored for how well it reads
+  Alt+Shift+D               Check my shot: have the picture going out
+                            described to you by Claude, ChatGPT or Gemini
+  Ctrl+Shift+F              What the camera can see: whether you are in
+                            shot, centred and lit
+  Ctrl+Shift+V              What is on screen right now, including anything
+                            sitting on top of the picture
+
+GIVING ANOTHER PROGRAM ON THIS MACHINE YOUR SHOW
+  Alt+Shift+O               Send this show to another program: TeamTalk,
+                            Zoom, Discord, OBS. Point it at a virtual audio
+                            cable and set that program's microphone to the
+                            other end of the same cable
+  Ctrl+Shift+H              Hear exactly what is being sent
+  Ctrl+Shift+O              Is the send keeping up
+  Ctrl+Shift+W              Where is everything going: your sounds, what you
+                            hear, and what is being sent, all in one go
+
+RECORDING THE PICTURE AS WELL AS THE SOUND
+  Ctrl+R                    Record the sound
+  Ctrl+Shift+R              Record the picture AND the sound, to one MP4.
+                            It does not need you to be on air, and it takes
+                            the same picture that would go out
+  Both say what is really in the recording when they start, including
+  anything you can hear but is NOT on the air and therefore not in the file.
+
+WHAT IS COMING UP
+  Ctrl+Shift+C              The cue sheet: everything ticked in the running
+                            order, top to bottom, draining as the show runs.
+                            A track leaves ten seconds after it starts
+  N                         Inside it, says the next three in one sentence
+  Enter                     Inside it, crosses into the track you are on
+  Your pads and every other key still work while it is open.
 
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come
@@ -701,11 +819,14 @@ TELLING US SOMETHING
   "do not ask me again" on that window.
 
 FILE
+  Ctrl+N                    Start a new, empty board
   Ctrl+S                    Save the current board
   Ctrl+F12                  Save the board to a new file
   Ctrl+O                    Open a board
   Ctrl+P                    Preferences: output, sounds and beds, playlist,
-                            microphone, speech. Five tabs, Ctrl+Tab between
+                            microphone, voice, audio streaming, video
+                            streaming, recording, speech and AI provider.
+                            Ten tabs, Ctrl+Tab between them
 
 The playlist has its own fader and ducks under sounds and drops, the same
 way the beds do. Escape three times stops it along with everything else.
@@ -722,6 +843,151 @@ Your board saves itself on exit and whenever you change it.
 #: seconds is enough to ride out a network hiccup without the stream noticing,
 #: and short enough that a listener is never far behind the presenter.
 AIR_RING_SECONDS = 2.0
+
+# ------------------------------------------------------------------- send --
+# The same mix, out of a sound card, whether or not anything is live. See
+# send.py, which explains why it is a separate stream rather than an output.
+
+#: How many frames the send asks its card for. A number rather than zero,
+#: unlike C.OUTPUT_BLOCKSIZE, and deliberately a big one: a send is never on
+#: the path between a key and a sound, so the tens of milliseconds it costs
+#: are invisible beside the network delay of whatever it is feeding, and a
+#: deep buffer is what keeps it clean. Measured zero loss over ten runs.
+SEND_BLOCKSIZE = 2048
+
+#: How much audio sits between the mixers and the send's own card. Longer
+#: than the stream's ring because it is absorbing the difference between two
+#: hardware clocks rather than a network hiccup.
+SEND_RING_SECONDS = 3.0
+
+#: How full that ring gets before the first sample goes out, and again after
+#: it has ever run dry. A quarter of a second is far longer than any
+#: scheduling hiccup and short enough that turning the send on feels immediate.
+SEND_PRIME_SECONDS = 0.25
+
+#: How much the confidence feed holds. It only has to bridge the gap between
+#: the send's callback and the monitor output's, which are milliseconds apart.
+SEND_MONITOR_SECONDS = 0.5
+
+#: How far a source may be held back, in milliseconds. Darrell, 10 September
+#: 2026, on a capture card: "there is some lag there ... in obs, we can adjust
+#: the offset for the source, so it does not lag as much."
+#:
+#: Two seconds is more than any card is out by and short enough that somebody
+#: lining one up by ear is not scrolling for ever. Zero is the default and
+#: costs nothing at all: the delay line returns the block it was given.
+MAX_SOURCE_DELAY_MS = 2000
+
+# ------------------------------------------------------------- cue sheet --
+# What is coming up next, Ctrl+Shift+C. See cuesheet.py.
+
+#: How long a track stays on the cue sheet after it starts. Tyler asked for
+#: ten seconds, and the number is his. It applies ONLY to the most recently
+#: started item: anything earlier leaves the moment something new begins,
+#: however short it was, or a nine second ident would leave two rows both
+#: claiming to be on air.
+CUE_GRACE = 10.0
+
+#: How often the cue sheet's clock line is rewritten while it is open. It
+#: never touches the list itself: a counting cell inside a row is a name
+#: change every second, and a name change on the row somebody is standing on
+#: makes NVDA stop and start again. The clock is a static text, which is never
+#: the focus object and is therefore silent by construction.
+CUE_REFRESH_MS = 500
+
+# --------------------------------------------------------- video recording --
+# Recording the picture as well as the sound, Ctrl+Shift+R. See videorecord.py,
+# which explains why none of these match the streaming ones.
+
+#: How often the file is made safe to open. A crash costs one of these and no
+#: more, so a three hour show loses its last second rather than all of it.
+#: Measured: fragmenting costs minus 0.04 per cent in bytes, because the
+#: fragment headers are smaller than the index they replace.
+RECORD_FRAGMENT_SECONDS = 1.0
+
+#: Constant quality, not constant bitrate. A file has no platform floor to pad
+#: up to, and padding is what the stream's filler bytes are for. Measured on
+#: the same ten seconds: CBR at 6000k gave 7.62 MB, this gave 2.20 MB, and the
+#: smaller one looks better. 18 is visually lossless for most material.
+RECORD_VIDEO_CRF = 18
+RECORD_VIDEO_PRESET = "medium"
+
+#: Bounded on purpose. Two unbounded x264 instances, one for the stream and
+#: one for the recording, oversubscribe every core on the machine, and the
+#: thing that suffers is the audio.
+RECORD_VIDEO_THREADS = 4
+
+#: For the encoders that will not take CRF: the hardware ones and Media
+#: Foundation. A number rather than nothing.
+RECORD_VIDEO_BITRATE = 6000
+
+#: The most frames the picture may emit in one pass to catch up with the
+#: sound. A cap, so a long stall becomes a small drop rather than a burst of
+#: a thousand frames that starves the audio behind it. Anything beyond it is
+#: counted as a skip and the timeline still moves, which is the part that
+#: keeps sync.
+RECORD_CATCHUP_FRAMES = 30
+
+#: **How much audio the video recorder takes at a time, and it is not
+#: STREAM_CHUNK_SECONDS.** This is the single number that decides whether the
+#: finished file is in sync, and copying the audio recorder's 0.25 seconds
+#: puts the sound a quarter of a second late in every single file.
+#:
+#: Why: the picture in the tap was grabbed a moment ago, and it is stamped
+#: where the AUDIO has got to, which is now minus whatever is still waiting in
+#: the bus. So the backlog IS the error, one for one. Measured by Jackson,
+#: 10 September 2026, marks read back out of a finished MP4:
+#:
+#:   drain 250 ms (STREAM_CHUNK_SECONDS)   sound late by 257 ms
+#:   drain 33 ms (one frame)               sound late by 57 ms
+#:
+#: ITU-R BT.1359 puts audio-late detectability at 125 ms and objectionable
+#: well below a quarter of a second. **And it survives every check this app
+#: has**: audio length matches video length, nothing is dropped, nothing is
+#: announced, and the file plays. It shows up only when somebody who can see
+#: watches it and says the lips are out, which Tony cannot do.
+#:
+#: A frame's worth of audio, so the two are drained in step. Never raise this
+#: to make the loop cheaper.
+RECORD_DRAIN_FRAMES_PER_PICTURE = 1
+
+#: How far ahead of the audio ALREADY WRITTEN a frame may be stamped, in
+#: frames. The picture is grabbed now and the audio has not caught up, so
+#: stamping against audio still waiting in the bus removes another 20 to 30
+#: ms of the error. Capped so it can never run away. Jackson measured this
+#: taking the 33 ms case from 57 ms to 23 ms, and called it secondary to the
+#: drain size, which it is.
+RECORD_STAMP_LEAD_FRAMES = 4
+
+#: Headroom before the AAC encoder, in decibels. `_soft_clip` ceilings at
+#: exactly 0 dBFS with no headroom at all, which is right for the speakers and
+#: for WAV and wrong for a lossy codec: measured decode peaks of +0.24, +0.26
+#: and +0.63 dBFS at 128, 192 and 256 kbps on material that soft clipped to
+#: minus nothing. This trim lives in the recorder's own feed and NOWHERE near
+#: the mixer, because the mixer is on the path to the speakers and the stream.
+RECORD_AAC_HEADROOM_DB = -1.0
+
+# ---------------------------------------------------------------- monitor --
+# Hearing the WHOLE show on one card while the show itself goes out of
+# another. See mixer.Mixer.monitor_tap and monitor_feed.
+#
+# Measured 10 September 2026, banks routed to one card and the monitor on
+# another: the banks' card carried the pads and NO microphone, and the
+# monitor carried the microphone and NO pads. Neither output had the whole
+# show, in opposite directions. This is what fixes the second half.
+
+#: How much audio sits between the other cards and the monitor's own card.
+#: Shorter than the send's ring because this one is in the presenter's ears
+#: and every millisecond of it is delay they can hear.
+MONITOR_RING_SECONDS = 1.0
+
+#: How full it gets before a sample comes out, and again after it runs dry.
+#: Forty milliseconds is the trade, stated plainly: a bank on ANOTHER sound
+#: card cannot reach these headphones sooner than the two cards' own buffers
+#: plus this, and hearing it forty milliseconds late is strictly better than
+#: not hearing it at all. Nothing on the ordinary path pays it: with one card,
+#: or with the banks on the monitor's own card, no bus exists.
+MONITOR_PRIME_SECONDS = 0.04
 
 #: How much the encoder takes at a time. A quarter of a second is small enough
 #: to keep the delay down and big enough that the thread is not spinning.

@@ -179,6 +179,61 @@ def selftest():  # noqa: C901
         problems.append("the video encoder does not work in this build: %r"
                         % exc)
     try:
+        # ACTUALLY WRITE ONE, and read it back. Encoding to RTMP working does
+        # not prove the MP4 muxer is in this build, and a missing muxer is
+        # the exact shape of fault this app has shipped before: the library
+        # imports, the feature does nothing, nothing raises. So this writes a
+        # real fragmented MP4 with both streams, decodes it, and checks the
+        # colour tag survived, which is the thing that was silently wrong on
+        # every stream until 3.5.0.
+        import fractions as _fr
+        import tempfile as _tf
+        import numpy as _np
+        import av as _av
+        from dropdeck import streamout as _so
+        _path = os.path.join(_tf.mkdtemp(), "selftest.mp4")
+        _handle = open(_path, "wb", buffering=0)
+        _c = _av.open(_handle, mode="w", format="mp4", options={
+            "movflags": "frag_custom+empty_moov+default_base_moof",
+            "frag_duration": "1000000", "flush_packets": "1"})
+        _a = _c.add_stream("aac", rate=48000)
+        _v = _c.add_stream("libx264", rate=30)
+        _v.width, _v.height, _v.pix_fmt = 160, 120, "yuv420p"
+        _so._tag_colour(_v)
+        _v.time_base = _fr.Fraction(1, 30)
+        _v.options = {"crf": "30", "preset": "ultrafast", "threads": "1"}
+        _c.start_encoding()
+        for _i in range(6):
+            _f = _av.VideoFrame.from_ndarray(
+                _np.zeros((120, 160, 3), dtype=_np.uint8), format="rgb24")
+            _f = _f.reformat(format="yuv420p",
+                             dst_colorspace=_C.RTMP_COLOURSPACE)
+            _f.pts, _f.time_base = _i, _fr.Fraction(1, 30)
+            for _p in _v.encode(_f):
+                _c.mux(_p)
+        for _p in _v.encode(None):
+            _c.mux(_p)
+        for _p in _a.encode(None):
+            _c.mux(_p)
+        _c.close()
+        _handle.close()
+        _back = _av.open(_path)
+        _vs = [x for x in _back.streams if x.type == "video"][0]
+        _tagged = _vs.codec_context.colorspace
+        _n = sum(1 for _ in _back.decode(_vs))
+        _back.close()
+        if _n < 1:
+            problems.append("a recorded MP4 has no frames in it")
+        elif int(_tagged) != 1:
+            problems.append("a recorded MP4 is not tagged BT.709, it says %s"
+                            % _tagged)
+        else:
+            notes.append("video recording: MP4 writes and reads back, "
+                         "%d frames, tagged BT.709" % _n)
+    except Exception as exc:
+        problems.append("video recording does not work in this build: %r"
+                        % exc)
+    try:
         from dropdeck import overlay as _overlay
         if not _overlay.available():
             problems.append("text cannot be drawn in this build: %s"

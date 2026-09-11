@@ -83,10 +83,22 @@ check("a build ahead of the feed refuses the next real release",
       "%s is not below %s" % (ahead, nextone))
 check("the shipped version accepts it",
       appupdate.parse_version(shipped) < appupdate.parse_version(nextone))
+# The three above are the real 2026 incident, kept as the illustration they
+# are. This is the live question, and it needs its own number: the newest
+# Windows build that EXISTS. Raise it when one is built, not when a version
+# is bumped.
+#
+# 3.6.0 is built but NOT published to the feed as of 9 September 2026. An
+# installed 3.6.0 therefore answers "you have the newest one" to every update
+# check, which is the very failure this file guards. Publish it with
+# release_app.py before it goes over anybody's working copy.
+newest_build = "3.7.0"
+
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)
-      > appupdate.parse_version(shipped),
-      "app says %s, newest Windows build is %s" % (C.APP_VERSION, shipped))
+      > appupdate.parse_version(newest_build),
+      "app says %s, newest Windows build is %s" % (C.APP_VERSION,
+                                                   newest_build))
 
 print("\n%d/%d checks passed" % (sum(CHECKS), len(CHECKS)))
 sys.exit(0 if all(CHECKS) else 1)

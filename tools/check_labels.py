@@ -266,7 +266,7 @@ def main():
                                   DropsLibraryDialog, FeedbackDialog,
                                   ColoursDialog, GoLiveDialog,
                                   ScreenTextDialog,
-                                  SearchDialog, SettingsDialog,
+                                  SearchDialog, SendDialog, SettingsDialog,
                                   SlotPropertiesDialog, SoundBrowserDialog,
                                   SourceControlDialog, SourcesDialog,
                                   StreamStatsDialog,
@@ -330,6 +330,7 @@ def main():
         # when there is something to say. The clean case has fewer controls
         # to get wrong, not more.
         ("Go live", lambda: GoLiveDialog(frame, _blocked_report(frame))),
+        ("Send", lambda: SendDialog(frame, frame.board)),
     ]:
         try:
             dialog = build()

@@ -108,11 +108,20 @@ Some things worth knowing while you build:
 
 SENDING SOUND SOMEWHERE ELSE
 
-Ctrl+P chooses where the audio comes out. If you have a virtual audio
-cable installed, pick it here to feed a stream or a recorder while you
-keep listening on your own speakers.
+To give another program on this machine your whole show, use Alt+Shift+O,
+Send this show to another program. Point it at a virtual audio cable and
+set that program's microphone to the other end of the same cable.
 
-The device is remembered by its name, so plugging in a headset later will
+Do NOT point Ctrl+P, Output at a cable for this. That output carries your
+pads, your beds and your running order and NOT your microphone, so the
+other program would get your soundboard with no voice on it, and you would
+stop hearing your own soundboard. Ctrl+Shift+R reads out where everything
+is going at any time.
+
+Ctrl+P chooses where your sounds come out, which is a different question:
+your speakers, your headphones, or a card per bank if you mix on a desk.
+
+Every device is remembered by its name, so plugging in a headset later will
 not silently move your sound somewhere you did not expect.
 
 

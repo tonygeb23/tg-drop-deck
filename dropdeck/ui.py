@@ -28,18 +28,24 @@ from . import picture
 from . import secrets
 from . import sources
 from . import preflight
+from . import cuesheet
+from . import routing
 from . import screen
+from . import videorecord
+from . import send as sendout
 from . import streamout
 from . import vst
 from . import globalhotkeys
 from . import m3u
 from .board import Board, default_board_path, demo_board_path
 from . import updatedialog
-from .dialogs import (ColoursDialog, GoLiveDialog, ScreenTextDialog,
+from .dialogs import (ColoursDialog, CueSheetDialog, GoLiveDialog,
+                      ScreenTextDialog,
                       ShotCheckDialog,
                       VideoSourceDialog,AssignHotkeyDialog, DonateDialog, DropsLibraryDialog,
                       FeedbackDialog, SearchDialog,
                       SettingsDialog, SlotPropertiesDialog,
+                      SendDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
                       StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
@@ -85,6 +91,32 @@ ID_SHOT_CHECK = wx.ID_HIGHEST + 419
 #: no other broadcast tool does. Ctrl+Shift+V, beside Ctrl+Shift+F for the
 #: camera and Ctrl+Shift+B for the stream.
 ID_ON_SCREEN = wx.ID_HIGHEST + 417
+
+#: The send: this show, out of a sound card, for another program on this
+#: machine. Three ids and three NEW keys, none of them anywhere near the
+#: frozen digit map.
+#:
+#: Alt+Shift+O sets it up, which is the family that already holds Alt+Shift+S
+#: for audio sources and Alt+Shift+V for the picture: things you go and
+#: change. Ctrl+Shift+O asks how it is doing, which is the family that holds
+#: Ctrl+Shift+B for the stream and Ctrl+Shift+F for the camera: things that
+#: answer a question. Ctrl+Shift+H turns the confidence feed on and off,
+#: because hearing it is a thing you do mid show and not a thing you set up.
+ID_SEND_SETUP = wx.ID_HIGHEST + 420
+ID_SEND_STATUS = wx.ID_HIGHEST + 421
+ID_SEND_MONITOR = wx.ID_HIGHEST + 422
+#: Where is everything going. Ctrl+Shift+W, and the only command in the app
+#: that answers the whole routing question in one go.
+ID_ROUTING = wx.ID_HIGHEST + 423
+#: Recording the picture as well as the sound. Ctrl+Shift+R, beside Ctrl+R,
+#: which is the pairing Tony asked for and the same shape as Ctrl+B and
+#: Ctrl+Shift+B.
+ID_VIDEO_RECORD = wx.ID_HIGHEST + 424
+#: What is coming up next. Ctrl+Shift+C, C for cue, which is Tyler's own
+#: word. In the Ctrl+Shift "tell me" family beside Ctrl+Shift+B, Ctrl+Shift+O
+#: and Ctrl+Shift+W, and next to Ctrl+Shift+P which goes to the running order
+#: this is built from.
+ID_CUE_SHEET = wx.ID_HIGHEST + 425
 
 ID_LIVE_TO_AUDIO = wx.ID_HIGHEST + 414
 ID_LIVE_TO_VIDEO = wx.ID_HIGHEST + 415
@@ -640,6 +672,19 @@ class DropDeckFrame(wx.Frame):
         self.source_group = sources.SourceGroup(self.mic, self.sources)
         self.mixer.monitor_source = self.source_group
 
+        #: This show, out of a sound card, so another program on this machine
+        #: can take it. None until the board asks for one. Unlike the stream
+        #: it IS restored on startup: a send is a piece of wiring rather than
+        #: a broadcast, and nothing goes out of it that was not going out of
+        #: the speakers anyway. See send.py.
+        self.send = None
+
+        #: What the board asked for, kept because _start_send turns send_on
+        #: OFF when it cannot open the card. Without this the startup line
+        #: cannot tell "no send was ever set up" from "the send you set up
+        #: yesterday is not running", and those are very different sentences.
+        self.board_wanted_send = bool(self.board.send_on)
+
         #: The stream, once there is one. None is off air, and off air is
         #: where this starts every single time: a program that could begin
         #: broadcasting by itself is not one to leave near a microphone.
@@ -659,6 +704,12 @@ class DropDeckFrame(wx.Frame):
         self._build_menu()
         self._build_ui()
         self._build_accelerators()
+
+        if self.board.send_on:
+            # Quiet, because the startup line says it. A card that has been
+            # unplugged since the board was saved turns the send off and is
+            # reported there rather than in a box nobody asked for.
+            self._start_send(quiet=True)
 
         self._playing = set()
         self._refresh_timer = wx.Timer(self)
@@ -894,10 +945,30 @@ class DropDeckFrame(wx.Frame):
             bits.append(f"{missing} files missing. Use File, relink missing sounds")
         if not self.mixer.is_running:
             bits.append(f"Audio could not start. {self.mixer.last_error or ''}")
+        # A send the board asked for and did not get. _start_send is called
+        # quietly at startup with a comment saying this line would say so,
+        # and this line had no send branch at all, so a cable that had been
+        # unplugged since yesterday was silent in every single place.
+        send_failed = bool(self.board_wanted_send) and not self.sending()
+        if send_failed:
+            bits.append("The send could not start, so nothing is going to "
+                        "another program. Alt+Shift+O to set it up again")
+        elif self.sending():
+            # Said out loud every time, on the channel that is not silenced.
+            # A board file decides this, and a board file quietly putting the
+            # microphone out of a sound card is not something to find out
+            # about later.
+            bits.append("Sending your whole show to %s for another program "
+                        "to pick up" % self.send.describe())
+        for line in self._routing_conflicts():
+            # A saved board can restore a routing that collides. It used to
+            # be checked only when somebody opened the send window.
+            bits.append(line)
         # "40 sounds loaded" is a pleasantry. "3 files missing" and "audio
         # could not start" are not, so the same line changes channel when it
         # is carrying one of them.
-        wrong = bool(missing) or not self.mixer.is_running
+        wrong = (bool(missing) or not self.mixer.is_running or send_failed
+                 or bool(self._routing_conflicts()))
         (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     # ------------------------------------------------------------------ ui ---
@@ -1161,6 +1232,11 @@ class DropDeckFrame(wx.Frame):
         self.record_item = air.Append(
             ID_RECORD, "Start &recording\tCtrl+R",
             "Record the show to a file. It does not need you to be on air")
+        self.video_record_item = air.Append(
+            ID_VIDEO_RECORD, "R&ecord picture and sound" + chr(9)
+            + "Ctrl+Shift+R",
+            "Record the picture as well as the sound, to one MP4. It does "
+            "not need you to be on air")
         air.Append(ID_SOURCE_CONTROL,
                    "Source &control..." + chr(9) + "Alt+Ctrl+Shift+S",
                    "Mute, solo, rename or remove a source while you are on "
@@ -1192,6 +1268,33 @@ class DropDeckFrame(wx.Frame):
         air.Append(ID_SOURCES, "&Audio sources..." + chr(9) + "Alt+Shift+S",
                    "Other inputs to put on the air: a second microphone, a "
                    "mixer, or one program's audio"),
+        air.AppendSeparator()
+        # The send. This menu is nearly out of mnemonics: A, C, D, F, G, H,
+        # L, M, N, O, P, R, S, T, U, V and W are all spoken for, so these
+        # three are worded around the letters that are left rather than the
+        # other way round. tests/test_menus.py is what enforces it, and it
+        # counts a submenu HEADER as no mnemonic at all.
+        self.send_item = air.Append(
+            ID_SEND_SETUP,
+            "Send th&is show to another program..." + chr(9)
+                   + "Alt+Shift+O",
+                   "Your whole show out of a sound card, so TeamTalk, Zoom or "
+                   "anything else on this machine can take it. It does not "
+                   "need you to be on air")
+        self.send_monitor_item = air.AppendCheckItem(
+            ID_SEND_MONITOR, "Hear what is &being sent" + chr(9)
+            + "Ctrl+Shift+H",
+            "Listen to exactly what the other program is being handed. It "
+            "goes to your monitor output and never back into the send")
+        air.Append(ID_ROUTING,
+                   "Where is ever&ything going" + chr(9) + "Ctrl+Shift+W",
+                   "Every output at once: your sounds, what you hear, and "
+                   "what another program is being sent")
+        air.Append(ID_SEND_STATUS,
+                   "Is the send &keeping up" + chr(9) + "Ctrl+Shift+O",
+                   "Where it is going, what it is leaving out, and whether it "
+                   "is arriving without gaps")
+        air.AppendSeparator()
         air.Append(ID_RECORD_FOLDER, "Open the recordings &folder",
                    "Where your recordings are saved")
         air.AppendSeparator()
@@ -1299,6 +1402,13 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self._open_recordings(),
                   id=ID_RECORD_FOLDER)
         self.Bind(wx.EVT_MENU, self._on_sources, id=ID_SOURCES)
+        self.Bind(wx.EVT_MENU, self._on_send_setup, id=ID_SEND_SETUP)
+        self.Bind(wx.EVT_MENU, self._on_send_monitor, id=ID_SEND_MONITOR)
+        self.Bind(wx.EVT_MENU, self._on_send_status, id=ID_SEND_STATUS)
+        self.Bind(wx.EVT_MENU, self._on_routing, id=ID_ROUTING)
+        self.Bind(wx.EVT_MENU, self.toggle_video_recording,
+                  id=ID_VIDEO_RECORD)
+        self.Bind(wx.EVT_MENU, self._on_cue_sheet, id=ID_CUE_SHEET)
         self.Bind(wx.EVT_MENU, self._on_video_sources, id=ID_VIDEO_SOURCES)
         self.Bind(wx.EVT_MENU, self._on_screen_text, id=ID_SCREEN_TEXT)
         self.Bind(wx.EVT_MENU, self._on_colours, id=ID_COLOURS)
@@ -1412,6 +1522,35 @@ class DropDeckFrame(wx.Frame):
             # card, a cable, or a program.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("S"),
                                 ID_SOURCES),
+            # And Alt+Shift+O sets up the send, in the same "go and change
+            # it" family. Ctrl+Shift+O asks how it is doing, beside
+            # Ctrl+Shift+B for the stream. Ctrl+Shift+H turns the confidence
+            # feed on and off, because Hearing it is a thing you do during a
+            # show. All three are new keys and the digit map is untouched.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("O"),
+                                ID_SEND_SETUP),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("O"),
+                                ID_SEND_STATUS),
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("H"),
+                                ID_SEND_MONITOR),
+            # Ctrl+Shift+W reads the whole routing out. W for Where.
+            #
+            # It was Ctrl+Shift+R for one day. Tony took that key back for
+            # recording the picture on 10 September 2026, and he was right to:
+            # Ctrl+R records audio, so Ctrl+Shift+R recording the picture as
+            # well is the same pair as Ctrl+B and Ctrl+Shift+B, and Ctrl+M and
+            # Ctrl+Shift+M. A key that has been in the world for one day and
+            # in one person's hands is not a key somebody has learned, which
+            # is the only reason this was allowed to move at all.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("W"),
+                                ID_ROUTING),
+            # Ctrl+R takes the sound, Ctrl+Shift+R takes the picture as well.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("R"),
+                                ID_VIDEO_RECORD),
+            # Ctrl+Shift+C is the cue sheet. Tyler asked for it and C is his
+            # word for it. A new key; the frozen digit map is untouched.
+            wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("C"),
+                                ID_CUE_SHEET),
             # And Alt+Shift+V for the video source, which is the same idea for
             # the other half of the show. Deliberately reachable while live.
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("V"),
@@ -1920,7 +2059,22 @@ class DropDeckFrame(wx.Frame):
             f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)   "
             f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
             f"{self._air_label()} (Ctrl+B)"
-            + ("   RECORDING (Ctrl+R)" if self.recording() else ""), 0)
+            + ("   RECORDING (Ctrl+R)" if self.recording() else "")
+            + self._send_label(), 0)
+
+    def _send_label(self):
+        """What the status bar says about the send, or nothing at all.
+
+        Nothing at all when there is no send, because a status bar that names
+        every feature you are not using is a status bar nobody reads. Once
+        there is one it is worth a word: it is going out of this machine and
+        the only other sign of it is on a key.
+        """
+        send = getattr(self, "send", None)
+        if send is None:
+            return ""
+        ok, _why = send.keeping_up()
+        return "   SENDING%s (Alt+Shift+O)" % ("" if ok else ", losing audio")
 
     def _keep_beds_off_the_playlist(self):
         """A bed and a playlist track are both music, so never both.
@@ -3641,7 +3795,13 @@ class DropDeckFrame(wx.Frame):
         soloed = self.anything_soloed()
         mic = getattr(self, "mic", None)
         if mic is not None:
-            wants = bool(self.board.stream_mic) and self.streaming_or_recording()
+            # A SEND counts, and it used not to. Every Mute and every Solo
+            # in Source Control comes through here, and this asked only
+            # whether something was live or recording, so pressing Space on
+            # any source's Mute during a TeamTalk call took the presenter's
+            # voice off the send and unmuting did not put it back. Found by
+            # Mark, 10 September 2026, reproduced every time.
+            wants = bool(self.board.stream_mic) and self.going_anywhere()
             if mic.muted or (soloed and not mic.soloed):
                 mic.on_air = False
             else:
@@ -3656,7 +3816,23 @@ class DropDeckFrame(wx.Frame):
 
     def streaming_or_recording(self):
         return bool(getattr(self, "air_bus", None)
-                    or getattr(self, "record_bus", None))
+                    or getattr(self, "record_bus", None)
+                    or getattr(self, "video_bus", None))
+
+    def recording_video(self):
+        """Is the picture being taped as well as the sound."""
+        rec = getattr(self, "video_recorder", None)
+        return rec is not None and rec.running
+
+    def going_anywhere(self):
+        """Is the on air mix wanted by ANYBODY: a stream, a recording, a send.
+
+        The question every mute, solo and source change has to ask. Asking
+        the narrower one took the microphone off a send that nothing else
+        was reading.
+        """
+        return (self.streaming_or_recording() or self.sending()
+                or self.recording_video())
 
     def start_sources(self):
         """Open every source that is wanted, and say what would not open.
@@ -3981,10 +4157,185 @@ class DropDeckFrame(wx.Frame):
                           "Recording failed", wx.OK | wx.ICON_WARNING, self)
             return False
         self._set_record_label(True)
-        self.announce("Recording to %s"
-                      % os.path.basename(self.recorder.path or ""))
+        self.announce("Recording to %s. %s"
+                      % (os.path.basename(self.recorder.path or ""),
+                         self.what_is_in_the_recording()))
         self._update_status()
         return True
+
+    # --------------------------------------------------- video recording --
+    def toggle_video_recording(self, _event=None):
+        """Ctrl+Shift+R. Tape the picture as well as the sound."""
+        if self.recording_video():
+            self.stop_video_recording()
+        else:
+            self.start_video_recording()
+
+    def start_video_recording(self):
+        """Begin taping picture and sound. Nothing here needs you on air."""
+        if self.recording_video():
+            return True
+        settings = self._picture_settings()
+        self.video_bus = streamout.AirBus(self.mixer.samplerate)
+        self.video_tap = videorecord.FrameTap()
+        self._sync_air_taps()
+        self.video_recorder = videorecord.VideoRecorder(
+            self.video_bus, self.video_tap,
+            width=int(settings.get("width") or self.board.video_width),
+            height=int(settings.get("height") or self.board.video_height),
+            fps=int(settings.get("fps") or self.board.video_fps),
+            bitrate=self.board.record_bitrate,
+            folder=self.board.record_folder or None,
+            on_state=self._on_record_state)
+        if not self.video_recorder.start():
+            detail = self.video_recorder.detail
+            self.video_recorder = None
+            self.video_bus = None
+            self.video_tap = None
+            self._sync_air_taps()
+            self.announce(detail or "Recording would not start")
+            return False
+        self._start_record_picture()
+        self._set_video_record_label(True)
+        self.announce("Recording picture and sound to %s. %s"
+                      % (os.path.basename(self.video_recorder.path or ""),
+                         self.what_is_in_the_recording()))
+        self._update_status()
+        return True
+
+    def stop_video_recording(self, quiet=False):
+        """Finish the file and say where it is and what went wrong."""
+        rec, self.video_recorder = getattr(self, "video_recorder", None), None
+        self._stop_record_picture()
+        said = rec.report() if rec is not None else ""
+        if rec is not None:
+            rec.stop()
+        self.video_bus = None
+        self.video_tap = None
+        self._sync_air_taps()
+        self._set_video_record_label(False)
+        if rec is not None and not quiet:
+            self.announce(said)
+        self._update_status()
+        return rec.path if rec is not None else None
+
+    def what_is_in_the_recording(self):
+        """Name what is really in it, and what is NOT. Darrell's question.
+
+        Darrell, 10 September 2026: "when I did my audio recording, the only
+        thing I heard was my voice, even though I checked the box that told
+        me that I would hear it myself."
+
+        He had ticked "Hear it yourself", which is monitoring, and a
+        recording takes the ON AIR mix. That is the right design and nothing
+        anywhere said so, so the recording appeared to lose his source. The
+        same rule the mix minus sentence already follows: something that is
+        NOT in it must never look as though it is.
+        """
+        inside, outside = [], []
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            if mic.on_air:
+                inside.append("your microphone")
+            elif not self.board.stream_mic:
+                outside.append("your microphone, which is switched off on the "
+                               "Audio streaming page")
+            elif mic.muted:
+                outside.append("your microphone, which is muted")
+        soloed = self.anything_soloed()
+        for source in getattr(self, "sources", []):
+            if source.wants_air(soloed):
+                inside.append(source.name)
+            elif source.wants_monitor(soloed):
+                outside.append("%s, which you can hear but is not on the air"
+                               % source.name)
+        inside.append("your sounds and running order")
+        said = "In it: %s." % ", ".join(inside)
+        if outside:
+            said += " NOT in it: %s." % ", ".join(outside)
+        return said
+
+    def _start_record_picture(self):
+        """Build the picture ourselves, unless the stream is already doing it.
+
+        When live, `RtmpDestination` fills the tap with the frame it is about
+        to encode, so the recording gets the identical picture and costs
+        nothing. Off air there is nobody making one, so this thread does.
+        """
+        self._stop_record_picture()
+        streamer = getattr(self, "streamer", None)
+        destination = getattr(streamer, "destination", None)
+        if destination is not None and hasattr(destination, "frame_tap"):
+            destination.frame_tap = self.video_tap
+            return
+        self._record_picture_stop = threading.Event()
+        self._record_picture_thread = threading.Thread(
+            target=self._record_picture_run, daemon=True,
+            name="dropdeck-record-picture")
+        self._record_picture_thread.start()
+
+    def _record_picture_run(self):
+        """One frame every 1/fps into the tap. Never touches the audio."""
+        source = None
+        try:
+            settings = self._picture_settings()
+            source = picture.build(settings)
+            overlay_ = self._build_overlay(settings) if hasattr(
+                self, "_build_overlay") else None
+            rec = getattr(self, "video_recorder", None)
+            fps = rec.fps if rec is not None else 30
+            width = rec.width if rec is not None else 1280
+            height = rec.height if rec is not None else 720
+            stop = self._record_picture_stop
+            while not stop.is_set():
+                started = time.monotonic()
+                try:
+                    frame = source.frame(width, height)
+                    if frame is not None:
+                        if overlay_ is not None:
+                            try:
+                                frame = overlay_.draw(frame)
+                            except Exception:
+                                pass
+                        tap = getattr(self, "video_tap", None)
+                        if tap is not None:
+                            tap.put(frame)
+                except Exception:
+                    pass
+                left = (1.0 / float(fps or 30)) - (time.monotonic() - started)
+                if left > 0:
+                    stop.wait(left)
+        except Exception:
+            pass
+        finally:
+            if source is not None:
+                try:
+                    source.close()
+                except Exception:
+                    pass
+
+    def _stop_record_picture(self):
+        stop = getattr(self, "_record_picture_stop", None)
+        if stop is not None:
+            stop.set()
+        thread = getattr(self, "_record_picture_thread", None)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._record_picture_thread = None
+        self._record_picture_stop = None
+        streamer = getattr(self, "streamer", None)
+        destination = getattr(streamer, "destination", None)
+        if destination is not None and hasattr(destination, "frame_tap"):
+            destination.frame_tap = None
+
+    def _set_video_record_label(self, on):
+        item = getattr(self, "video_record_item", None)
+        if item is not None:
+            # Alt+E, because this menu has spent every other letter. On air
+            # now holds A C D F G H I K L M N O P R S T U V W and Y.
+            item.SetItemLabel(("Stop r&ecording picture" if on
+                               else "R&ecord picture and sound")
+                              + chr(9) + "Ctrl+Shift+R")
 
     def stop_recording(self, quiet=False):
         """Finish the file and say where it is."""
@@ -4046,7 +4397,8 @@ class DropDeckFrame(wx.Frame):
         device change in 3.0, and that was one caller, not two.
         """
         buses = [bus for bus in (getattr(self, "air_bus", None),
-                                 getattr(self, "record_bus", None))
+                                 getattr(self, "record_bus", None),
+                                 getattr(self, "video_bus", None))
                  if bus is not None]
         tap = None
         if len(buses) == 1:
@@ -4056,14 +4408,22 @@ class DropDeckFrame(wx.Frame):
         for mixer in self.mixer.mixers:
             mixer.air_tap = tap
             mixer.air_source = None
+        # The send is a THIRD reader of the same mix, and the one that does
+        # not need anything to be live. It has its own bus for the same
+        # reason the recorder does: reading a bus takes the audio out of it.
+        send = getattr(self, "send", None)
+        sending = send is not None and send.is_running
+        self.mixer.send_tap = send.bus if sending else None
+        self.mixer.send_minus = self._send_minus_source() if sending else None
         mic = getattr(self, "mic", None)
         if mic is None:
             return
         # The microphone goes out whether or not you can hear yourself. They
         # are different questions and this is the one about the listener. It
-        # is recorded on the same terms.
+        # is recorded on the same terms, and sent on the same terms.
         soloed = self.anything_soloed()
-        mic.on_air = (bool(buses) and bool(self.board.stream_mic)
+        wanted = bool(buses) or sending
+        mic.on_air = (wanted and bool(self.board.stream_mic)
                       and not mic.muted and (mic.soloed or not soloed))
         # The group goes on air whenever anything in it is wanted there. A
         # source is on air on its own terms: somebody putting a games call out
@@ -4072,8 +4432,299 @@ class DropDeckFrame(wx.Frame):
         for source in extras:
             source.input.on_air = source.wants_air(soloed)
             source.input.monitor = source.wants_monitor(soloed)
-        if buses and (mic.on_air or any(s.wants_air(soloed) for s in extras)):
+        if wanted and (mic.on_air or any(s.wants_air(soloed) for s in extras)):
             self.mixer.primary.air_source = getattr(self, "source_group", mic)
+
+    # ------------------------------------------------------------- send --
+    def _resolve_send_device(self):
+        """The saved send output as a live index, or None for the default."""
+        return resolve_device({"name": self.board.send_device_name,
+                               "hostapi": self.board.send_device_hostapi})
+
+    def _send_minus_source(self):
+        """The one source the send leaves out, or None.
+
+        Found by NAME, because that is what the board stores: a source list
+        gets reordered and an index would quietly start excluding somebody
+        else. A name that matches nothing returns None, which sends
+        everything, and `send_report` says so rather than letting a mix minus
+        that is not happening look like one that is.
+        """
+        wanted = (self.board.send_minus or "").strip().lower()
+        if not wanted:
+            return None
+        # A real source is looked for FIRST. The microphone label used to win,
+        # so somebody with a second microphone on a cable named "My
+        # microphone" had the real microphone taken out of the send and that
+        # source left in it, which is the exact echo this is here to prevent.
+        for source in getattr(self, "sources", []):
+            if source.name.strip().lower() == wanted:
+                return source
+        if wanted == SendDialog.MIC_LABEL.lower():
+            return getattr(self, "mic", None)
+        return None
+
+    def sending(self):
+        """Is the show going out of a sound card to another program."""
+        send = getattr(self, "send", None)
+        return send is not None and send.is_running
+
+    def _start_send(self, quiet=False):
+        """Open the send. True if audio is really going out of it."""
+        self._stop_send(quiet=True)
+        device = self._resolve_send_device()
+        if self.board.send_device_name and device is None:
+            self.board.send_on = False
+            if not quiet:
+                self.announce("%s is not here any more, so the send is off."
+                              % self.board.send_device_name)
+            return False
+        send = sendout.Send(device=device, gain_db=self.board.send_gain_db)
+        if not send.is_running:
+            send.close()
+            self.board.send_on = False
+            if not quiet:
+                self.announce("The send could not be opened. %s"
+                              % (send.last_error or "No reason was given."))
+            return False
+        self.send = send
+        self.board.send_on = True
+        # The confidence feed is an EXTRA on the source group, which is what
+        # makes it impossible for it to loop: the group sums extras into what
+        # the presenter hears and leaves them out of what goes out.
+        group = getattr(self, "source_group", None)
+        if group is not None and send.confidence not in group.extras:
+            group.extras.append(send.confidence)
+        if self.board.send_monitor:
+            send.confidence.start()
+        self._sync_air_taps()
+        self._sync_send_menu()
+        self.start_sources()
+        if not quiet:
+            self.announce("Sending to %s." % send.describe())
+        self._update_status()
+        return True
+
+    def _stop_send(self, quiet=False):
+        """Close the send and put everything back. Safe to call twice."""
+        send, self.send = getattr(self, "send", None), None
+        if send is None:
+            return False
+        group = getattr(self, "source_group", None)
+        if group is not None and send.confidence in group.extras:
+            group.extras.remove(send.confidence)
+        try:
+            send.close()
+        except Exception:
+            pass
+        self._sync_air_taps()
+        self._sync_send_menu()
+        if not quiet:
+            self.announce("The send is off.")
+        self._update_status()
+        return True
+
+    def _sync_send_menu(self):
+        """Put the On air menu in step with what the send is actually doing.
+
+        A state has to be visible where the state is changed, and the menu is
+        where somebody looks. `stream_item` and `record_item` have flipped
+        their labels since 3.0; the send shipped without it, so opening the
+        menu could not tell you whether your show was going out of this
+        machine.
+        """
+        item = getattr(self, "send_item", None)
+        if item is not None:
+            item.SetItemLabel(
+                ("Stop sen&ding this show" if self.sending()
+                 else "Send th&is show to another program...")
+                + chr(9) + "Alt+Shift+O")
+        item = getattr(self, "send_monitor_item", None)
+        if item is not None:
+            send = getattr(self, "send", None)
+            item.Enable(send is not None)
+            item.Check(bool(send is not None and send.confidence.on))
+
+    def _on_send_setup(self, _event=None):
+        """Alt+Shift+O. Where the show goes, and what it leaves out."""
+        dialog = SendDialog(self, self.board)
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            chosen = dialog.result()
+        finally:
+            dialog.Destroy()
+        for field, value in chosen.items():
+            setattr(self.board, field, value)
+        self._touch()
+        if not self.board.send_on:
+            self._stop_send()
+            return
+        if self._start_send():
+            trouble = self._routing_conflicts()
+            if trouble:
+                self.announce(" ".join(trouble))
+            else:
+                self.announce(self.send_report())
+
+    def _on_send_monitor(self, _event=None):
+        """Ctrl+Shift+H. Hear what the other program is being handed."""
+        send = getattr(self, "send", None)
+        if send is None:
+            self.announce("Nothing is being sent. Alt+Shift+O sets a send up.")
+            return
+        if send.confidence.on:
+            send.confidence.stop()
+            self.board.send_monitor = False
+            self._sync_send_menu()
+            self.announce("You are no longer hearing the send.")
+        else:
+            send.confidence.start()
+            self.board.send_monitor = True
+            self._sync_send_menu()
+            where = ("your monitor output" if self.mixer.monitor_device is not None
+                     else "your main output, because you have no separate "
+                          "monitor output set")
+            self.announce("You are hearing the send, through %s. It arrives "
+                          "about a quarter of a second late, so it is for "
+                          "checking rather than for talking over." % where)
+        self._update_status()
+
+    def _on_send_status(self, _event=None):
+        """Ctrl+Shift+O. Is the send arriving clean.
+
+        On announce_answer, not announce. This key has no other effect
+        whatsoever, so at speech level "none" on the ordinary channel it
+        would be a dead key. Same rule as Ctrl+L and Ctrl+Shift+B.
+        """
+        self.announce_answer(self.send_report())
+
+    def _on_cue_sheet(self, _event=None):
+        """Ctrl+Shift+C. What is coming up, from the ticked items.
+
+        Opens it, or brings it to the front and puts the cursor back in the
+        list. It never CLOSES it: a toggle whose state you cannot see is a
+        coin flip, and Escape closes it like every other window here.
+        """
+        window = getattr(self, "cue_window", None)
+        if window:
+            try:
+                window.Raise()
+                window.list.SetFocus()
+                return
+            except Exception:
+                self.cue_window = None
+        self.cue_window = CueSheetDialog(self)
+        self.cue_window.Bind(wx.EVT_WINDOW_DESTROY,
+                             lambda e: setattr(self, "cue_window", None)
+                             or e.Skip())
+        self.cue_window.Show()
+
+    def cue_clock_line(self):
+        """What is on air and how long is left, for the cue sheet's clock.
+
+        The one moving number, and it lives OUTSIDE the list on purpose: a
+        counting cell inside a row is a name change every second, and a name
+        change on the focused row makes a screen reader start again.
+        """
+        player = getattr(self, "player", None)
+        if player is None or not getattr(player, "playing", False):
+            return "Nothing is playing from the running order."
+        said = []
+        name = getattr(player, "current_title", "") or "the current track"
+        left = float(getattr(player, "remaining", 0.0) or 0.0)
+        said.append("On air, %s%s" % (name, (", %s left"
+                                             % cuesheet.said_length(left))
+                                      if left > 0 else ""))
+        until = float(getattr(player, "until_handover", 0.0) or 0.0)
+        nxt = getattr(player, "next_title", "") or ""
+        if nxt:
+            said.append("Next, %s%s" % (nxt, (", in %s"
+                                              % cuesheet.said_length(until))
+                                        if until > 0 else ""))
+        return ".  ".join(said) + "."
+
+    def _on_routing(self, _event=None):
+        """Ctrl+Shift+W. Where every single thing is going, in one go.
+
+        The one command somebody who cannot see a routing page actually
+        needs. Everything in it is derived from the board and the mixer at
+        the moment it is asked, so it can never drift from what is really
+        happening. On announce_answer for the reason above.
+        """
+        self.announce_answer(self.routing_report())
+
+    def routing_report(self):
+        """Main output, banks, monitor, programme output, sources, faults."""
+        parts = [routing.describe_routing(
+            bank_devices=self._live_bank_devices(),
+            monitor_device=self.mixer.monitor_device,
+            program_device=(self.send.device if self.send is not None
+                            else None),
+            program_on=self.sending(),
+            monitor_everything=self.mixer.monitor_everything,
+            describe=describe_device,
+            bank_names=self.board.bank_names)]
+        if self.sending():
+            parts.append(self.send_report())
+        ok, why = self.mixer.keeping_up()
+        if not ok:
+            parts.append("One of your outputs is not keeping up: %s." % why)
+        for line in self._routing_conflicts():
+            parts.append(line)
+        return " ".join(parts)
+
+    def _live_bank_devices(self):
+        """The bank routing as device indices, which is what routing wants."""
+        return {bank: self.mixer.bank_devices.get(bank)
+                for bank in range(1, C.BANK_COUNT + 1)}
+
+    def _routing_conflicts(self):
+        """Anything wrong with where things are pointed. Sentences, or none."""
+        return routing.conflicts(
+            bank_devices=self._live_bank_devices(),
+            monitor_device=self.mixer.monitor_device,
+            program_device=(self.send.device if self.send is not None
+                            else self._resolve_send_device()),
+            program_on=self.board.send_on,
+            describe=describe_device)
+
+    def send_report(self):
+        """The whole answer to "how is the send doing", as one spoken line.
+
+        Written here rather than in send.py because two of the three things
+        worth saying are the frame's: which source is being left out, and
+        whether the name on the board still matches one.
+        """
+        send = getattr(self, "send", None)
+        if send is None:
+            return ("Nothing is being sent. Alt+Shift+O sets up a send to "
+                    "another program on this machine.")
+        parts = [send.report()]
+        if not self.board.stream_mic:
+            # The same rule as the mix minus sentence below: something that
+            # is NOT in the send must never be described as though it were.
+            # board.stream_mic is a checkbox on the Audio streaming page and
+            # somebody who does not stream would reasonably turn it off, and
+            # then the call cannot hear them and nothing says why.
+            parts.append("Your microphone is switched off on the Audio "
+                         "streaming page, so your voice is not in it.")
+        wanted = (self.board.send_minus or "").strip()
+        if not wanted:
+            parts.append("Everything is in it.")
+        elif self._send_minus_source() is None:
+            # A mix minus that is not happening must never look like one that
+            # is. This is the sentence that stops a call full of echo being a
+            # mystery.
+            parts.append("It is set to leave out %s, and there is nothing by "
+                         "that name any more, so everything is going out."
+                         % wanted)
+        else:
+            parts.append("It leaves out %s." % wanted)
+        ok, why = self.mixer.keeping_up()
+        if not ok:
+            parts.append("Your output is not keeping up: %s." % why)
+        return " ".join(parts)
 
     def stop_stream(self, quiet=False):
         """Come off air and put everything back the way it was."""
@@ -5282,10 +5933,23 @@ class DropDeckFrame(wx.Frame):
                 self.stop_recording(quiet=True)
             except Exception:
                 pass
+        # An open MP4 left unfinished is a file that may not open, and the
+        # picture thread holds a camera nobody else can have.
+        if getattr(self, "video_recorder", None) is not None:
+            try:
+                self.stop_video_recording(quiet=True)
+            except Exception:
+                pass
         # Every extra input is a sound card being read on a thread, and one
         # left open would go on reading a mixer that is being closed.
         try:
             self.stop_sources()
+        except Exception:
+            pass
+        # The send owns an output stream of its own, and an open output
+        # stream keeps the process alive after the window has gone.
+        try:
+            self._stop_send(quiet=True)
         except Exception:
             pass
         # Off air before anything else is torn down. A streaming thread left
