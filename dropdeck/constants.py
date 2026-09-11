@@ -720,6 +720,9 @@ RECORDING THE PICTURE AS WELL AS THE SOUND
                             the same picture that would go out
   Both say what is really in the recording when they start, including
   anything you can hear but is NOT on the air and therefore not in the file.
+  Both also write a .cue track list beside the recording, with the same file
+  name, listing every running order track that went out and the moment it
+  started. Hand the pair to Mixcloud and the track list is already done.
 
 WHAT IS COMING UP
   Ctrl+Shift+C              The cue sheet: everything ticked in the running

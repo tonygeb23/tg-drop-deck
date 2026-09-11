@@ -28,6 +28,7 @@ from . import picture
 from . import secrets
 from . import sources
 from . import preflight
+from . import cuefile
 from . import cuesheet
 from . import routing
 from . import screen
@@ -2845,6 +2846,9 @@ class DropDeckFrame(wx.Frame):
             length = format_duration(track.duration)
             self.announce_playback(
                 "%s%s" % (track.display_name, ", " + length if length else ""))
+            # The one place that knows a handover happened, so the one place
+            # the track lists are written from. Tyler McClain's request.
+            self.note_track_on_air(track)
         self._update_title()
         self._update_status()
 
@@ -4156,6 +4160,10 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox(detail or "Recording would not start.",
                           "Recording failed", wx.OK | wx.ICON_WARNING, self)
             return False
+        self.audio_cue = cuefile.CueFile(self.recorder.path)
+        # Whatever is already on the air belongs at 0:00, or the first track
+        # of the show is missing from its own tracklist.
+        self._note_current_track()
         self._set_record_label(True)
         self.announce("Recording to %s. %s"
                       % (os.path.basename(self.recorder.path or ""),
@@ -4195,6 +4203,8 @@ class DropDeckFrame(wx.Frame):
             self._sync_air_taps()
             self.announce(detail or "Recording would not start")
             return False
+        self.video_cue = cuefile.CueFile(self.video_recorder.path)
+        self._note_current_track()
         self._start_record_picture()
         self._set_video_record_label(True)
         self.announce("Recording picture and sound to %s. %s"
@@ -4208,6 +4218,9 @@ class DropDeckFrame(wx.Frame):
         rec, self.video_recorder = getattr(self, "video_recorder", None), None
         self._stop_record_picture()
         said = rec.report() if rec is not None else ""
+        cue, self.video_cue = getattr(self, "video_cue", None), None
+        if cue is not None and cue.describe():
+            said = "%s %s." % (said, cue.describe())
         if rec is not None:
             rec.stop()
         self.video_bus = None
@@ -4218,6 +4231,12 @@ class DropDeckFrame(wx.Frame):
             self.announce(said)
         self._update_status()
         return rec.path if rec is not None else None
+
+    def _note_current_track(self):
+        """Whatever is on air right now, at the top of a fresh tracklist."""
+        player = getattr(self, "player", None)
+        if player is not None and getattr(player, "playing", False):
+            self.note_track_on_air(getattr(player, "current", None))
 
     def what_is_in_the_recording(self):
         """Name what is really in it, and what is NOT. Darrell's question.
@@ -4340,6 +4359,7 @@ class DropDeckFrame(wx.Frame):
     def stop_recording(self, quiet=False):
         """Finish the file and say where it is."""
         rec, self.recorder = getattr(self, "recorder", None), None
+        cue, self.audio_cue = getattr(self, "audio_cue", None), None
         path = rec.stop() if rec is not None else None
         self.record_bus = None
         # Streaming may still be going and wants the mix it always had.
@@ -4348,10 +4368,12 @@ class DropDeckFrame(wx.Frame):
         if rec is not None and not quiet:
             minutes, seconds = divmod(int(rec.elapsed), 60)
             size = rec.bytes_written / (1024.0 * 1024.0)
-            self.announce("Recording saved as %s, %d minutes %d seconds, "
-                          "%.1f megabytes"
-                          % (os.path.basename(path or ""), minutes, seconds,
-                             size))
+            said = ("Recording saved as %s, %d minutes %d seconds, "
+                    "%.1f megabytes"
+                    % (os.path.basename(path or ""), minutes, seconds, size))
+            if cue is not None and cue.describe():
+                said += ". %s" % cue.describe()
+            self.announce(said)
         self._update_status()
         return path
 
@@ -4360,6 +4382,46 @@ class DropDeckFrame(wx.Frame):
         if item is not None:
             item.SetItemLabel(("Stop &recording\tCtrl+R" if on
                                else "Start &recording\tCtrl+R"))
+
+    # ------------------------------------------------------- track list --
+    def _cue_files(self):
+        """Every tracklist currently being written. Nought, one or two.
+
+        Two when sound and picture are both being recorded, because they are
+        two files and each wants its own list beside it.
+        """
+        return [cue for cue in (getattr(self, "audio_cue", None),
+                                getattr(self, "video_cue", None))
+                if cue is not None]
+
+    def note_track_on_air(self, track):
+        """A running order item went out. Put it in every tracklist.
+
+        Called from `_playlist_moved`, which is the one place that knows a
+        handover happened. Pads are deliberately not in here: Tyler asked for
+        what the PLAYLIST played, and a tracklist with forty sound effects in
+        it is not a tracklist.
+        """
+        if track is None:
+            return
+        title = (getattr(track, "title_text", None)
+                 or getattr(track, "title", None)
+                 or getattr(track, "display_name", "") or "")
+        performer = (getattr(track, "artist_text", None)
+                     or getattr(track, "artist", "") or "")
+        for cue, rec in ((getattr(self, "audio_cue", None),
+                          getattr(self, "recorder", None)),
+                         (getattr(self, "video_cue", None),
+                          getattr(self, "video_recorder", None))):
+            if cue is None or rec is None:
+                continue
+            # The RECORDING's own clock, never a wall clock. Both recorders
+            # count frames written, so a machine that stalled reports where
+            # the audio really is rather than how long we waited.
+            try:
+                cue.add(title, performer, float(getattr(rec, "elapsed", 0.0)))
+            except Exception:
+                pass
 
     def _on_record_state(self, state, detail):
         from . import recorder as recording

@@ -187,5 +187,73 @@ except ValueError:
 check("an unknown format is refused rather than quietly becoming mp3",
       unknown_refused)
 
+
+print("\nThe .cue file beside a recording, which is what Tyler actually asked for")
+from dropdeck import cuefile                             # noqa: E402
+
+check("half a second is 37.5 frames, so it lands on 38, not 50",
+      cuefile.timestamp(0.5) == "00:00:38", cuefile.timestamp(0.5))
+check("and it is seventy fifths, not hundredths",
+      cuefile.FRAMES_PER_SECOND == 75)
+check("three minutes twenty reads straight",
+      cuefile.timestamp(200.0) == "03:20:00", cuefile.timestamp(200.0))
+check("minutes do NOT wrap at sixty, or a long show restarts its clock",
+      cuefile.timestamp(7198.0) == "119:58:00", cuefile.timestamp(7198.0))
+check("nothing goes negative", cuefile.timestamp(-5) == "00:00:00")
+check("the rounding boundary carries into the second",
+      cuefile.timestamp(0.9999) == "00:01:00", cuefile.timestamp(0.9999))
+
+check("an mp3 is called MP3", cuefile.file_type("x.mp3") == "MP3")
+check("a wav is called WAVE", cuefile.file_type("x.wav") == "WAVE")
+check("and anything else is WAVE, which every reader accepts",
+      cuefile.file_type("x.mp4") == "WAVE")
+
+check("the cue sits beside the audio with the same stem",
+      cuefile.path_for(r"C:\x\Drop Deck Stream 004.mp3")
+      == r"C:\x\Drop Deck Stream 004.cue")
+
+text = cuefile.render("Show.mp3", [("Delta Sky", "Kris Nova", 0.0),
+                                   ("Ident", "", 200.4)])
+check("the FILE line names the audio and its type",
+      text.startswith('FILE "Show.mp3" MP3'), text.splitlines()[0])
+check("tracks are numbered from one, two digits",
+      "  TRACK 01 AUDIO" in text and "  TRACK 02 AUDIO" in text)
+check("a track with no artist has no PERFORMER line at all",
+      text.count("PERFORMER") == 1, text)
+
+# A quote would break the file, and the format has no escape for one.
+odd = cuefile.render('Show.mp3', [('He said "go"', 'A "B"', 0.0)])
+check("a double quote cannot break the file",
+      odd.count('"') == odd.count('"'), odd)
+check("and it becomes a single quote rather than vanishing",
+      "He said 'go'" in odd, odd)
+
+import io as _io                                          # noqa: E402
+import tempfile as _tf                                    # noqa: E402
+import os as _os                                          # noqa: E402
+folder = _tf.mkdtemp()
+audio = _os.path.join(folder, "Drop Deck Stream 007.mp3")
+cue = cuefile.CueFile(audio)
+check("nothing is written until a track goes out",
+      not _os.path.exists(cue.path))
+cue.add("Delta Sky", "Kris Nova", 0.0)
+check("the file appears with the first track",
+      _os.path.exists(cue.path))
+check("and it is complete on disk straight away, not at the end",
+      "Delta Sky" in _io.open(cue.path, encoding="utf-8").read())
+cue.add("Delta Sky", "Kris Nova", 0.0)
+check("the same track at the same moment is a double press, not two plays",
+      len(cue.entries) == 1, cue.entries)
+cue.add("Delta Sky", "Kris Nova", 200.0)
+check("but the same track later really did play again",
+      len(cue.entries) == 2)
+check("it says what it wrote", "2 tracks" in cue.describe(), cue.describe())
+
+broken = cuefile.CueFile(_os.path.join(folder, "nope", "deep", "x.mp3"))
+check("a cue that cannot be written never raises",
+      broken.add("A", "B", 0.0) is False)
+check("and it says why afterwards rather than during a show",
+      "could not be written" in broken.describe(), broken.describe())
+
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)
