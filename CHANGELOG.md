@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.7.1 for Windows, 11 September 2026
+
+**A .cue track list beside every recording.**
+
+Tyler McClain, clarifying a request after 3.7.0 had already shipped the live
+cue sheet window, which turned out not to be what he meant: "i'm talking about
+adding the ability to let it write a .cue file with the title, artist, and when
+it was played ... where people can have a .cue sheet right in the recordings
+folder with the same file name, like if they want to post it to mixcloud."
+
+So `Drop Deck Stream 004.mp3` now gets `Drop Deck Stream 004.cue` beside it,
+listing every running order track that went out and the moment it started.
+Both `Ctrl+R` and `Ctrl+Shift+R` write one. Hand the pair to Mixcloud and the
+track list is already done.
+
+Three things about it worth knowing. **Timestamps come from the recording's own
+sample count**, never a wall clock, because a machine that stalls makes the
+file shorter than the clock says and a list timed against the wall drifts away
+from the audio it describes. **It is written and flushed as the show goes**, so
+a show that stops unexpectedly keeps the track list for everything it got
+through. And **pads are deliberately not in it**: a track list with forty sound
+effects in it is not a track list.
+
+The format detail everybody gets wrong: `INDEX` is `mm:ss:ff` where `ff` is
+seventy fifths of a second, not hundredths, so half a second is 38 rather than
+50. Minutes are not wrapped at sixty, or a long show restarts its own clock.
+
+41 suites, 2560 checks, 0 failing.
+
 ## 3.7.0 for Windows, 10 September 2026
 
 **The picture gets recorded too, there is a cue sheet, and a source can be

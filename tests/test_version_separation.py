@@ -92,7 +92,7 @@ check("the shipped version accepts it",
 # installed 3.6.0 therefore answers "you have the newest one" to every update
 # check, which is the very failure this file guards. Publish it with
 # release_app.py before it goes over anybody's working copy.
-newest_build = "3.7.0"
+newest_build = "3.7.1"
 
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)
