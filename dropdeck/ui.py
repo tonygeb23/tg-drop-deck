@@ -68,6 +68,36 @@ from .slot import Slot, format_duration
 from .speech import Speaker, percent
 
 ID_STREAM_TOGGLE = wx.ID_HIGHEST + 401
+#: Going live to the RADIO station, beside Ctrl+B for the video platform.
+#: One key per destination, asked for on 12 September 2026, because one key
+#: plus a remembered setting meant the summary in front of you was for
+#: whichever destination you last chose rather than the one you meant.
+#:
+#: **Alt+Shift+B, and NOT the Alt+Ctrl+B that was asked for.** Two separate
+#: faults sat on top of each other here on 12 September 2026 and the second
+#: one was invisible until the first was fixed.
+#:
+#: First, this id was ID_HIGHEST+420, which is ID_SEND_SETUP. Two handlers
+#: bound for one id means the last one bound wins, so the key opened the send
+#: setup window and `toggle_stream` never ran whatever chord was on it. That
+#: is the ID_STATION_BASE fault again, and `tests/test_3_4_1.py` catches it
+#: in one second: it was not run between adding the id and pressing the key.
+#:
+#: Second, and only measurable once the id was right: **Windows turns Ctrl+Alt
+#: into AltGr**, so Ctrl+Alt plus a letter is a character rather than a
+#: shortcut. Measured with real synthesised keystrokes, all with the correct
+#: id and the same handler: Ctrl+B reaches the app, Alt+Shift+B reaches it,
+#: and Alt+Ctrl+B fails three times out of three. wx builds the accelerator
+#: quite happily (flags 3, keycode 66) and Windows simply never delivers it,
+#: which is the worst shape of key: one that looks right in every menu and
+#: does nothing. Alt+Ctrl+Shift+S escapes it only because Shift takes the
+#: chord back out of AltGr territory.
+#:
+#: Alt+Shift+B is free, verified against the table the frame really builds,
+#: and it is the family this app already uses for the things you go and do:
+#: Alt+Shift+S, V, T, C, D and O. `tools/check_video_key.py radio` presses
+#: it for real.
+ID_STREAM_TOGGLE_AUDIO = wx.ID_HIGHEST + 426
 ID_STREAM_STATUS = wx.ID_HIGHEST + 402
 #: Who is listening. Ctrl+Shift+A for audience, next to the pair above.
 ID_STREAM_STATS = wx.ID_HIGHEST + 404
@@ -1217,9 +1247,17 @@ class DropDeckFrame(wx.Frame):
         help_menu.AppendSeparator()
         help_menu.Append(wx.ID_ABOUT, "&About")
         air = wx.Menu()
+        # TWO ITEMS, because there are two destinations and they are not
+        # the same broadcast. The old single item went wherever Streaming
+        # location happened to be pointed, so the summary in front of you
+        # before going live was for a destination you had chosen on another
+        # day. Now the key says which.
         self.stream_item = air.Append(
-            ID_STREAM_TOGGLE, "&Go live\tCtrl+B",
-            "Send the show to your streaming server, and stop sending it")
+            ID_STREAM_TOGGLE, "&Go live on video\tCtrl+B",
+            "Send the show to your video platform, and stop sending it")
+        self.stream_audio_item = air.Append(
+            ID_STREAM_TOGGLE_AUDIO, "Go live on ra&dio\tAlt+Shift+B",
+            "Send the show to your radio station, and stop sending it")
         air.Append(ID_STREAM_STATUS, "&What the stream is doing\tCtrl+Shift+B",
                    "Whether it is on air, for how long, and whether anything "
                    "has been lost")
@@ -1395,7 +1433,10 @@ class DropDeckFrame(wx.Frame):
                   id=ID_PL_ROW_ADD)
         self.Bind(wx.EVT_MENU, lambda _e: self.stop_playlist(), id=ID_PL_ROW_STOP)
         self.Bind(wx.EVT_MENU, lambda _e: self.toggle_mic(), id=ID_MIC_TOGGLE)
-        self.Bind(wx.EVT_MENU, lambda _e: self.toggle_stream(),
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self.toggle_stream(to=C.LIVE_TO_AUDIO),
+                  id=ID_STREAM_TOGGLE_AUDIO)
+        self.Bind(wx.EVT_MENU, lambda _e: self.toggle_stream(to=C.LIVE_TO_VIDEO),
                   id=ID_STREAM_TOGGLE)
         self.Bind(wx.EVT_MENU, lambda _e: self.say_stream_status(),
                   id=ID_STREAM_STATUS)
@@ -4065,23 +4106,79 @@ class DropDeckFrame(wx.Frame):
         streamer = getattr(self, "streamer", None)
         return streamer is not None and streamer.running
 
-    def toggle_stream(self, _event=None):
-        """Ctrl+B. Go live, or come off air.
+    def toggle_stream(self, _event=None, to=None):
+        """Go live to one named destination, or come off air.
+
+        `Ctrl+B` is the video platform and `Alt+Shift+B` is the radio station.
+        Asked for on 12 September 2026, and the reason is what the summary
+        used to say: one key plus a remembered `live_to` meant the destination
+        was whichever you last picked, so the page in front of you before
+        going live could be for the other one entirely.
+
+        **Each key is a toggle for ITS OWN destination.** Pressing the key for
+        the place you are not broadcasting to names where you actually are
+        and does nothing else. It does not quietly switch: switching means
+        dropping one connection and opening another, which is not something to
+        do to somebody mid show on a keypress that looks like a toggle.
 
         **The summary is asked for HERE rather than inside start_stream, and
         that is not a detail.** start_stream is called by anything that wants
         the show on the air; this is called by a person pressing a key. A
         modal window on the first one hung every test that goes live, for
-        ever, on a dialog nothing could click. Ctrl+B and the On air menu
+        ever, on a dialog nothing could click. The keys and the On air menu
         both come through here, so a user is asked either way, and nothing
         else in the app or the tests is.
         """
+        if to is None:
+            # Nobody said, so honour what is set up. The menu items and the
+            # keys always say; this covers anything older that does not.
+            to = self.board.live_to
         if self.streaming():
+            if self.board.live_to != to:
+                said = ("You are on air to %s. %s comes off air."
+                        % (self._destination_words(self.board.live_to),
+                           self._destination_key(self.board.live_to)))
+                self.announce_answer(said)
+                return False
             self.stop_stream()
             return False
+        if to != self.board.live_to:
+            # The key IS the choice, so it is written down before anything
+            # reads it. Everything downstream asks the board which
+            # destination this is, and it now gets the answer the user just
+            # gave rather than one from last week.
+            self.board.live_to = to
+            self._touch()
+            self._rebuild_station_menu()
         if not self._cleared_to_go():
             return False
         return self.start_stream()
+
+    def _set_air_labels(self, live):
+        """Both items, every time, because only one of them can be on air.
+
+        The item for the destination that is live says "come off air"; the
+        other keeps its own wording, so the menu never offers to take you off
+        air from a place you are not.
+        """
+        video = getattr(self, "stream_item", None)
+        radio = getattr(self, "stream_audio_item", None)
+        on_video = live and self.board.live_to == C.LIVE_TO_VIDEO
+        if video is not None:
+            video.SetItemLabel(("Come o&ff air" if on_video
+                                else "&Go live on video") + chr(9) + "Ctrl+B")
+        if radio is not None:
+            radio.SetItemLabel(("Come o&ff air" if (live and not on_video)
+                                else "Go live on ra&dio")
+                               + chr(9) + "Alt+Shift+B")
+
+    def _destination_words(self, which):
+        """"your video platform" or "your radio station". For a sentence."""
+        return ("your video platform" if which == C.LIVE_TO_VIDEO
+                else "your radio station")
+
+    def _destination_key(self, which):
+        return "Ctrl+B" if which == C.LIVE_TO_VIDEO else "Alt+Shift+B"
 
     def start_stream(self):
         """Open the tap and start the thread. Says why if it cannot.
@@ -4140,7 +4237,7 @@ class DropDeckFrame(wx.Frame):
         # A recording already running now takes the stream's own frames
         # instead of pulling them itself, so one camera serves both.
         self._sync_record_picture()
-        self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
+        self._set_air_labels(True)
         return True
 
     # ----------------------------------------------------------- recording --
@@ -5151,9 +5248,7 @@ class DropDeckFrame(wx.Frame):
                 self.watcher = health.Watcher(
                     on_say=self._on_picture_trouble)
             self._start_framing()
-        item = getattr(self, "stream_item", None)
-        if item is not None:
-            item.SetItemLabel("&Go live\tCtrl+B")
+        self._set_air_labels(False)
         if not quiet:
             self.announce("Off air")
         self._update_status()
@@ -5518,8 +5613,8 @@ class DropDeckFrame(wx.Frame):
         if self.streaming():
             # The same rule as changing station: swapping the destination
             # under a live stream is not a thing to do quietly.
-            self.announce("Come off air first, Ctrl+B, then change where it "
-                          "goes")
+            self.announce("Come off air first, %s, then change where it "
+                          "goes" % self._destination_key(self.board.live_to))
             self._rebuild_station_menu()
             return
         self.board.live_to = want
@@ -5642,6 +5737,11 @@ class DropDeckFrame(wx.Frame):
                     "port": 0, "mount": "", "user": "", "password": key,
                     "format": "aac", "bitrate": board.stream_bitrate,
                     "name": board.stream_name,
+                    # The CHANNEL, which is not the radio station. Kept as a
+                    # key of its own rather than overwriting "name", because
+                    # "name" is what the card on the picture says and that is
+                    # his station identity either way.
+                    "video_name": board.video_name,
                     "description": board.stream_description,
                     "genre": board.stream_genre, "url": board.stream_url,
                     "stats_url": "", "public": False,
@@ -6287,6 +6387,7 @@ class DropDeckFrame(wx.Frame):
             self.board.stream_public = stream["public"]
             video = dialog.video_settings
             self.board.video_server = video["server"]
+            self.board.video_name = video["name"]
             self.board.video_host = video["host"]
             self.board.live_to = (C.LIVE_TO_VIDEO if video["live"]
                                   else C.LIVE_TO_AUDIO)

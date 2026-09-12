@@ -1553,7 +1553,8 @@ class SettingsDialog(wx.Dialog):
             for field in ("picture", "picture_file", "picture_clock",
                           "camera", "video_width", "video_height",
                           "video_fps", "video_bitrate", "video_server",
-                          "video_host", "video_key", "live_to")})
+                          "video_name", "video_host", "video_key",
+                          "live_to")})
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
         self._refresh_stations()
@@ -1738,6 +1739,7 @@ class SettingsDialog(wx.Dialog):
         self.video_server.SetSelection(
             C.VIDEO_SERVER_ORDER.index(self.board.video_server)
             if self.board.video_server in C.VIDEO_SERVER_ORDER else 0)
+        self.video_name.SetValue(self.board.video_name or "")
         self.video_host.SetValue(self.board.video_host or "")
         self.live_to_video.SetValue(self.board.live_to == C.LIVE_TO_VIDEO)
         self._fill_picture_fields()
@@ -1753,6 +1755,7 @@ class SettingsDialog(wx.Dialog):
             return
         video = self.video_settings
         for field, value in (("video_server", video["server"]),
+                             ("video_name", video["name"]),
                              ("video_host", video["host"]),
                              ("live_to", C.LIVE_TO_VIDEO if video["live"]
                               else C.LIVE_TO_AUDIO),
@@ -2037,6 +2040,21 @@ class SettingsDialog(wx.Dialog):
             "it is not yours to get wrong. For Restream or your own server, "
             "paste the address they give you, and prefer an rtmps one if "
             "they offer it: a plain rtmp address sends your key unencrypted.")
+
+        # Alt+n. The radio station's name is on the OTHER page and this is
+        # not it: the go live summary used to print "Blindside Radio, on
+        # YouTube Live", which names an Icecast station as though it were a
+        # YouTube channel. Optional, because a platform with one address
+        # speaks for itself, and an invented name would be a new lie in place
+        # of the old one.
+        self.video_name = field(
+            "Channel &name",
+            lambda: wx.TextCtrl(panel, value=self.board.video_name),
+            "Channel name",
+            "What this channel is called, if you want it said on the way to "
+            "air. Nothing to do with your radio station's name, which is on "
+            "the Audio streaming page. Leave it empty and Drop Deck just "
+            "says the platform.")
 
         self.video_key = field(
             "Stream &key",
@@ -2356,6 +2374,7 @@ class SettingsDialog(wx.Dialog):
         """The video side, as it stands in the boxes."""
         return {
             "server": self._current_platform(),
+            "name": self.video_name.GetValue().strip(),
             "host": self.video_host.GetValue().strip(),
             # Stripped hard: a key pasted off a web page routinely carries a
             # trailing newline or a space, and that is one of the commonest

@@ -77,15 +77,35 @@ check("a station with no name falls back to the software, rather than nothing",
       "Icecast" in said, said)
 check("and still gives the address", "blindsideradio.com/live" in said, said)
 
+# THE RADIO STATION'S NAME IS NOT THE VIDEO CHANNEL'S NAME. This block used
+# to assert the opposite, and that is the fault Tony reported on 12 September
+# 2026 reading his own go live summary: "it says my ice cast source + my
+# youtube live. that's untrue." One field was doing two destinations' jobs.
 video_said = preflight.where_it_goes(
     {"server": "youtube", "host": C.RTMP_INGEST["youtube"],
      "name": "Blindside Radio"}, video=True)
 check("a video destination names the platform", "YouTube" in video_said,
       video_said)
-check("and the show, not the ingest address",
-      "Blindside Radio" in video_said and "rtmps" not in video_said, video_said)
+check("and NEVER borrows the radio station's name",
+      "Blindside Radio" not in video_said, video_said)
+check("a platform with one fixed address does not recite it",
+      "rtmps" not in video_said, video_said)
 check("the stream key can never appear in it, because the host does not",
       "live2" not in video_said, video_said)
+
+named_channel = preflight.where_it_goes(
+    {"server": "youtube", "host": C.RTMP_INGEST["youtube"],
+     "name": "Blindside Radio", "video_name": "Tony Gebhard"}, video=True)
+check("a channel with a name of its own is called by it",
+      "Tony Gebhard" in named_channel and "YouTube" in named_channel,
+      named_channel)
+check("and still not by the radio station's name",
+      "Blindside Radio" not in named_channel, named_channel)
+
+custom = preflight.where_it_goes(
+    {"server": "rtmp", "host": "rtmp://stream.example.com/app"}, video=True)
+check("a custom server keeps its address, which is the useful fact about it",
+      "example.com" in custom, custom)
 
 
 # ---------------------------------------------------------------------------

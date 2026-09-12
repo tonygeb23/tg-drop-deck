@@ -21,7 +21,8 @@ FORMAT_VERSION = 2
 #: What one saved station remembers. Everything the streamer needs plus a
 #: name to pick it by.
 STATION_FIELDS = (
-    "stream_name", "stream_server", "stream_host", "stream_port",
+    "stream_name", "video_name",
+    "stream_server", "stream_host", "stream_port",
     "stream_mount", "stream_user", "stream_password", "stream_format",
     "stream_bitrate", "stream_description", "stream_genre", "stream_url",
     "stream_public", "stream_mic", "stream_titles", "stream_stats_url",
@@ -265,6 +266,17 @@ class Board:
         self.stream_format = "mp3"
         self.stream_bitrate = C.DEFAULT_STREAM_BITRATE
         self.stream_name = ""
+        #: What the VIDEO platform's channel is called, which is not the same
+        #: thing as the radio station's name and must never be printed as
+        #: though it were. `stream_name` is "Blindside Radio", an Icecast
+        #: station; a YouTube channel is a different thing with a different
+        #: name, and the go live summary used to say "Blindside Radio, on
+        #: YouTube Live", which Tony read on 12 September 2026 and correctly
+        #: called untrue.
+        #:
+        #: Empty is the ordinary state and means "just say the platform".
+        #: Nothing is invented: a name nobody typed is not a name.
+        self.video_name = ""
         self.stream_description = ""
         self.stream_genre = ""
         self.stream_url = ""
@@ -671,6 +683,7 @@ class Board:
             "stream_format": self.stream_format,
             "stream_bitrate": int(self.stream_bitrate),
             "stream_name": self.stream_name,
+            "video_name": self.video_name,
             "stream_description": self.stream_description,
             "stream_genre": self.stream_genre,
             "stream_url": self.stream_url,
@@ -803,6 +816,7 @@ class Board:
                                else "mp3")
         board.stream_bitrate = _stream_bitrate(data.get("stream_bitrate"))
         board.stream_name = data.get("stream_name") or ""
+        board.video_name = data.get("video_name") or ""
         board.stream_description = data.get("stream_description") or ""
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""

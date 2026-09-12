@@ -159,9 +159,23 @@ total = 0
 for position in range(bar.GetMenuCount()):
     menu = bar.GetMenu(position)
     title = bar.GetMenuLabel(position)
-    seen = {}
+    # ONE NAMESPACE PER MENU LEVEL, which is how Windows actually resolves a
+    # mnemonic: only the open level is listening, so Alt+D on a submenu item
+    # cannot be confused with Alt+D on the menu above it, which is shut by
+    # then. This used to pool a whole top level menu and its submenus into
+    # one namespace, deliberately stricter than Windows, and On air had
+    # reached the point where that strictness was the binding constraint:
+    # 22 of 26 letters were spoken for and the four spare ones (j, q, x, z)
+    # appear in no label anybody would write, so the menu could not accept
+    # another item at all. That is the guard deciding the product rather
+    # than protecting it.
+    #
+    # Within one level the check is unchanged, and that is the half that
+    # matters: two items you can see at once must not answer the same key.
+    seen_by_level = {}
     for path, item in walk(menu):
         total += 1
+        seen = seen_by_level.setdefault(path, {})
         label = item.GetItemLabel()
         where = "%s > %s%s" % (title, path, item.GetItemLabelText())
 

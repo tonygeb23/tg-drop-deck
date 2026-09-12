@@ -1,5 +1,61 @@
 # Changelog
 
+## 3.8.2 for Windows, 12 September 2026
+
+**One key per destination, and your radio station stops being printed as the
+name of your YouTube channel.**
+
+Tony, reading what Ctrl+B put in front of him before going live:
+
+    Going to: Blindside Radio, on YouTube Live
+
+Blindside Radio is an Icecast station. It has nothing to do with YouTube, and
+the summary said otherwise because ONE field, the station name, was doing both
+destinations' jobs. That is the same trap the streaming address was split in
+two for: set one up and you silently changed the other.
+
+### Two destinations, two names
+
+There is a **Channel name** box on the Video streaming page now. It is
+optional, and empty is the ordinary state: a platform with one address speaks
+for itself, and inventing a name would only replace one untruth with another.
+
+- With it empty: **YouTube Live**
+- With it filled in: **Tony Gebhard, on YouTube Live**
+- Your radio station: **Blindside Radio, blindsideradio.com/live**, as before
+
+YouTube and Facebook no longer have their ingest address read out on the way
+to air. There is one each, it is not yours to choose, and it tells you nothing
+you can act on. A custom RTMP server still shows its address, because for that
+one the address is the useful fact.
+
+### Ctrl+B for video, Alt+Shift+B for radio
+
+One key each. The summary you are shown before going live is now always for
+the place you actually meant, rather than for whichever destination you last
+picked in a menu.
+
+Each key is a toggle for its own destination. Pressing the key for the place
+you are not broadcasting to tells you where you actually are and does nothing
+else: switching means dropping one connection and opening another, which is
+not a thing to do to somebody mid show on a keypress that looks like a toggle.
+
+**It is Alt+Shift+B and not the Alt+Ctrl+B that was asked for, and the reason
+is Windows.** Windows turns Ctrl+Alt into AltGr, so Ctrl+Alt plus a letter is
+a character rather than a shortcut. Measured with real keystrokes: Ctrl+B
+arrives, Alt+Shift+B arrives, Alt+Ctrl+B fails three times out of three. The
+menu would have shown the key and pressing it would have done nothing.
+
+### Found while doing it
+
+- **Two commands shared an id**, so the new key opened the send setup window
+  instead of going live. The check that catches this has existed since 3.4.1
+  and takes a second to run.
+- **The menu mnemonic rule had become the thing stopping the menu growing.**
+  It pooled a whole menu and its submenus into one namespace, stricter than
+  Windows, and On air had 22 of 26 letters spoken for. It now matches how
+  Windows really resolves a mnemonic: one namespace per open level.
+
 ## 3.8.1 for Windows, 12 September 2026
 
 **A video recording now records what you are actually capturing.**

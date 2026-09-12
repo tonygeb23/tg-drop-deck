@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.8.1"
+APP_VERSION = "3.8.2"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -677,7 +677,12 @@ VST3 PLUGINS
   and share.
 
 PUTTING THE SHOW ON THE INTERNET
-  Ctrl+B                    Go live, and come off air again
+  Ctrl+B                    Go live on your VIDEO platform, and come off
+                            air again
+  Alt+Shift+B               Go live on your RADIO station, and come off air
+                            again. One key each, so the summary you are shown
+                            before going live is always for the place you
+                            actually meant
   Ctrl+Shift+B              What the stream is doing right now
   Ctrl+Shift+A              Who is listening, and what the server says is
                             playing. Works off air too
@@ -773,7 +778,8 @@ WHAT IS COMING UP
   Listeners see the artist and title from your playlist, unless you turn that
   off in the same place.
 
-  Nothing goes out until you press Ctrl+B. It is never on when the app opens.
+  Nothing goes out until you press Ctrl+B or Alt+Shift+B. It is never on when
+  the app opens.
 
 GLOBAL
   Ctrl+F                    Search every bank by name (Ctrl+E also works)
@@ -1116,7 +1122,9 @@ STREAM_FORMAT_ORDER = ("mp3", "aac", "opus")
 #: The video side. Same shape, different page.
 VIDEO_SERVER_ORDER = ("youtube", "facebook", "restream", "rtmp")
 
-#: Which of the two Ctrl+B sends the show to. One at a time: sending to both
+#: Which destination the show is going to, or last went to. The KEY chooses
+#: now, Ctrl+B for video and Alt+Shift+B for radio, and each one writes this
+#: down before anything reads it. One at a time: sending to both
 #: means two encoders and twice the upload, and it is not built yet.
 LIVE_TO_AUDIO = "audio"
 LIVE_TO_VIDEO = "video"

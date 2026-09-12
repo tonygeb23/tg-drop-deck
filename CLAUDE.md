@@ -416,6 +416,44 @@ And specific to this one:
   new users" on a live key the day this was written. And a thinking model
   spends `maxOutputTokens` on thinking FIRST: without a ceiling one returned
   the eighteen characters "There is no camera" and stopped mid sentence.
+- **Ctrl+Alt plus a letter is AltGr, and Windows never delivers it.** Asked
+  for as Alt+Ctrl+B on 12 September 2026 and it cannot work. Measured with
+  real synthesised keystrokes, same handler, same id, one variable: Ctrl+B
+  arrives, Alt+Shift+B arrives, **Alt+Ctrl+B fails three times out of three**.
+  wx builds the accelerator quite happily (flags 3, keycode 66) and Windows
+  simply never sends it, so the menu advertises a key that does nothing, which
+  is the worst shape a key can have. Alt+Ctrl+Shift+S escapes it only because
+  Shift takes the chord back out of AltGr territory. **Alt+Ctrl is for the
+  frozen digit map and nothing else.** New keys go in the Alt+Shift or
+  Ctrl+Shift families, which are measured to work.
+
+- **Run `tests/test_3_4_1.py` the moment you add an id, before you touch
+  anything else.** `ID_STREAM_TOGGLE_AUDIO` was given ID_HIGHEST+420, which is
+  `ID_SEND_SETUP`, so the new key opened the send window and the handler never
+  ran whatever chord was on it. The overlap check has existed since 3.4.1,
+  catches it in one second, and was not run: instead the failure was chased
+  through three different key combinations and blamed on Windows, which was
+  only half true. A guard you do not run is a guard you do not have.
+
+- **A menu mnemonic namespace is one per open LEVEL, which is what Windows
+  does.** `tests/test_menus.py` used to pool a top level menu with all its
+  submenus, deliberately stricter, and by 3.8.2 that strictness was the
+  binding constraint rather than a protection: On air had 22 of 26 letters
+  spoken for and the four spare ones (j, q, x, z) appear in no label anybody
+  would write, so the menu could not accept another item at all. Within one
+  level the rule is unchanged, and that is the half that matters: two items
+  you can see at once must never answer the same key.
+
+- **Two destinations need two of everything that NAMES them.** `stream_name`
+  was the radio station and was also printed as the video channel, so the go
+  live summary said "Blindside Radio, on YouTube Live" about an Icecast
+  station and a YouTube channel that have nothing to do with each other.
+  `video_name` exists for this and is allowed to be empty, because a platform
+  with one address speaks for itself and an invented name is a new untruth in
+  place of the old one. The address fields were split in two for exactly this
+  reason one release earlier; the name is the same trap wearing a different
+  hat, and `stream_bitrate` is still shared and still waiting to bite.
+
 - **The picture belongs to the APP, not to where Ctrl+B is pointed.** Tony,
   12 September 2026: "ice cast, shoucast, is not the same as facebook and
   youtube." Since 3.7.0 a recording carries a picture, so `board.live_to` is

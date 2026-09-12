@@ -119,6 +119,22 @@ KEYS = {
                  (wx.WXK_CONTROL, wx.WXK_SHIFT), "R"),
     "cue": ("Ctrl+Shift+C", "the cue sheet", "_on_cue_sheet",
             (wx.WXK_CONTROL, wx.WXK_SHIFT), "C"),
+    # 3.8.2. One key per destination, and this is the NEW one: Alt+Ctrl is
+    # the modifier pair the frozen digit map uses for beds 1 to 10, so a
+    # letter on it is worth pressing rather than assuming. Windows also has
+    # its own history with Ctrl+Alt as an AltGr stand-in on some layouts.
+    "radio": ("Alt+Shift+B", "going live on the radio station",
+              "toggle_stream", (wx.WXK_ALT, wx.WXK_SHIFT), "B"),
+    # The control for the radio key: Ctrl+B is the SAME handler and has
+    # shipped since 3.0. If this fails too, the harness is measuring itself.
+    "golive": ("Ctrl+B", "going live", "toggle_stream",
+               (wx.WXK_CONTROL,), "B"),
+    # The CONTROL for the one above: Alt+Ctrl+Shift+S has shipped since
+    # 3.4.3 and Tony uses it. If this lands and Alt+Ctrl+B does not, the
+    # difference is Shift, and Ctrl+Alt without Shift is what Windows turns
+    # into AltGr.
+    "sourcectl": ("Alt+Ctrl+Shift+S", "source control", "_on_source_control",
+                  (wx.WXK_ALT, wx.WXK_CONTROL, wx.WXK_SHIFT), "S"),
 }
 
 
@@ -136,7 +152,14 @@ def main():
     fired = []
     real_handler = getattr(DropDeckFrame, handler_name)
 
-    def counted(self, event=None):
+    def counted(self, *args, **kw):
+        # *args, **kw, and this is the fourth time this shape has bitten.
+        # A stand-in with a fixed signature does not report "wrong
+        # signature", it reports the FEATURE as broken: toggle_stream gained
+        # a `to` keyword in 3.8.2, so a two argument stand-in raised
+        # TypeError before its own first line and this check said "Windows
+        # ate the key" about a key Windows had delivered perfectly.
+        # CLAUDE.md already says to take **kw from the start.
         fired.append(1)
         return None          # never open the real window
 

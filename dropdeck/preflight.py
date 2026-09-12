@@ -120,17 +120,36 @@ def where_it_goes(settings, video):
 
     The software name is the fallback rather than the lead, so a server with
     no name still says something useful.
+
+    **The two destinations have two names and this must never borrow one for
+    the other.** `name` is the radio station. A video platform's name is
+    `video_name`, which is usually empty, and an empty one means the platform
+    speaks for itself. It used to print the radio station's name on the way to
+    YouTube: "Blindside Radio, on YouTube Live", which names an Icecast
+    station as though it were a YouTube channel. Tony read that on 12
+    September 2026 and called it untrue, because it is.
     """
     host = settings.get("host", "")
-    name = (settings.get("name") or "").strip()
     if video:
         # An RTMP address has the stream key in it, so it goes through
         # host_label. YouTube and Facebook have one address each and it is
         # not the user's to choose, so naming the platform is enough.
         platform = streamout.server_label(settings.get("server", "")) or ""
-        if name:
-            return "%s, on %s" % (name, platform) if platform else name
+        channel = (settings.get("video_name") or "").strip()
+        if channel and platform:
+            return "%s, on %s" % (channel, platform)
+        if channel:
+            return channel
+        if not platform:
+            return streamout.host_label(host)
+        # YouTube and Facebook have ONE address each and it is not the user's
+        # to choose, so the address tells them nothing they can act on and
+        # reads as a scary URL on the way to air. A custom server's address
+        # is the one useful fact about it, so that one keeps it.
+        if settings.get("server", "") in C.RTMP_FIXED_ADDRESS:
+            return platform
         return "%s, %s" % (platform, streamout.host_label(host))
+    name = (settings.get("name") or "").strip()
     where = "%s%s" % (host, settings.get("mount", "") or "")
     if name:
         return "%s, %s" % (name, where)
