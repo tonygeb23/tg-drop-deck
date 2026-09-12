@@ -54,9 +54,14 @@ The RTMP path is correct where it lives. Copying it wholesale is not.
 A plain MP4 keeps its index in a moov atom written at the end, so a crash
 leaves a file that will not open at all. Measured, each writer killed with
 ``os._exit`` eight seconds in: plain MP4 **0.0 seconds survived and would not
-open**; fragmented at one second, **7.0 of 8.0 seconds, opens**. The loss is
-one fragment, fixed, so a three hour show loses its last second rather than
-all of it. It costs nothing: measured overhead **minus 0.04 per cent**,
+open**; fragmented at one second, the file opens and holds **6.0 of 8.0
+seconds**. Re-measured 12 September 2026: it is two seconds, not the one this
+used to claim, because the encoder holds about 1.4 s of picture in its
+lookahead on top of the fragment. `preset=veryfast` shortens that as a side
+effect. **And the first fragment does not reach the disk until about three
+seconds in**, so a crash inside the first three seconds still loses
+everything. The loss is bounded either way, so a three hour show loses its
+last couple of seconds rather than all of it. It costs nothing: measured overhead **minus 0.04 per cent**,
 because the moof headers are smaller than the moov index they replace.
 
 **And none of that works without ``flush_packets``.** The first round of that
@@ -110,26 +115,70 @@ class FrameTap:
     twice. One owner at a time, handing frames over, avoids both.
     """
 
+    #: How many pictures may wait. TWO, and the reason is measured.
+    #: With one slot and no sequence number, the producer runs on its own
+    #: 30 Hz clock and the consumer on the audio clock, so the two beat
+    #: against each other: Tiffany burned a decodable index into every
+    #: produced frame and decoded the file back, and **455 of 1800 pictures
+    #: (25.3 per cent) never reached it** at 640x360, 250 of 1800 at 720p,
+    #: with the same share of the file being duplicates. Six of twelve
+    #: one frame events vanished completely. Delivered motion was 22.4 fps
+    #: inside a file claiming 30.
+    #:
+    #: Two is enough to absorb the beat and costs at most one frame of
+    #: latency into the file, which a file does not care about. Deliberately
+    #: not more: a deep queue lets a slow encoder build a backlog of stale
+    #: pictures and then play them late, which is the fault the original one
+    #: slot design was avoiding, and it was right to avoid it.
+    DEPTH = 2
+
     def __init__(self):
-        self._frame = None
+        self._frames = []
         self._lock = threading.Lock()
         self.puts = 0
+        self.dropped = 0
+        #: Rises by one per picture accepted. A consumer keeps the last one
+        #: it saw, so a REPEAT is a frame it has genuinely seen before rather
+        #: than one it happens to hold the same object for.
+        self.seq = 0
 
     def put(self, frame):
         """Called by whoever is building the picture. Never raises."""
         if frame is None:
             return
         with self._lock:
-            self._frame = frame
+            self.seq += 1
+            self._frames.append((self.seq, frame))
             self.puts += 1
+            while len(self._frames) > self.DEPTH:
+                self._frames.pop(0)
+                self.dropped += 1
+
+    def take(self):
+        """The OLDEST picture waiting, and its sequence. Consumed.
+
+        Oldest, not newest, because the two waiting frames are consecutive
+        and a file wants both: handing back the newest and throwing the other
+        away is the 25 per cent loss this replaced. A consumer that has
+        fallen behind is caught by DEPTH instead.
+        """
+        with self._lock:
+            if not self._frames:
+                return 0, None
+            return self._frames.pop(0)
 
     def latest(self):
+        """The newest picture, WITHOUT consuming it.
+
+        Kept for anything that only wants to look, and for the checks that
+        already call it.
+        """
         with self._lock:
-            return self._frame
+            return self._frames[-1][1] if self._frames else None
 
     def clear(self):
         with self._lock:
-            self._frame = None
+            self._frames = []
 
 
 class VideoRecorder:
@@ -182,6 +231,7 @@ class VideoRecorder:
         self._video = None
         self._resampler = None
         self._last_frame = None
+        self._last_seq = 0
         #: The audio stream's own sample counter, at the ENCODER's rate.
         #: Separate from frames_written, which counts what came off the bus
         #: at the bus's rate, because the two can differ.
@@ -251,6 +301,18 @@ class VideoRecorder:
             self._close()
             self._set_state(FAILED, "Could not start recording. %s" % exc)
             return False
+        # THE RING STARTS EMPTY. The bus is created and attached to every
+        # mixer before this is called, and `import av` inside `_open` is 266
+        # to 352 ms cold, so on the first recording of a session the drain
+        # begins a third of a second behind and `RECORD_STAMP_LEAD_FRAMES`
+        # can only correct 133 ms of it. Measured by Jackson: 150 to 240 ms
+        # of audio late, most of the way back to the 257 ms fault this
+        # recorder was written to avoid. `Streamer._run` has always reset its
+        # bus; this never did.
+        try:
+            self.bus.reset()
+        except Exception:
+            pass
         self._stop.clear()
         self.started_at = time.monotonic()
         self.frames_written = 0
@@ -341,6 +403,27 @@ class VideoRecorder:
         return {
             "crf": str(self.crf),
             "preset": C.RECORD_VIDEO_PRESET,
+            # B FRAMES STAY, and the reason is worth writing down because
+            # the argument for removing them is a good one.
+            #
+            # The container says the video starts 66.7 ms after the audio:
+            # video start_pts 1024 at a time base of 1/15360, audio at
+            # 0.000000, and `empty_moov` means there is no edit list to
+            # correct the reorder delay. From the headers that reads as the
+            # sound running 66.7 ms ahead of the picture, which would be
+            # past the point a viewer notices.
+            #
+            # It is not what the file DOES. Measured 12 September 2026 with
+            # `tools/check_recording.py`, which burns each frame's capture
+            # time into the picture and reads it back out of the decoded
+            # file against the decoded audio: with three B frames the
+            # content offset is 28 to 35 ms, and with `bf=0` it is 48 to 54.
+            # Removing them moved real sync 20 ms the WRONG WAY and cost 14
+            # per cent of the file size for it. The decoder applies the
+            # offset consistently, so the headers disagreeing is not the
+            # same as the content disagreeing.
+            #
+            # Read the pixels, not the boxes. Same rule as the colour fault.
             # Bounded on purpose. Two unbounded x264 instances, one for the
             # stream and one for the recording, will oversubscribe every core
             # on the machine and the thing that suffers is the audio.
@@ -434,7 +517,16 @@ class VideoRecorder:
             waiting = self.bus.available() / float(self.bus.samplerate)
         except Exception:
             pass
-        lead = min(int(waiting * self.fps), C.RECORD_STAMP_LEAD_FRAMES)
+        # Plus the handover's own depth. `FrameTap.take` hands over the
+        # OLDEST waiting picture, which is what stops a quarter of the
+        # frames being dropped, and it means the content encoded is up to
+        # one frame older than the newest capture. Measured: that alone
+        # moved the decoded content offset from 5 ms to 30 ms, which is
+        # exactly one frame at 30 fps. Stamping it a frame earlier puts it
+        # back, and it is the same correction, for the same reason, as the
+        # lead above.
+        lead = (min(int(waiting * self.fps), C.RECORD_STAMP_LEAD_FRAMES)
+                + C.RECORD_TAP_LEAD_FRAMES)
         due = int(self.audio_seconds * self.fps) + lead
         # A cap, so a long stall cannot become a burst of a thousand frames
         # that starves the audio behind it. Anything beyond the cap is a drop,
@@ -448,14 +540,19 @@ class VideoRecorder:
             self._emit_one()
 
     def _emit_one(self):
-        picture = self.tap.latest() if self.tap is not None else None
+        # TAKE, not latest. Each produced picture is emitted once, in order,
+        # so the file carries the motion that was captured rather than every
+        # fourth frame twice and every fourth frame not at all.
+        seq, picture = self.tap.take() if self.tap is not None else (0, None)
         if picture is None:
+            # Genuine starvation: nothing new has arrived, so the last frame
+            # is repeated. This is the case the docstring is about, and
+            # repeating is what keeps the timeline from stalling.
             picture = self._last_frame
-            self.repeated += 1
-        elif picture is self._last_frame:
             self.repeated += 1
         else:
             self._last_frame = picture
+            self._last_seq = seq
         if picture is None:
             # Nothing has ever arrived. A black frame keeps the timeline
             # honest, which is the whole point: NEVER return without
@@ -539,12 +636,41 @@ class VideoRecorder:
         length = ("%d hours %d minutes" % (hours, minutes) if hours
                   else "%d minutes %d seconds" % (minutes, seconds))
         size = self.bytes_written / (1024.0 * 1024.0)
-        said = ["Recording saved as %s, %s, %.0f megabytes"
-                % (os.path.basename(self.path or ""), length, size)]
+        # A short recording is not "0 megabytes". Measured on a real 321 KB
+        # file, which is the size a test recording usually is.
+        how_big = ("%.0f megabytes" % size if size >= 10
+                   else "%.1f megabytes" % size if size >= 0.1
+                   else "%.0f kilobytes" % (self.bytes_written / 1024.0))
+        said = ["Recording saved as %s, %s, %s"
+                % (os.path.basename(self.path or ""), length, how_big)]
         if self.losing_audio:
             said.append("It lost audio %d times, so there are gaps in it"
                         % self.losing_audio)
         if self.dropped_pictures:
             said.append("%d frames of picture were skipped to keep the sound "
                         "in step" % self.dropped_pictures)
+        said.extend(self.picture_report())
         return ". ".join(said) + "."
+
+    def picture_report(self):
+        """What the PICTURE of this file turned out to be. Numbers, not hope.
+
+        `FrameTap.puts` and `self.repeated` were both counted from the day
+        this was written and neither was ever read, so a recording whose tap
+        received nothing at all was a black file reported as a clean one:
+        `_emit_one` substitutes black and advances, every count correct,
+        nothing said. A blind presenter cannot see a black rectangle. This is
+        the only thing that will ever tell them.
+        """
+        lines = []
+        puts = getattr(self.tap, "puts", None)
+        if not puts:
+            lines.append("NO PICTURE ever arrived, so the file is black. "
+                         "Check your picture with Alt+Shift+V")
+            return lines
+        if self.frames_sent and self.repeated:
+            share = self.repeated / float(self.frames_sent)
+            if share >= C.RECORD_STILL_SHARE:
+                lines.append("The picture repeated for %d per cent of it, so "
+                             "it is close to a still" % round(share * 100))
+        return lines

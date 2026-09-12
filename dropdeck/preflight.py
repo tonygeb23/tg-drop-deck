@@ -156,14 +156,23 @@ def _picture_words(settings):
     return "a card"
 
 
-def _check_picture(settings, notes, screen_ready=True, screen_reason=""):
+#: What is going to consume the picture, for the warnings to name. A
+#: recording is not a stream, and a sentence that says "the stream would show
+#: an empty screen" to somebody about to record ninety minutes tells them to
+#: check the wrong thing.
+FOR_STREAM = "the stream"
+FOR_RECORDING = "the recording"
+
+
+def _check_picture(settings, notes, screen_ready=True, screen_reason="",
+                   consumer=FOR_STREAM):
     """Everything that can be wrong with the picture, before it is opened."""
     kind = settings.get("picture", C.PICTURE_CARD)
     if kind == C.PICTURE_IMAGE:
         path = settings.get("picture_file", "")
         if not path:
-            notes.append(Note(WARN, "No picture file has been chosen, so the "
-                                    "stream would show an empty screen",
+            notes.append(Note(WARN, "No picture file has been chosen, so %s "
+                                    "would show an empty screen" % consumer,
                               C.FIX_VIDEO))
         elif not os.path.isfile(path):
             # The expensive one. ImageSource fills a canvas with the
@@ -171,15 +180,40 @@ def _check_picture(settings, notes, screen_ready=True, screen_reason=""):
             # never fires, nothing is announced, and the whole broadcast is a
             # dark rectangle that looks deliberate.
             notes.append(Note(WARN, "That picture file is not there any more, "
-                                    "so the stream would show an empty screen",
-                              C.FIX_VIDEO))
+                                    "so %s would show an empty screen"
+                                    % consumer, C.FIX_VIDEO))
     if kind in C.PICTURE_NEEDS_CAMERA and not settings.get("camera"):
-        notes.append(Note(WARN, "No camera has been chosen, so the stream "
-                                "would fall back to a card", C.FIX_VIDEO))
+        notes.append(Note(WARN, "No camera has been chosen, so %s would fall "
+                                "back to a card" % consumer, C.FIX_VIDEO))
     if kind in C.PICTURE_NEEDS_SCREEN and not screen_ready:
         notes.append(Note(WARN, screen_reason or "The screen cannot be "
                                                  "captured on this machine",
                           C.FIX_VIDEO))
+
+
+def picture_notes(settings, board, screen_ready=True, screen_reason="",
+                  consumer=FOR_STREAM):
+    """Everything wrong with the picture, for anybody who wants one.
+
+    Split out of `check` so `Ctrl+Shift+R` can ask it. The picture half of
+    the pre-flight was gated on `board.live_to`, so a board pointed at a
+    radio station got no picture checks at all, which is exactly the board
+    that records video: no "no camera has been chosen", no moved picture
+    file, no "the screen cannot be captured", no overlay text measured.
+
+    Imports nothing and fetches nothing, like everything else in this file,
+    so every warning is testable one at a time.
+    """
+    notes = []
+    _check_picture(settings, notes, screen_ready, screen_reason, consumer)
+    _check_screen_text(settings, board, notes)
+    if (settings.get("picture") == C.PICTURE_CARD
+            and not getattr(board, "stream_titles", True)):
+        # The card is the only place a viewer finds out what is playing, and
+        # the switch that freezes it lives on the other page.
+        notes.append(Note(WARN, "Track titles are turned off, so the card "
+                                "will not say what is playing", C.FIX_AUDIO))
+    return notes
 
 
 def _check_screen_text(settings, board, notes):
@@ -310,8 +344,8 @@ def check(settings, board, audio_running=True, mic_open=False,
         notes.append(Note(STOP, "The sound card is not running, so there is "
                                 "nothing to send", C.FIX_AUDIO))
     if video:
-        _check_picture(settings, notes, screen_ready, screen_reason)
-        _check_screen_text(settings, board, notes)
+        notes.extend(picture_notes(settings, board, screen_ready,
+                                   screen_reason, FOR_STREAM))
         advice = streamout.bitrate_advice(
             server, settings.get("video_width", C.RTMP_WIDTH),
             settings.get("video_height", C.RTMP_HEIGHT),
@@ -320,13 +354,6 @@ def check(settings, board, audio_running=True, mic_open=False,
             settings.get("bitrate", 128))
         if advice:
             notes.append(Note(WARN, advice, C.FIX_VIDEO))
-        if (settings.get("picture") == C.PICTURE_CARD
-                and not board.stream_titles):
-            # The card is the only place a viewer finds out what is playing,
-            # and the switch that freezes it lives on the other page.
-            notes.append(Note(WARN, "Track titles are turned off, so the card "
-                                    "will not say what is playing",
-                              C.FIX_AUDIO))
     warning = going_live_warning(board)
     if warning:
         notes.append(Note(WARN, warning, ""))

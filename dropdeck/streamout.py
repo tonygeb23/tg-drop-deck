@@ -988,7 +988,7 @@ class RtmpDestination(Destination):
     chunk_seconds = 1.0 / C.RTMP_FPS
 
     def __init__(self, settings, bus_samplerate, video_source=None,
-                 overlay_=None, watcher=None):
+                 overlay_=None, watcher=None, frame_tap=None):
         if av is None:
             raise EncoderError(
                 "the encoder is missing, so this copy cannot stream")
@@ -1001,6 +1001,13 @@ class RtmpDestination(Destination):
         #: read into a local before use and neither touches the encoder.
         self.overlay = overlay_
         self.watcher = watcher
+        #: Where a recording collects the composited frame. Passed IN rather
+        #: than set afterwards, because a reconnect builds a whole new
+        #: destination: a tap attached to the old object was silently lost on
+        #: the first drop, and the recording then repeated one frame for the
+        #: rest of the show with every count still correct. Held on Streamer
+        #: for the same reason video_source and overlay are.
+        self.frame_tap = frame_tap
         # The rate the bus is really at. It used to be hard wired to 44100,
         # which quietly resampled every block of a 48k show for no reason, on
         # the thread that is also carrying the audio.
@@ -1543,14 +1550,14 @@ def _moving(source):
 
 
 def destination_for(settings, bus_samplerate, video_source=None,
-                    overlay_=None, watcher=None):
+                    overlay_=None, watcher=None, frame_tap=None):
     """The right destination for what the user picked."""
     kind = settings.get("server", "icecast")
     factory = DESTINATIONS.get(kind)
     if factory is None:
         return IcecastDestination(settings, bus_samplerate)
     return factory(settings, bus_samplerate, video_source=video_source,
-                   overlay_=overlay_, watcher=watcher)
+                   overlay_=overlay_, watcher=watcher, frame_tap=frame_tap)
 
 
 # ---------------------------------------------------------------------------
@@ -1587,7 +1594,7 @@ class Streamer:
 
     def __init__(self, bus, settings, on_state=None, on_title=None,
                  on_trouble=None, video_source=None, overlay_=None,
-                 watcher=None):
+                 watcher=None, frame_tap=None):
         self.bus = bus
         self.settings = dict(settings)
         #: What goes on the screen, for a destination that needs a picture.
@@ -1599,6 +1606,11 @@ class Streamer:
         #: mid show survives the reconnect instead of reverting.
         self.overlay = overlay_
         self.watcher = watcher
+        #: Where a video recording takes the frames this is already sending,
+        #: so one camera and one screen capture serve both. Held here, not on
+        #: the destination, because _build makes a new destination on every
+        #: reconnect. See set_frame_tap.
+        self.frame_tap = frame_tap
         self.on_state = on_state or (lambda state, detail: None)
         self.state = OFF
         self.detail = ""
@@ -1697,6 +1709,40 @@ class Streamer:
             return False
         return True
 
+    def set_frame_tap(self, tap):
+        """Where a recording collects the frames this is already sending.
+
+        Held here as well as handed on, exactly like video_source and the
+        overlay, and for a reason that had already bitten: `_build` makes a
+        NEW destination on every reconnect, so a tap attached to the live
+        destination was thrown away by the first drop. Everything looked
+        right afterwards (the frame counts, the lengths, the log) and the
+        recording's picture was one frozen frame for the rest of the show.
+
+        True when the live destination took it, False when there is not one
+        or it does not carry pictures. Either way it is remembered, so going
+        live later picks it up.
+        """
+        self.frame_tap = tap
+        destination = self._destination
+        if destination is None or not getattr(destination, "wants_video",
+                                              False):
+            return False
+        try:
+            destination.frame_tap = tap
+        except Exception:
+            return False
+        return True
+
+    def wants_video(self):
+        """Whether this stream carries a picture at all.
+
+        Asked of the SETTINGS, not of the live destination, so it answers the
+        same before the connection is up as after. A recording asks it to
+        decide whether to take the stream's frames or make its own.
+        """
+        return is_rtmp(self.settings.get("server", ""))
+
     def set_video_source(self, source):
         """Change what the stream is showing, on air or off.
 
@@ -1781,7 +1827,8 @@ class Streamer:
         destination = destination_for(self.settings, self.bus.samplerate,
                                       video_source=self.video_source,
                                       overlay_=self.overlay,
-                                      watcher=self.watcher)
+                                      watcher=self.watcher,
+                                      frame_tap=self.frame_tap)
         destination.connect()
         self._destination = destination
         self._resampler = _Resampler(self.bus.samplerate,

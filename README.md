@@ -48,6 +48,8 @@ Three faders, because a bed, a drop and a song should never fight over one:
 | `Ctrl+B` | Go live, and come off air |
 | `Alt+Shift+V` | Change what the stream is showing, on air or off |
 | `Ctrl+R` | Start and stop recording |
+| `Ctrl+Shift+R` | Record the picture as well as the sound, to one MP4 |
+| `Alt+Shift+V` | The picture: a card, artwork, a camera, your screen, or both |
 | `Ctrl+M` | Microphone on and off |
 | `Ctrl+D` | Ducking on or off |
 | `Alt+Enter` | Properties: name, level and both hotkeys in one place |
@@ -100,7 +102,12 @@ yourself through an output of its own.
 
 Nothing opens your microphone but you pressing `Ctrl+M`.
 
-**Recording.** `Ctrl+R`. The same mix that goes on air, to Documents, in WAV,
+**Recording.** `Ctrl+R` for the sound, `Ctrl+Shift+R` for the picture and
+the sound together in one MP4. A picture recording uses whatever
+`Alt+Shift+V` is set to, whether or not you are streaming anywhere, and it
+says which picture that is when it starts.
+
+The same mix that goes on air, to Documents, in WAV,
 MP3, AAC or Ogg Opus. It does not need you to be on air, it does not fight
 with the stream, and closing the app finishes the file first so a recording
 always opens.

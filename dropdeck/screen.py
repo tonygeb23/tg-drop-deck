@@ -301,6 +301,28 @@ class ScreenSource(PictureSource):
             blank = 0
             while not self._stop.is_set():
                 started = time.monotonic()
+                # RE-READ THE RECTANGLE. It used to be measured once, before
+                # the loop, so a monitor unplugged, a resolution change, a
+                # dock or a DPI change mid show kept blitting the old
+                # rectangle for ever. A _Grabber asked for a rectangle twice
+                # the size of the desktop hands back a picture with no error
+                # and nothing None, so nothing downstream can tell: the
+                # geometry is simply wrong and the person it happens to
+                # cannot see it. Two integers off GetSystemMetrics per
+                # frame, against a blit of 16 to 33 ms.
+                now_l, now_t, now_w, now_h = _bounds(self.which)
+                if (now_w > 0 and now_h > 0
+                        and (now_w, now_h) != (source_w, source_h)):
+                    left, top, source_w, source_h = now_l, now_t, now_w, now_h
+                    grab_w, grab_h = _fit(source_w, source_h,
+                                          self.want_width, self.want_height)
+                    grabber.close()
+                    grabber = _Grabber(grab_w, grab_h)
+                    self.width, self.height = source_w, source_h
+                    with self._lock:
+                        self._scaled_key = None
+                else:
+                    left, top = now_l, now_t
                 picture = grabber.grab(left, top, source_w, source_h)
                 if picture is None:
                     blank += 1
@@ -335,6 +357,9 @@ class ScreenSource(PictureSource):
                 self._latest = None
                 self._scaled = None
                 self._scaled_key = None
+            # Let the thread go, so start() can capture again. Same reason
+            # as camera.py: start() refuses while `_thread is not None`.
+            self._thread = None
             self._ready.set()
 
     # ------------------------------------------------------------ pictures --
@@ -493,6 +518,17 @@ class SplitSource(PictureSource):
         top = (margin_y if "top" in self.corner
                else max(0, height - box_h - margin_y))
         return picture, (left, top, box_w, box_h)
+
+    @property
+    def frames_read(self):
+        """Whether this has ever produced a picture, asked of the SCREEN.
+
+        Read by `picture.FallbackSource._starting` to tell a source that is
+        opening apart from one that has failed. The screen is the half that
+        has to work: a split with no camera is still a show, and a split with
+        no screen falls back to the card.
+        """
+        return getattr(self.screen, "frames_read", 0)
 
     def latest(self):
         """The camera's own frame, for the framing checker.

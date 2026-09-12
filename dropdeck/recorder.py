@@ -173,6 +173,10 @@ class Recorder:
                 pass
 
     # -------------------------------------------------------------- work --
+    #: What the bus had already thrown away when this recording began, so
+    #: `losing_audio` reports THIS file's losses and not the session's.
+    _dropped_at_start = 0
+
     def start(self):
         """Open the file and begin. Returns True, or False with a reason."""
         if self.running:
@@ -190,6 +194,16 @@ class Recorder:
             self._close()
             self._set_state(FAILED, "Could not start recording. %s" % exc)
             return False
+        # THE RING STARTS EMPTY, and what it had thrown away before now is
+        # not this recording's business. Same as VideoRecorder.start and
+        # Streamer._run: the bus is attached to the mixers before this is
+        # called, so without the reset the file opens with whatever was
+        # sitting in the ring.
+        try:
+            self.bus.reset()
+        except Exception:
+            pass
+        self._dropped_at_start = getattr(self.bus, "dropped", 0)
         self._stop.clear()
         self.started_at = time.monotonic()
         self.frames_written = 0
@@ -275,6 +289,22 @@ class Recorder:
                 wav.close()
             except Exception:
                 pass
+
+    @property
+    def losing_audio(self):
+        """How much sound the bus has thrown away since this started.
+
+        The video recorder has had this since 3.7.0 and this one never did,
+        which its own docstring notes and nobody acted on: a sound recording
+        whose ring overflowed said nothing at all, at the time or afterwards.
+        A recording with gaps in it that reports itself as clean is the
+        worst shape of fault this app has, and it is the one the whole 3.8.1
+        pass is about.
+        """
+        try:
+            return max(0, self.bus.dropped - self._dropped_at_start)
+        except Exception:
+            return 0
 
     def stop(self, wait=True):
         """Finish the file. Returns where it is, or None if it never started."""

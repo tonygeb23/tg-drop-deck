@@ -33,6 +33,7 @@ from . import cuefile
 from . import cuesheet
 from . import routing
 from . import screen
+from . import picturefeed
 from . import videorecord
 from . import send as sendout
 from . import streamout
@@ -2063,6 +2064,8 @@ class DropDeckFrame(wx.Frame):
             f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
             f"{self._air_label()} (Ctrl+B)"
             + ("   RECORDING (Ctrl+R)" if self.recording() else "")
+            + ("   RECORDING PICTURE (Ctrl+Shift+R)"
+               if self.recording_video() else "")
             + self._send_label(), 0)
 
     def _send_label(self):
@@ -4115,8 +4118,16 @@ class DropDeckFrame(wx.Frame):
         self.overlay = self.build_overlay(settings)
         # A new watcher per broadcast, so a fault in yesterday's show is not
         # still being remembered in today's.
-        self.watcher = (health.Watcher(on_say=self._on_picture_trouble)
-                        if self.video_source is not None else None)
+        # A recording may already have one, and going live to a RADIO
+        # station builds no picture at all, so this used to replace the
+        # recording's watcher with None and switch the black and frozen
+        # picture watch off mid recording. Keep whichever is wanted.
+        if self.video_source is not None or self.recording_video():
+            if self.watcher is None:
+                self.watcher = health.Watcher(
+                    on_say=self._on_picture_trouble)
+        else:
+            self.watcher = None
         self.streamer = streamout.Streamer(
             self.air_bus, settings, overlay_=self.overlay,
             watcher=self.watcher,
@@ -4126,6 +4137,9 @@ class DropDeckFrame(wx.Frame):
         self.streamer.set_title(self._now_playing_title())
         self.streamer.start()
         self._start_framing()
+        # A recording already running now takes the stream's own frames
+        # instead of pulling them itself, so one camera serves both.
+        self._sync_record_picture()
         self.stream_item.SetItemLabel("Come o&ff air\tCtrl+B")
         return True
 
@@ -4186,14 +4200,32 @@ class DropDeckFrame(wx.Frame):
         if self.recording_video():
             return True
         settings = self._picture_settings()
+        # THE PICTURE FIRST, and waited for. The recorder's timeline begins
+        # the moment it starts, and `_emit_one` writes black while nothing
+        # has arrived: measured at 20 black frames, 0.67 s, with a camera
+        # that takes 0.70 s to open. Acquiring here, before the recorder
+        # exists, means the first frame in the file is a picture.
+        #
+        # It blocks the key press for as long as the camera takes. That is
+        # the right trade for this key and not for Ctrl+B: a recording key
+        # is pressed once and the first second of the file is permanent,
+        # where going live has a fallback card covering it and a presenter
+        # waiting to talk.
+        self.feed().acquire(picturefeed.FOR_RECORDING,
+                            ready_timeout=picturefeed.READY_SECONDS)
         self.video_bus = streamout.AirBus(self.mixer.samplerate)
         self.video_tap = videorecord.FrameTap()
         self._sync_air_taps()
+        # video_width, not width. _picture_settings has never held a "width"
+        # key, so all three of these read None and fell through to the board
+        # by luck the same values, which is why it went unnoticed. A
+        # settings dict that is asked for keys it does not have is a bug
+        # waiting for the day the fallback stops matching.
         self.video_recorder = videorecord.VideoRecorder(
             self.video_bus, self.video_tap,
-            width=int(settings.get("width") or self.board.video_width),
-            height=int(settings.get("height") or self.board.video_height),
-            fps=int(settings.get("fps") or self.board.video_fps),
+            width=int(settings.get("video_width") or self.board.video_width),
+            height=int(settings.get("video_height") or self.board.video_height),
+            fps=int(settings.get("video_fps") or self.board.video_fps),
             bitrate=self.board.record_bitrate,
             folder=self.board.record_folder or None,
             on_state=self._on_record_state)
@@ -4203,28 +4235,81 @@ class DropDeckFrame(wx.Frame):
             self.video_bus = None
             self.video_tap = None
             self._sync_air_taps()
+            # The feed was taken before the recorder was built, so it has to
+            # be handed back or the camera light stays on for a recording
+            # that never happened.
+            self.feed().release(picturefeed.FOR_RECORDING)
             self.announce(detail or "Recording would not start")
             return False
         self.video_cue = cuefile.CueFile(self.video_recorder.path)
         self._note_current_track()
-        self._start_record_picture()
+        # The feed was taken above, before the recorder, so the first
+        # frame in the file is a real picture rather than black. A recording
+        # wants a picture whatever Ctrl+B is pointed at, which is the fault
+        # Tony reported on 12 September: the picture belonged to the video
+        # PLATFORM, so a board set up for a radio station recorded a card
+        # with the station name on it.
+        self.refresh_overlay()
+        self._sync_record_picture()
+        # The same two watches the air gets. A camera that goes black or
+        # freezes rather than failing outright is invisible to
+        # FallbackSource, which is the whole reason health.Watcher exists,
+        # and a presenter recording themselves needs to know they are in
+        # shot at least as much as one who is live.
+        if self.watcher is None:
+            self.watcher = health.Watcher(on_say=self._on_picture_trouble)
+        self._start_framing()
         self._set_video_record_label(True)
-        self.announce("Recording picture and sound to %s. %s"
+        self.announce("Recording picture and sound to %s. %s%s"
                       % (os.path.basename(self.video_recorder.path or ""),
-                         self.what_is_in_the_recording()))
+                         self.what_is_in_the_recording(picture=True),
+                         self._picture_warnings()))
         self._update_status()
         return True
+
+    def _picture_warnings(self):
+        """What is wrong with the picture, said once, as it starts.
+
+        Spoken rather than a dialog. Ctrl+B can afford to stop and ask
+        because going live is a decision; Ctrl+Shift+R is pressed in the
+        middle of a show and must never block. But the warnings have to
+        arrive: a picture fault in a recording is permanent, and this is the
+        only chance to mention it before ninety minutes of it exist.
+        """
+        try:
+            settings = self._picture_settings()
+            ready, reason = True, ""
+            if settings.get("picture") in C.PICTURE_NEEDS_SCREEN:
+                ready = screen.available()
+                reason = screen.why_unavailable()
+            notes = preflight.picture_notes(
+                settings, self.board, screen_ready=ready,
+                screen_reason=reason, consumer=preflight.FOR_RECORDING)
+        except Exception:
+            return ""
+        said = [note.text for note in notes]
+        return (" " + ". ".join(said) + ".") if said else ""
 
     def stop_video_recording(self, quiet=False):
         """Finish the file and say where it is and what went wrong."""
         rec, self.video_recorder = getattr(self, "video_recorder", None), None
         self._stop_record_picture()
+        feed = getattr(self, "picture_feed", None)
+        if feed is not None:
+            feed.release(picturefeed.FOR_RECORDING)
+        if not self.streaming():
+            self._stop_framing()
+            self.watcher = None
+        # STOPPED FIRST, then asked. `bytes_written` is the handle's own
+        # position, so reporting before the muxer has written its last
+        # fragment understated the file: measured, "0 megabytes" for a file
+        # that is 0.39 MB on disk with six seconds of picture in it.
+        if rec is not None:
+            rec.stop()
         said = rec.report() if rec is not None else ""
         cue, self.video_cue = getattr(self, "video_cue", None), None
         if cue is not None and cue.describe():
             said = "%s %s." % (said, cue.describe())
-        if rec is not None:
-            rec.stop()
         self.video_bus = None
         self.video_tap = None
         self._sync_air_taps()
@@ -4240,7 +4325,7 @@ class DropDeckFrame(wx.Frame):
         if player is not None and getattr(player, "playing", False):
             self.note_track_on_air(getattr(player, "current", None))
 
-    def what_is_in_the_recording(self):
+    def what_is_in_the_recording(self, picture=False):
         """Name what is really in it, and what is NOT. Darrell's question.
 
         Darrell, 10 September 2026: "when I did my audio recording, the only
@@ -4274,21 +4359,90 @@ class DropDeckFrame(wx.Frame):
         said = "In it: %s." % ", ".join(inside)
         if outside:
             said += " NOT in it: %s." % ", ".join(outside)
+        if picture:
+            # Only the file that HAS one. Ctrl+R while a picture recording
+            # is running used to announce "Recording to Drop Deck Stream
+            # 002.wav. ... Picture: everything on my screens at 1280 by
+            # 720", and there is no picture in a WAV. Exactly the rule this
+            # method exists for: something that is NOT in it must never look
+            # as though it is.
+            said += self._picture_in_the_recording()
         return said
 
-    def _start_record_picture(self):
-        """Build the picture ourselves, unless the stream is already doing it.
+    def _picture_in_the_recording(self):
+        """What the PICTURE of a video recording is, named out loud.
 
-        When live, `RtmpDestination` fills the tap with the frame it is about
-        to encode, so the recording gets the identical picture and costs
-        nothing. Off air there is nobody making one, so this thread does.
+        The audio half of this sentence has existed since 3.7.0 and the
+        picture half never did, which is how a recording of a card with the
+        station name on it went unnoticed: everything the app said about the
+        file was true, and none of it was about the picture. A blind
+        presenter cannot see a freeze frame. This is the only thing that will
+        ever tell them.
         """
-        self._stop_record_picture()
+        if not self.recording_video():
+            return ""
+        feed = getattr(self, "picture_feed", None)
+        chosen = C.PICTURE_LABELS.get(self.board.picture,
+                                      self.board.picture).lower()
+        if feed is None or not feed.running:
+            return " Picture: %s." % chosen
+        if not feed.frames_asked:
+            # Nothing has looked through it yet, so there is no fallback to
+            # report and describing one would be a guess. Say what is set up.
+            return " Picture: %s." % chosen
+        try:
+            said = feed.describe()
+        except Exception:
+            said = ""
+        if feed.fallen_back:
+            return (" Picture: a card instead of %s%s."
+                    % (chosen, (", because %s" % feed.reason)
+                       if feed.reason else ""))
+        return " Picture: %s." % (said or chosen)
+
+    def _sync_record_picture(self):
+        """Decide who fills the recording's tap, and re-decide on every change.
+
+        Two ways a file can get its picture, and the choice has to be made
+        again whenever either side moves, which is why this is a sync rather
+        than a start: going live DURING a recording, or coming off air during
+        one, swaps which of them is right.
+
+        **While live to a video platform the stream fills the tap**, so the
+        file carries the identical composited frame the encoder is sending,
+        overlay and all, for no extra work and, far more importantly, with
+        no second camera. Otherwise this thread pulls from the shared feed.
+
+        The tap now goes to the STREAMER rather than to its destination. The
+        destination is rebuilt from scratch on every reconnect, and a tap
+        attached to the old object was silently dropped by the first
+        reconnect: the recording then repeated one frame for the rest of the
+        show with every count, length and log still perfect. And
+        `getattr(streamer, "destination")` never answered anything at all,
+        because the attribute is `_destination`, so this whole branch had
+        never once run since it was written, and every recording made while
+        live was quietly building a second pipeline of its own.
+        """
         streamer = getattr(self, "streamer", None)
-        destination = getattr(streamer, "destination", None)
-        if destination is not None and hasattr(destination, "frame_tap"):
-            destination.frame_tap = self.video_tap
+        tap = getattr(self, "video_tap", None)
+        if tap is None or not self.recording_video():
+            self._stop_record_picture()
             return
+        # ON AIR, not merely streaming. `streaming()` is true while
+        # connecting and while reconnecting, and during both there is no
+        # destination to fill the tap: `set_frame_tap` remembers it and
+        # returns False, and nothing puts a frame anywhere. So the app's own
+        # thread keeps the job until the picture is really going out.
+        if (streamer is not None and self.streaming()
+                and streamer.wants_video()
+                and getattr(streamer, "state", "") == streamout.ON_AIR):
+            self._stop_record_thread()
+            streamer.set_frame_tap(tap)
+            return
+        if streamer is not None:
+            streamer.set_frame_tap(None)
+        if getattr(self, "_record_picture_thread", None) is not None:
+            return                      # already ours, and already running
         self._record_picture_stop = threading.Event()
         self._record_picture_thread = threading.Thread(
             target=self._record_picture_run, daemon=True,
@@ -4296,46 +4450,75 @@ class DropDeckFrame(wx.Frame):
         self._record_picture_thread.start()
 
     def _record_picture_run(self):
-        """One frame every 1/fps into the tap. Never touches the audio."""
-        source = None
-        try:
-            settings = self._picture_settings()
-            source = picture.build(settings)
-            overlay_ = self._build_overlay(settings) if hasattr(
-                self, "_build_overlay") else None
-            rec = getattr(self, "video_recorder", None)
-            fps = rec.fps if rec is not None else 30
-            width = rec.width if rec is not None else 1280
-            height = rec.height if rec is not None else 720
-            stop = self._record_picture_stop
-            while not stop.is_set():
-                started = time.monotonic()
-                try:
-                    frame = source.frame(width, height)
-                    if frame is not None:
-                        if overlay_ is not None:
-                            try:
-                                frame = overlay_.draw(frame)
-                            except Exception:
-                                pass
-                        tap = getattr(self, "video_tap", None)
-                        if tap is not None:
-                            tap.put(frame)
-                except Exception:
-                    pass
-                left = (1.0 / float(fps or 30)) - (time.monotonic() - started)
-                if left > 0:
-                    stop.wait(left)
-        except Exception:
-            pass
-        finally:
-            if source is not None:
-                try:
-                    source.close()
-                except Exception:
-                    pass
+        """One frame every 1/fps into the tap. Never touches the audio.
 
-    def _stop_record_picture(self):
+        It PULLS FROM THE SHARED FEED and does not build a source of its own.
+        The version that did build its own never called `start()`, so the
+        capture threads behind `frame()` never ran, every call answered None,
+        and `FallbackSource` substituted the card: a recording of a card with
+        the station name on it, which is the fault Tony reported. Measured
+        against his board, 12 September 2026: 175 frames in six seconds, mean
+        pixel difference from a freshly drawn card ZERO.
+
+        `time.monotonic` here is pacing, not timing, and that distinction is
+        load bearing. Nothing in the file is stamped from it: the recorder
+        counts frames against its own audio sample clock and repeats or drops
+        to fit, so a slow pass costs a repeated frame and can never move the
+        timeline. See videorecord.py.
+        """
+        feed = self.feed()
+        # BEFORE the first question. Asking a capture that has not produced a
+        # frame yet gets None, and None sends FallbackSource to the card for
+        # PICTURE_RETRY_SECONDS: measured at five of the first eight seconds
+        # of a split screen recording. This thread is not the UI's, so
+        # waiting here costs the user nothing at all.
+        feed.wait_ready(picturefeed.READY_SECONDS)
+        rec = getattr(self, "video_recorder", None)
+        fps = rec.fps if rec is not None else 30
+        width = rec.width if rec is not None else 1280
+        height = rec.height if rec is not None else 720
+        stop = self._record_picture_stop
+        while not stop.is_set():
+            started = time.monotonic()
+            try:
+                frame = feed.frame(width, height)
+                if frame is not None:
+                    # Read every pass, not captured once, so an edit to a
+                    # tile or a track change reaches the file.
+                    overlay_ = getattr(self, "record_overlay", None)
+                    if overlay_ is not None:
+                        # draw_on, not draw, and it is reached at all now.
+                        # The overlay was guarded on
+                        # hasattr(self, "_build_overlay") and the method is
+                        # build_overlay, so a recording made off air has
+                        # never carried the words the stream carries.
+                        try:
+                            frame = overlay_.draw_on(frame)
+                        except Exception:
+                            pass
+                    tap = getattr(self, "video_tap", None)
+                    if tap is not None:
+                        tap.put(frame)
+                    # LAST, and on the composite, for the same reason
+                    # RtmpDestination._picture looks last: what it is asked
+                    # to notice is whether anybody watching would see
+                    # anything, and what they see is the whole frame.
+                    watch = getattr(self, "watcher", None)
+                    if watch is not None:
+                        try:
+                            watch.look(frame,
+                                       moving=(feed.kind
+                                               in C.PICTURE_NEEDS_CAMERA))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            left = (1.0 / float(fps or 30)) - (time.monotonic() - started)
+            if left > 0:
+                stop.wait(left)
+
+    def _stop_record_thread(self):
+        """Stop our own picture thread, leaving the stream's tap alone."""
         stop = getattr(self, "_record_picture_stop", None)
         if stop is not None:
             stop.set()
@@ -4344,10 +4527,13 @@ class DropDeckFrame(wx.Frame):
             thread.join(timeout=2.0)
         self._record_picture_thread = None
         self._record_picture_stop = None
+
+    def _stop_record_picture(self):
+        """Nobody is filling the tap any more, whichever way it was filled."""
+        self._stop_record_thread()
         streamer = getattr(self, "streamer", None)
-        destination = getattr(streamer, "destination", None)
-        if destination is not None and hasattr(destination, "frame_tap"):
-            destination.frame_tap = None
+        if streamer is not None:
+            streamer.set_frame_tap(None)
 
     def _set_video_record_label(self, on):
         item = getattr(self, "video_record_item", None)
@@ -4373,6 +4559,13 @@ class DropDeckFrame(wx.Frame):
             said = ("Recording saved as %s, %d minutes %d seconds, "
                     "%.1f megabytes"
                     % (os.path.basename(path or ""), minutes, seconds, size))
+            lost = getattr(rec, "losing_audio", 0)
+            if lost:
+                # Said, at last. A sound recording whose ring overflowed
+                # reported itself as clean, which is the shape of fault this
+                # whole release is about.
+                said += (". It lost audio %d times, so there are gaps in it"
+                         % lost)
             if cue is not None and cue.describe():
                 said += ". %s" % cue.describe()
             self.announce(said)
@@ -4426,18 +4619,61 @@ class DropDeckFrame(wx.Frame):
                 pass
 
     def _on_record_state(self, state, detail):
+        """Either recorder reporting. WHICH ONE has to be part of the answer.
+
+        Mark found this on 12 September 2026 and it is the worst thing in
+        the picture work: `_on_record_state` was handed to BOTH recorders as
+        their `on_state`, and `videorecord.FAILED` is the same string as
+        `recorder.FAILED`, so a VIDEO failure ran `_record_failed`, which
+        dropped `self.recorder` and `self.record_bus`. An ordinary disk
+        fault on the MP4 therefore abandoned the sound recording mid write
+        with its thread still alive, reset the Ctrl+R menu label, said
+        nothing whatever about it, and left the video side inconsistent: the
+        camera still open, the picture thread still spinning, the status bar
+        still claiming a picture recording. The show ended up in neither
+        file, and the only thing spoken was about the wrong recording.
+        """
         from . import recorder as recording
-        if state == recording.FAILED:
-            wx.CallAfter(self._record_failed, detail)
+        if state != recording.FAILED:
+            # "The recording is losing audio. The machine cannot keep up
+            # with the picture." was computed by `_check_backlog` on every
+            # such recording and thrown away here, because only FAILED was
+            # handled. It is the sentence that tells somebody to stop and
+            # fix it while the show can still be saved; said at the end, it
+            # is an epitaph. `_check_backlog` only fires on a change, so
+            # this cannot chatter.
+            if detail:
+                wx.CallAfter(self.announce, detail)
+            return
+        wx.CallAfter(self._record_failed, detail)
 
     def _record_failed(self, detail):
         """Said out loud, because a recording that stopped by itself is the
-        kind of thing you find out about afterwards otherwise."""
-        self.recorder = None
-        self.record_bus = None
-        self._sync_air_taps()
-        self._set_record_label(False)
-        self.announce(detail or "The recording stopped")
+        kind of thing you find out about afterwards otherwise.
+
+        It works out WHICH recorder died by asking each one, rather than
+        assuming. Both are checked, because a disk that fills takes both.
+        """
+        from . import recorder as recording
+        video = getattr(self, "video_recorder", None)
+        audio = getattr(self, "recorder", None)
+        said = detail or "The recording stopped"
+        if video is not None and video.state == videorecord.FAILED:
+            # Down the ordinary path, so the feed is released, the picture
+            # thread is stopped, the label is right and the cue file is
+            # closed. Quiet, because the reason is spoken below.
+            self.stop_video_recording(quiet=True)
+            said = "The picture recording stopped. %s" % said
+            if audio is not None and audio.running:
+                said += " Your sound recording is still going."
+        if audio is not None and audio.state == recording.FAILED:
+            self.recorder = None
+            self.record_bus = None
+            self._sync_air_taps()
+            self._set_record_label(False)
+            if video is not None and video.running:
+                said += " Your picture recording is still going."
+        self.announce(said)
         self._update_status()
 
     def _open_recordings(self):
@@ -4750,7 +4986,51 @@ class DropDeckFrame(wx.Frame):
             parts.append("One of your outputs is not keeping up: %s." % why)
         for line in self._routing_conflicts():
             parts.append(line)
-        return " ".join(parts)
+        parts.append(self.picture_report())
+        return " ".join(p for p in parts if p)
+
+    def picture_report(self):
+        """What the picture is, and what is using it. One paragraph.
+
+        There was nowhere in the app that answered this. Ctrl+Shift+V is per
+        moment and describes what is live; the settings are split across a
+        page called Video streaming and one called Recording; and the
+        question a presenter actually has is "what picture have I got, and
+        what does it apply to". Four things can consume one now, so it is
+        worth a sentence naming them.
+        """
+        board = self.board
+        chosen = C.PICTURE_LABELS.get(board.picture, board.picture).lower()
+        said = ["Your picture is %s, %d by %d."
+                % (chosen, board.video_width, board.video_height)]
+        feed = getattr(self, "picture_feed", None)
+        using = feed.describe_holders() if feed is not None else ""
+        if using:
+            said.append("%s %s it."
+                        % (using.capitalize(),
+                           "are using" if " and " in using else "is using"))
+        elif board.live_to == C.LIVE_TO_VIDEO:
+            said.append("Nothing is using it yet. It goes out when you press "
+                        "Ctrl+B, and into the file when you press "
+                        "Ctrl+Shift+R.")
+        else:
+            # The sentence Tony's report was asking for. His radio station
+            # takes no picture, and that is not a reason for him to have no
+            # picture: it is a reason to say which of the two this is for.
+            said.append("Nothing is using it yet. Ctrl+B goes to your radio "
+                        "station, which sends no picture, so this is for "
+                        "Ctrl+Shift+R until you switch Ctrl+B over.")
+        if feed is not None and feed.running and feed.fallen_back:
+            said.append("A card is standing in%s."
+                        % ((", because %s" % feed.reason) if feed.reason
+                           else ""))
+        marks = self.overlay if self._showing() else self.build_overlay()
+        if marks is not None:
+            try:
+                said.append("On top of it: %s." % marks.describe())
+            except Exception:
+                pass
+        return " ".join(said)
 
     def _live_bank_devices(self):
         """The bank routing as device indices, which is what routing wants."""
@@ -4839,23 +5119,38 @@ class DropDeckFrame(wx.Frame):
         if streamer is not None:
             streamer.stop()
         self._stop_framing()
-        source, self.video_source = getattr(self, "video_source", None), None
+        self.video_source = None
         # The overlay and the health watch belong to one broadcast. Left
         # behind, the watcher would still be remembering yesterday's fault.
         self.overlay = None
         self.watcher = None
-        if source is not None:
-            # A camera left open after a show is a camera no other program can
-            # use, and a light left on in the room.
-            try:
-                source.close()
-            except Exception:
-                pass
+        # LET GO, do not close. A camera left open after a show is a light on
+        # in the room, but a recording still running wants the same picture
+        # and closing it here would have taken the recording's camera with
+        # it. The feed shuts the device down when the LAST holder lets go.
+        feed = getattr(self, "picture_feed", None)
+        if feed is not None:
+            feed.release(picturefeed.FOR_STREAM)
         self.air_bus = None
         # Recording may still be going, and it wants the same mix. One place
         # decides who is listening to the mixers, so coming off air cannot
         # take a recording down with it.
         self._sync_air_taps()
+        # The stream was filling a recording's tap. It is not any more, so
+        # the recording has to start pulling for itself or its picture would
+        # freeze on the last frame that went out, with every frame count,
+        # length and log still perfect.
+        self._sync_record_picture()
+        # And a recording that is still running keeps its watches. The
+        # teardown above is unconditional, which took the framing and the
+        # black picture watch off a recording that had nothing to do with
+        # the stream. stop_video_recording already gets the mirror of this
+        # right.
+        if self.recording_video():
+            if self.watcher is None:
+                self.watcher = health.Watcher(
+                    on_say=self._on_picture_trouble)
+            self._start_framing()
         item = getattr(self, "stream_item", None)
         if item is not None:
             item.SetItemLabel("&Go live\tCtrl+B")
@@ -4864,20 +5159,49 @@ class DropDeckFrame(wx.Frame):
         self._update_status()
 
     # ------------------------------------------------------------ picture --
+    #: The one picture pipeline. Everything that wants a frame (the stream,
+    #: a recording, a preview, the framing watcher) takes a hold on this
+    #: rather than building its own, because a camera has ONE owner and
+    #: because a source swap has to reach all of them at once. Made on first
+    #: use so a board of WAVs never touches it. See picturefeed.py.
+    picture_feed = None
+
+    def feed(self):
+        """The shared picture pipeline, made the first time anything asks."""
+        made = getattr(self, "picture_feed", None)
+        if made is None:
+            made = picturefeed.PictureFeed(
+                self._picture_settings,
+                on_fallback=self._picture_failed,
+                on_change=self._picture_changed)
+            self.picture_feed = made
+        return made
+
+    def _picture_changed(self):
+        """The feed swapped its source under everybody. Follow it.
+
+        The framing watcher reads the source object, so it has to be rebuilt
+        on both the way in and the way out: a camera arriving needs watching
+        and a camera going away needs the watch stopped.
+        """
+        wx.CallAfter(self._refollow_picture)
+
+    def _refollow_picture(self):
+        self._stop_framing()
+        self._start_framing()
+        self._update_status()
+
     def _build_picture(self, settings):
         """What goes on the screen for a destination that insists on one.
 
-        Built only when the destination needs it. An Icecast station opening a
-        camera would be a light on in the room for no reason at all.
+        Taken only when the destination needs it. An Icecast station opening a
+        camera would be a light on in the room for no reason at all. But a
+        RECORDING wants one whatever Ctrl+B is pointed at, which is why this
+        gate lives here and not inside the feed.
         """
-        if not streamout.is_rtmp(settings.get("server", "")):
+        if not picturefeed.wanted_for(settings):
             return None
-        source = picture.build(settings, on_fallback=self._picture_failed)
-        try:
-            source.start()
-        except Exception as exc:
-            self.announce(str(exc))
-        return source
+        return self.feed().acquire(picturefeed.FOR_STREAM)
 
     def preview_picture(self, timeout=None):
         """One frame of what WOULD go out, whether or not we are live.
@@ -4895,39 +5219,39 @@ class DropDeckFrame(wx.Frame):
         live picture or one built to look at, because those are different
         claims and the person reading cannot tell them apart by looking.
         """
-        live = getattr(self, "video_source", None)
         width = self.board.video_width
         height = self.board.video_height
-        if live is not None:
-            picture_ = live.frame(width, height)
-            return self._with_overlay(picture_), "what is going out now"
-        # Not on air. Build the same source the stream would build, look at
-        # one frame, and put it away again. Deliberately NOT gated on the
-        # destination being RTMP the way _build_picture is: somebody set up
-        # to go to their radio station may still want to see the picture
-        # before they switch over.
-        source = None
+        feed = self.feed()
+        # Whatever already holds the picture, look through THAT rather than
+        # opening a second one. A preview that built its own source would ask
+        # Windows for a camera the stream or the recording already has, and
+        # DirectShow gives a device to one owner at a time.
+        if feed.running:
+            picture_ = feed.frame(width, height)
+            where = ("what is going out now" if self._showing()
+                     else "what is being captured now")
+            return self._with_overlay(picture_), where
+        # Nothing holds it. Take a hold of our own, look once, let go.
+        # Deliberately NOT gated on the destination being RTMP the way
+        # _build_picture is: somebody set up to go to their radio station may
+        # still want to see the picture before they switch over, and they may
+        # be recording it.
         try:
-            # The PICTURE settings, not the destination's. See
-            # _picture_settings for why that distinction is load bearing.
-            source = picture.build(self._picture_settings(),
-                                   on_fallback=lambda _reason: None)
-            source.start()
-            waiter = getattr(source, "wait_ready", None)
-            if waiter is not None:
-                waiter(timeout)
-            picture_ = source.frame(width, height)
+            feed.acquire(picturefeed.FOR_PREVIEW,
+                         ready_timeout=(picturefeed.READY_SECONDS
+                                        if timeout is None else timeout))
+            picture_ = feed.frame(width, height)
+            if picture_ is None and feed.reason:
+                return None, feed.reason
             return self._with_overlay(picture_), "what would go out"
         except Exception as exc:
             return None, str(exc)
         finally:
-            # Always. A camera left open by a preview is a light on in the
-            # room and a device another program cannot have.
-            if source is not None:
-                try:
-                    source.close()
-                except Exception:
-                    pass
+            # Always, and it is a RELEASE rather than a close: if the stream
+            # or a recording took a hold while we were looking, the device
+            # stays open for them. A camera left open by a preview is a light
+            # on in the room and a device another program cannot have.
+            feed.release(picturefeed.FOR_PREVIEW)
 
     def _with_overlay(self, picture_):
         """The frame with the words on it, the way a viewer would see it.
@@ -4946,9 +5270,23 @@ class DropDeckFrame(wx.Frame):
             return picture_
 
     def _picture_failed(self, reason):
-        """Said once, from whatever thread noticed, never once a frame."""
-        wx.CallAfter(self.announce,
-                     "%s. The stream is showing a card instead." % reason)
+        """Said once, from whatever thread noticed, never once a frame.
+
+        It names WHAT is showing the card. "The stream is showing a card
+        instead" is simply untrue when nothing is streaming and the card is
+        going into a file, and a message that is wrong about which of the two
+        it means is worse than no message: the presenter checks the wrong
+        thing. The feed knows who is holding it.
+        """
+        feed = getattr(self, "picture_feed", None)
+        who = feed.describe_holders() if feed is not None else ""
+        if "is back" in (reason or "").lower():
+            said = "%s. %s has the picture again." % (
+                reason, (who or "The picture").capitalize())
+        else:
+            said = "%s. %s is showing a card instead." % (
+                reason, (who or "The stream").capitalize())
+        wx.CallAfter(self.announce, said)
 
     # ------------------------------------------------------------ framing --
     def _start_framing(self):
@@ -4959,12 +5297,23 @@ class DropDeckFrame(wx.Frame):
         has no business anywhere near it.
         """
         self._stop_framing()
-        source = getattr(self, "video_source", None)
+        feed = getattr(self, "picture_feed", None)
         # Anything with a camera in it, not just the camera source. The split
         # has one and a presenter using it needs to know they are in shot at
         # least as much, because they are small in the corner of it.
-        if source is None or getattr(source, "kind",
-                                     "") not in C.PICTURE_NEEDS_CAMERA:
+        #
+        # Asked of the FEED, so the shot is watched while a recording is
+        # being made off air. It used to read video_source, which only exists
+        # once Ctrl+B has been pressed, so a presenter recording video got no
+        # framing help at all.
+        if feed is None or not feed.running:
+            return
+        # ASKED OF THE BOARD, not of the live source. `feed.kind` reports
+        # "card" while a camera is still opening and whenever it has fallen
+        # back, and a camera is 0.79 s to its first frame, so starting the
+        # framing watch right after acquiring the feed always saw a card and
+        # never started at all. The question is what the user CHOSE.
+        if self.board.picture not in C.PICTURE_NEEDS_CAMERA:
             return
         level = self.board.framing_level
         if level not in framing.FRAMING_LEVELS:
@@ -4983,14 +5332,17 @@ class DropDeckFrame(wx.Frame):
     def _framing_loop(self):
         stop = self._framing_stop
         while not stop.is_set():
-            source = getattr(self, "video_source", None)
+            feed = getattr(self, "picture_feed", None)
             framer = getattr(self, "framer", None)
-            if source is None or framer is None:
+            if feed is None or framer is None or not feed.running:
                 return
             try:
                 if framer.due():
-                    latest = getattr(source.primary, "latest", None)
-                    framer.look(latest() if latest is not None else None)
+                    # The feed answers with the raw camera frame, through the
+                    # fallback and through a split's composite, because what
+                    # a face detector wants is the camera and not the card
+                    # standing in for it.
+                    framer.look(feed.latest())
             except Exception:
                 pass          # never let looking at a picture end a broadcast
             if stop.wait(C.FACE_CHECK_SECONDS / 2.0):
@@ -5018,48 +5370,62 @@ class DropDeckFrame(wx.Frame):
         over and over for ten seconds and then never again.
         """
         framer = getattr(self, "framer", None)
-        source = getattr(self, "video_source", None)
-        if framer is not None and source is not None:
+        feed = getattr(self, "picture_feed", None)
+        if framer is not None and feed is not None and feed.running:
             self.announce_answer(framer.describe())
             return
         if self.board.picture not in C.PICTURE_NEEDS_CAMERA:
             self.announce_answer(
-                "The stream is not showing a camera. Picture settings are in "
-                "Preferences")
+                "Your picture is not set to a camera. Picture settings are "
+                "in Preferences, or press Alt+Shift+V")
             return
         if not self.board.camera:
             self.announce_answer("No camera has been chosen yet")
             return
-        # Off air, so nothing is open. Look once rather than refusing.
+        # Nothing holds the picture, so look once rather than refusing.
+        # Through the FEED, because building a second CameraSource while the
+        # feed holds the device is the two owner case this release exists to
+        # remove: Tiffany measured the first owner's reader thread dying for
+        # good and the app then blaming another program for it.
         self.announce_answer("Looking through the camera...")
         threading.Thread(target=self._look_once, daemon=True,
                          name="dropdeck-look").start()
 
     def _look_once(self):
-        """Open the camera, look, close it. Off the UI thread, always."""
+        """Look through the shared feed once. Off the UI thread, always.
+
+        THROUGH THE FEED, not a camera of its own. It used to build its own
+        `CameraSource`, and Tiffany measured what a second owner does to the
+        first: the original reader thread dies for good, `start()` refuses to
+        relaunch it, and `FallbackSource` then asks a corpse for a frame
+        every five seconds while the app announces that another program is
+        probably using the camera. The other program was Drop Deck. So
+        pressing Ctrl+Shift+F during a show could take the camera off the
+        air permanently, and Preferences has a button that does the same.
+        """
         from . import camera as cameras
-        source = None
+        feed = self.feed()
+        held = feed.running
         try:
-            source = cameras.CameraSource(self.board.camera,
-                                          self.board.video_width,
-                                          self.board.video_height,
-                                          self.board.video_fps)
-            source.start()
-            if not source.wait_ready(C.CAMERA_OPEN_TIMEOUT):
+            if not held:
+                feed.acquire(picturefeed.FOR_PREVIEW,
+                             ready_timeout=picturefeed.READY_SECONDS)
+            raw = feed.latest()
+            if raw is None:
                 wx.CallAfter(self.announce_answer,
-                             source.error or "The camera gave no picture")
+                             feed.reason or "The camera gave no picture")
                 return
             watcher = framing.Framer(level=framing.FRAMING_OFF)
-            reading = watcher.measure(source.latest())
+            reading = watcher.measure(raw)
             wx.CallAfter(self.announce_answer,
                          watcher.error or reading.sentence())
         except Exception as exc:
             wx.CallAfter(self.announce_answer, cameras.explain(
                 exc, self.board.camera))
         finally:
-            if source is not None:
+            if not held:
                 try:
-                    source.close()
+                    feed.release(picturefeed.FOR_PREVIEW)
                 except Exception:
                     pass
 
@@ -5356,6 +5722,15 @@ class DropDeckFrame(wx.Frame):
         elif state == streamout.FAILED:
             self.announce("Could not go on air. %s" % detail)
             self.stop_stream(quiet=True)
+        # WHO FILLS A RECORDING'S TAP depends on whether the stream is
+        # actually on air, and `streaming()` stays True right through
+        # RECONNECTING. Measured by Mark: a server that went away at seven
+        # seconds froze the recording's picture for the remaining eleven,
+        # `tap.puts` stopped dead, 145 of 261 frames repeated, and the app
+        # said "Off air, trying again" about the stream and nothing at all
+        # about the file. A two minute Wi-Fi gap is two minutes of freeze
+        # frame in a ninety minute recording.
+        self._sync_record_picture()
         self._update_status()
 
     def say_stream_status(self, _event=None):
@@ -5452,8 +5827,18 @@ class DropDeckFrame(wx.Frame):
         """
         found = list(getattr(self, "_cameras_seen", []) or [])
         if not found:
+            # Imported HERE, and the import is the whole fix. ui.py never
+            # imported camera at all, so this line raised NameError into the
+            # except below and this method answered "no cameras" for every
+            # user, every time, for as long as it has existed. Nobody could
+            # see it: `board.camera` is added back two lines down, so anybody
+            # who had ALREADY chosen a camera still saw theirs, and only a
+            # user who had never chosen one was quietly told they had none.
+            # That is Alt+Shift+V offering no camera and no split screen to
+            # every new user with a working webcam.
+            from . import camera as cameras
             try:
-                found = list(camera.cameras())
+                found = list(cameras.cameras())
             except Exception:
                 found = []
             self._cameras_seen = found
@@ -5497,8 +5882,16 @@ class DropDeckFrame(wx.Frame):
         return made
 
     def refresh_overlay(self):
-        """Rebuild it and put it on the air, if there is a show running."""
+        """Rebuild it and put it on the air, if there is a show running.
+
+        `record_overlay` is read afresh by the recording's picture thread on
+        every frame, so editing a tile mid recording reaches the file. It
+        used to be built once before that loop and never replaced, so a
+        "what is playing" tile in a recording was frozen on whatever was on
+        at Ctrl+Shift+R.
+        """
         self.overlay = self.build_overlay()
+        self.record_overlay = self.build_overlay(self._picture_settings())
         streamer = getattr(self, "streamer", None)
         if streamer is not None and self.streaming():
             try:
@@ -5517,26 +5910,18 @@ class DropDeckFrame(wx.Frame):
         either on its own.
         """
         self.refresh_overlay()
-        if not self._showing():
+        feed = getattr(self, "picture_feed", None)
+        if feed is None or not feed.running:
             return
+        # Whatever is holding the picture, the stream or a recording or both,
+        # gets the new colours. This used to ask _build_picture with the
+        # DESTINATION's settings, so on a board pointed at a radio station it
+        # returned None and a brand change reached nothing at all.
         try:
-            source = self._build_picture(self._stream_settings())
+            feed.rebuild()
+            feed.set_title(self._now_playing_title())
         except Exception:
             return
-        if source is None:
-            return
-        old = getattr(self, "video_source", None)
-        self.video_source = source
-        try:
-            self.streamer.set_video_source(source)
-            self.streamer.set_title(self._now_playing_title())
-        except Exception:
-            pass
-        if old is not None and old is not source:
-            try:
-                old.close()
-            except Exception:
-                pass
         self._stop_framing()
         self._start_framing()
 
@@ -5550,15 +5935,16 @@ class DropDeckFrame(wx.Frame):
             box.ShowModal()
 
     def _on_screen_text(self, _event=None):
-        if self.board.live_to != C.LIVE_TO_VIDEO:
-            self.announce_answer(
-                "Ctrl+B is set to go to your radio station, which sends no "
-                "picture. Video streaming is in Preferences")
-            return
+        """Alt+Shift+T. Words on the picture, wherever the picture is going.
+
+        Ungated for the same reason as Alt+Shift+V: a recording carries the
+        overlay too, so a radio station in Ctrl+B is not a reason to refuse.
+        """
         if not overlay.available():
             self.announce_answer(overlay.why_unavailable())
             return
-        with ScreenTextDialog(self, self.board, live=self._showing()) as box:
+        with ScreenTextDialog(self, self.board,
+                              live=self._picture_live()) as box:
             box.ShowModal()
 
     def describe_screen(self, _event=None):
@@ -5575,19 +5961,29 @@ class DropDeckFrame(wx.Frame):
         """
         parts = []
         showing = self._showing()
-        source = getattr(self, "video_source", None)
-        if showing and source is not None:
+        feed = getattr(self, "picture_feed", None)
+        live = self._picture_live()
+        if live:
+            # WHERE it is going, first, because that is the thing the answer
+            # used to get wrong: a board pointed at a radio station said
+            # "Nothing" while a picture was being written to a file.
+            going = []
+            if showing:
+                going.append("going out")
+            if self.recording_video():
+                going.append("being recorded")
             try:
-                parts.append(source.describe() or "a picture")
+                said = feed.describe() or "a picture"
             except Exception:
-                parts.append("a picture")
-        elif self.board.live_to != C.LIVE_TO_VIDEO:
-            self.announce_answer(
-                "Nothing. Ctrl+B is set to go to your radio station, which "
-                "sends no picture")
-            return
+                said = "a picture"
+            parts.append("%s, %s" % (said, " and ".join(going) if going
+                                     else "open"))
+        elif self.recording_video():
+            parts.append("%s, once the picture starts"
+                         % C.PICTURE_LABELS.get(self.board.picture,
+                                                self.board.picture).lower())
         else:
-            parts.append("%s, once you go live"
+            parts.append("%s, once you go live or start recording the picture"
                          % C.PICTURE_LABELS.get(self.board.picture,
                                                 self.board.picture).lower())
         marks = self.overlay if showing else self.build_overlay()
@@ -5608,13 +6004,38 @@ class DropDeckFrame(wx.Frame):
         wx.CallAfter(self.announce, text)
 
     def _on_video_sources(self, _event=None):
-        if self.board.live_to != C.LIVE_TO_VIDEO:
-            self.announce_answer(
-                "Ctrl+B is set to go to your radio station, which sends no "
-                "picture. Video streaming is in Preferences")
-            return
-        with VideoSourceDialog(self, self.board, live=self._showing()) as box:
+        """Alt+Shift+V. What the picture is, whatever Ctrl+B is pointed at.
+
+        It used to refuse unless `live_to` was the video platform. Since
+        3.7.0 a recording carries a picture, so refusing meant a presenter
+        set up for a radio station could not choose the picture going into
+        their own file, and the picture they got was the default card with
+        the station name on it. Ctrl+B's destination is not this question.
+        """
+        with VideoSourceDialog(self, self.board,
+                               live=self._picture_live()) as box:
             box.ShowModal()
+
+    def _picture_live(self):
+        """Whether a change to the picture takes effect THIS INSTANT.
+
+        Two things can be holding it: the stream and a video recording. A
+        dialog asking "is this live" means this, not `_showing`, which is
+        about the air alone. Getting those two confused is what made Alt+Shift+V
+        tell a presenter their change would apply "next time you go live"
+        while it was going into a file as they read it.
+        """
+        feed = getattr(self, "picture_feed", None)
+        if feed is None or not feed.running:
+            return False
+        # THE STREAM OR A RECORDING, not merely "somebody has it open". A
+        # shot check or Ctrl+Shift+F holds the feed for a second or two, and
+        # during that second Alt+Shift+V would have answered "Now showing
+        # what is on my screen" when nothing was showing anywhere and
+        # nothing was being recorded. A preview is invisible to the user and
+        # must not change what the app claims.
+        return (feed.held_by(picturefeed.FOR_STREAM)
+                or feed.held_by(picturefeed.FOR_RECORDING))
 
     def _showing(self):
         """Whether a picture is going out right now.
@@ -5644,44 +6065,93 @@ class DropDeckFrame(wx.Frame):
         self.board.picture = kind
         self._touch()
         label = C.PICTURE_LABELS.get(kind, kind).lower()
-        if not self._showing():
-            said = "Next time you go live: %s" % label
+        feed_now = getattr(self, "picture_feed", None)
+        if feed_now is not None and feed_now.running:
+            # Something has the picture open, even if it is only a preview,
+            # so the source is swapped under it. Two separate questions: the
+            # swap follows whoever holds it, and the SENTENCE follows
+            # whether that is the air or a recording.
+            try:
+                feed_now.rebuild()
+            except Exception:
+                pass
+        if not self._picture_live():
+            # Nothing that matters is holding the picture. This used to ask
+            # `_showing`, which is about the air alone, so a presenter
+            # changing the picture during a video recording was told "next
+            # time you go live" while the file went on carrying the old one.
+            # A recording is a consumer of the picture and a change has to
+            # reach it.
+            said = ("Next time you go live or record the picture: %s" % label)
             self.announce(said)
             return said
-        old = getattr(self, "video_source", None)
+        # ONE rebuild, inside the shared feed, and every consumer follows:
+        # the stream, a recording in progress, the framing watcher and the
+        # next preview. It used to build a source and hand it to the streamer
+        # alone, so changing the picture during a video recording changed
+        # nothing in the file. The feed puts the new source in BEFORE closing
+        # the old one, because a camera is about six tenths of a second to
+        # its first frame and closing first would put a card on the air for
+        # that six tenths.
         try:
-            source = self._build_picture(self._stream_settings())
+            self.feed().rebuild()
         except Exception as exc:
             self.board.picture = was
             said = "That did not work: %s. Still showing %s" % (
                 exc, C.PICTURE_LABELS.get(was, was).lower())
             self.announce(said)
             return said
-        if source is None:
-            self.board.picture = was
-            return ""
-        # The new source goes on the air BEFORE the old one is closed. A
-        # camera takes about half a second to hand over its first frame and
-        # closing first would put a card on the air for that half second,
-        # which is a visible glitch nobody asked for. The old source is shut
-        # down afterwards, and the encoder has already stopped reading it.
-        self.video_source = source
-        self.streamer.set_video_source(source)
-        self.streamer.set_title(self._now_playing_title())
-        if old is not None and old is not source:
-            try:
-                old.close()
-            except Exception:
-                pass
+        feed = self.feed()
+        feed.set_title(self._now_playing_title())
         # Framing follows the picture: it only looks through a camera, and it
         # reads the source object rather than the board, so it has to be
         # rebuilt on both the way in and the way out.
         self._stop_framing()
         self._start_framing()
-        said = "Now showing %s" % label
+        # SAID OFF THE RESULT, not off the request. A camera that will not
+        # open comes back as the card through FallbackSource, which is not an
+        # exception and not a None: the swap succeeded and the picture is
+        # still not what was asked for. Announcing the request would have
+        # said "Now showing a camera" to somebody looking at a card, which is
+        # the same class of fault as the one this release exists to fix.
+        if feed.fallen_back or (feed.kind and feed.kind != kind):
+            said = ("Asked for %s, and a card is showing instead%s"
+                    % (label, (": %s" % feed.reason) if feed.reason else ""))
+        else:
+            said = "%s %s" % (self._picture_verb(), label)
         self.announce(said)
         self._update_status()
         return said
+
+    def _picture_verb(self):
+        """"Now showing", or the truth when it is going into a file.
+
+        A recording is not "showing" anything to anybody, and a presenter who
+        is not on air being told something is "showing" reasonably wonders
+        where.
+        """
+        if self._showing() and self.recording_video():
+            return "On air and recording:"
+        if self.recording_video():
+            return "Now recording:"
+        return "Now showing"
+
+    def recording_line(self):
+        """One sentence about a picture recording, or nothing at all.
+
+        Appended to the air report rather than given a key of its own,
+        because "am I recording" and "am I on air" are the same question
+        asked in a hurry. VideoRecorder.describe has existed since 3.7.0 and
+        nothing in the app ever called it.
+        """
+        rec = getattr(self, "video_recorder", None)
+        if rec is None or not rec.running:
+            return ""
+        try:
+            said = rec.describe()
+        except Exception:
+            return ""
+        return "%s.%s" % (said, self._picture_in_the_recording())
 
     def stream_status(self):
         streamer = getattr(self, "streamer", None)
@@ -5693,17 +6163,20 @@ class DropDeckFrame(wx.Frame):
             # board with both named the radio station as the destination when
             # the show was going to the video platform. It is the one
             # question this key exists to answer.
+            taping = self.recording_line()
+            tail = (" %s" % taping) if taping else ""
             report = self.preflight()
             if report is None:
-                return "Off air, and no server is set up yet"
+                return "Off air, and no server is set up yet." + tail
             if report.blocked:
                 # Both halves. Where it WOULD go is still the answer to the
                 # question, and a reason on its own leaves somebody guessing
                 # which of the two destinations is the one complaining.
-                return "Off air. Ctrl+B would go to %s, but %s" % (
+                return "Off air. Ctrl+B would go to %s, but %s.%s" % (
                     report.summary(), report.stops[0].text[0].lower()
-                    + report.stops[0].text[1:])
-            return "Off air. Ctrl+B goes live to %s" % report.summary()
+                    + report.stops[0].text[1:], tail)
+            return "Off air. Ctrl+B goes live to %s.%s" % (report.summary(),
+                                                           tail)
         if streamer.state != streamout.ON_AIR:
             return "%s. %s" % (streamer.state.capitalize(),
                                streamer.detail or streamer.error or "")
@@ -5735,7 +6208,9 @@ class DropDeckFrame(wx.Frame):
                          "keeping up" % int(streamer.backlog))
         if streamer.reconnects:
             parts.append("reconnected %d times" % streamer.reconnects)
-        return ", ".join(parts)
+        said = ", ".join(parts)
+        taping = self.recording_line()
+        return ("%s. %s" % (said, taping)) if taping else said
 
     def _now_playing_title(self):
         track = self.player.current if self.player.playing else None

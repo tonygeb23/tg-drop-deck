@@ -761,8 +761,15 @@ check("and the screen, on a machine that can capture it",
 check("the name is column zero, for first letter navigation",
       window.list.GetColumn(0).GetText() == "Source")
 check("Escape closes it", window.GetEscapeId() == wx.ID_CANCEL)
-check("and it says which one is on the air",
-      window.list.GetColumn(1).GetText() == "On air")
+# "Using", not "On air". A recording is not on air, and the column said
+# "yes" against the chosen row whether or not anything was happening at all.
+check("and it says what is USING the picture, which is not the same as on air",
+      window.list.GetColumn(1).GetText() == "Using")
+check("nothing is using it off air, so the chosen row says chosen",
+      window._use_label(frame.board.picture) == "chosen",
+      window._use_label(frame.board.picture))
+check("and an unchosen row says nothing at all",
+      window._use_label("no such source") == "")
 window.Destroy()
 
 # The shot key answers for the split, rather than saying there is no camera.

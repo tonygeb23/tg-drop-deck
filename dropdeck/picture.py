@@ -291,7 +291,14 @@ class CardSource(PictureSource):
                 cbox = pen.textbbox((0, 0), stamp, font=small)
                 pen.text((width - margin - (cbox[2] - cbox[0]) - cbox[0],
                           margin), stamp, font=small, fill=tuple(self.accent))
-            return np.asarray(card, dtype=np.uint8)
+            # np.array, NOT np.asarray. asarray on a PIL image hands back
+            # a READ ONLY view, and the overlay then raised on every single
+            # frame into a swallowed except, so a card has never carried the
+            # words since Pillow started being bundled in 3.5.0. `draw_on`
+            # copies now as well, so this is belt and braces on purpose:
+            # anything else that reaches for a frame and writes it would hit
+            # the same wall and say nothing.
+            return np.array(card, dtype=np.uint8)
         except Exception:
             # Anything at all goes wrong and the blocky card still works.
             return None
@@ -399,13 +406,27 @@ def _letterbox(source, canvas):
     scale = min(width / float(src_w), height / float(src_h))
     new_w = max(1, int(src_w * scale))
     new_h = max(1, int(src_h * scale))
+    top = (height - new_h) // 2
+    left = (width - new_w) // 2
+    # THE COMMON CASE IS NO RESIZE AT ALL, and it used to pay for one anyway.
+    # `ScreenSource._run` already StretchBlts to the destination size on the
+    # GDI side, so on a 16:9 screen the picture arriving here is exactly the
+    # size of the canvas. Measured 12 September 2026 at 1280x720: building
+    # the two index arrays and doing two fancy index gathers to move the data
+    # unchanged cost **41.28 ms median, p95 49.74 ms**, against a whole frame
+    # budget of 33.33 ms, and it is called inline on the thread carrying the
+    # audio. The same data move as a slice assignment is 1.12 ms.
+    #
+    # That was the whole of SplitSource.frame costing 31.28 ms median and up
+    # to 60.27 ms at 720p.
+    if new_w == src_w and new_h == src_h:
+        canvas[top:top + new_h, left:left + new_w] = source
+        return canvas
     # Nearest neighbour, by indexing. It is a still picture on a video stream
     # and this avoids another dependency for something nobody will see.
     rows = (np.arange(new_h) * (src_h / float(new_h))).astype(np.int32)
     cols = (np.arange(new_w) * (src_w / float(new_w))).astype(np.int32)
     scaled = source[np.clip(rows, 0, src_h - 1)][:, np.clip(cols, 0, src_w - 1)]
-    top = (height - new_h) // 2
-    left = (width - new_w) // 2
     canvas[top:top + new_h, left:left + new_w] = scaled
     return canvas
 
@@ -426,6 +447,14 @@ class FallbackSource(PictureSource):
         self.fallen_back = False
         self.reason = ""
         self._tried_at = 0.0
+        #: When this was FIRST asked for a picture. A source that has not
+        #: answered yet is starting, not broken, and the difference is the
+        #: whole of `_starting` below.
+        self._first_asked = 0.0
+        #: Whether the card is standing in only while the real one starts.
+        #: Not the same as `fallen_back`: nothing is announced, nothing is
+        #: latched, and the next frame asks the primary again.
+        self.starting = False
 
     @property
     def kind(self):
@@ -468,6 +497,19 @@ class FallbackSource(PictureSource):
         now = time.monotonic()
         if self.fallen_back and (now - self._tried_at) >= C.PICTURE_RETRY_SECONDS:
             self._tried_at = now
+            # START IT AGAIN FIRST. Measured: a camera unplugged, taken by
+            # another program, or reset by its driver leaves its reader
+            # thread EXITED, and asking a dead source for another frame
+            # answers None for ever. So "the camera is back" was unreachable
+            # for every fault except a stall with the thread still alive,
+            # which is the narrowest of the cases this retry exists for.
+            # CameraSource.start and ScreenSource.start clear their own
+            # thread on the way out now, so calling start on a live one is
+            # the no op it always was.
+            try:
+                self.primary.start()
+            except Exception:
+                pass
             picture = self._ask(width, height)
             if picture is not None:
                 self.fallen_back = False
@@ -480,10 +522,51 @@ class FallbackSource(PictureSource):
         elif not self.fallen_back:
             picture = self._ask(width, height)
             if picture is not None:
+                self.starting = False
                 return picture
+            if self._starting():
+                # STAND IN, do not fall back. No latch, no announcement, and
+                # the very next frame asks the primary again, so a camera
+                # appears the moment it is ready rather than five seconds
+                # later. Measured: this was five of the first eight seconds
+                # of a split screen recording, and an announcement saying
+                # the picture had stopped when it had not started.
+                self.starting = True
+                return self.backup.frame(width, height)
+            self.starting = False
             self._fall_back(getattr(self.primary, "error", "")
                             or "the picture stopped")
         return self.backup.frame(width, height)
+
+    def _starting(self):
+        """Has the primary simply not produced its first frame yet.
+
+        Three ways out of it, and each one matters. A source that has said
+        what is wrong is BROKEN, not starting, so a camera another program
+        holds is reported at once rather than three seconds later. A source
+        that has ever answered has started, so this can never excuse a
+        picture that dies later. And there is a ceiling, because a source
+        that goes quiet without setting an error would otherwise be excused
+        for ever.
+        """
+        started = getattr(self.primary, "frames_read", None)
+        if started is None:
+            # It cannot say whether it has ever produced anything, so None is
+            # taken at face value. The grace is opt in, claimed only by a
+            # source that counts its own frames: CameraSource, ScreenSource
+            # and SplitSource all do. Anything else keeps the old behaviour,
+            # which is what the checks in tests/test_video.py describe.
+            return False
+        if started:
+            # It has answered before, so this is a source that has STOPPED,
+            # which is the case the fallback exists for. Never excused.
+            return False
+        if getattr(self.primary, "error", ""):
+            return False
+        now = time.monotonic()
+        if not self._first_asked:
+            self._first_asked = now
+        return (now - self._first_asked) < C.PICTURE_START_SECONDS
 
     def _ask(self, width, height):
         try:
@@ -508,6 +591,17 @@ class FallbackSource(PictureSource):
     def describe(self):
         if self.fallen_back:
             return "%s, showing a card instead" % self.primary.describe()
+        if self.starting:
+            # Said as what it is. "Showing a card instead" about a camera
+            # that is opening reads as a fault and is not one. The sources
+            # say "still starting" themselves, so this does not repeat it:
+            # "a camera that is still starting, starting up" was the first
+            # attempt and it is the sort of sentence nobody would write by
+            # hand.
+            said = self.primary.describe()
+            if "starting" in said.lower():
+                return said
+            return "%s, starting up" % said
         return self.primary.describe()
 
     def set_title(self, title):

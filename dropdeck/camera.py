@@ -57,6 +57,14 @@ def _dshow_log(target, options):
     """
     if av is None:
         return ""
+    # Put back afterwards. This used to raise the level and leave it raised
+    # for the life of the process, so enumerating cameras once turned on
+    # FFmpeg's "frame dropped" chatter for every decode after it.
+    was = None
+    try:
+        was = av.logging.get_level()
+    except Exception:
+        was = None
     try:
         av.logging.set_level(av.logging.INFO)
     except Exception:
@@ -131,6 +139,20 @@ def explain(error, device=""):
     if "could not find" in lowered or "no such" in lowered:
         return "%s is not there any more. It may have been unplugged" % name
     if "Errno 5" in text or "i/o error" in lowered:
+        # ASK WINDOWS WHETHER IT IS EVEN THERE. FFmpeg's dshow failure for a
+        # device that does not exist comes back matching this branch, so a
+        # camera that had been unplugged or renamed was reported as one
+        # another program was holding, and a blind user was sent to close
+        # OBS over a camera that was not plugged in. Enumeration costs about
+        # two tenths of a second and this is the failure path, where nobody
+        # is waiting on a frame.
+        if device:
+            try:
+                if device not in cameras():
+                    return ("%s is not there any more. It may have been "
+                            "unplugged, or renamed" % name)
+            except Exception:
+                pass
         return ("%s could not be opened. Another program is probably using "
                 "it: close OBS, Teams or Zoom and try again" % name)
     if "permission" in lowered or "Errno 13" in text or "denied" in lowered:
@@ -255,6 +277,14 @@ class CameraSource(PictureSource):
                 self._latest = None
                 self._scaled = None
                 self._scaled_key = None
+            # AND THE THREAD IS LET GO, so start() can open the device again.
+            # start() returns early while `_thread is not None`, so a reader
+            # that had exited could never be restarted: a camera unplugged,
+            # replugged, reset by its driver or handed back by another
+            # program stayed dead for the rest of the session while
+            # FallbackSource politely asked a corpse for a frame every five
+            # seconds. Measured by two people independently.
+            self._thread = None
             try:
                 container.close()
             except Exception:

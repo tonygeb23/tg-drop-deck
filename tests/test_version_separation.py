@@ -88,10 +88,12 @@ check("the shipped version accepts it",
 # Windows build that EXISTS. Raise it when one is built, not when a version
 # is bumped.
 #
-# 3.8.0 is built AND published, 11 September 2026. The 3.6.0 note that used
-# to sit here (built, never published, so every installed copy answered "you
-# have the newest one" for ever) was cleared by the 3.7.0 release.
-newest_build = "3.8.0"
+# 3.8.1 is built, 12 September 2026: installer 85.9 MB and zip 115.7 MB, and
+# the FROZEN build's own selftest reports version 3.8.1 with the update
+# channel live. The 3.6.0 note that used to sit here (built, never published,
+# so every installed copy answered "you have the newest one" for ever) was
+# cleared by the 3.7.0 release.
+newest_build = "3.8.1"
 
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)

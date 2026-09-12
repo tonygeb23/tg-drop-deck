@@ -416,6 +416,103 @@ And specific to this one:
   new users" on a live key the day this was written. And a thinking model
   spends `maxOutputTokens` on thinking FIRST: without a ceiling one returned
   the eighteen characters "There is no camera" and stopped mid sentence.
+- **The picture belongs to the APP, not to where Ctrl+B is pointed.** Tony,
+  12 September 2026: "ice cast, shoucast, is not the same as facebook and
+  youtube." Since 3.7.0 a recording carries a picture, so `board.live_to` is
+  the wrong question for every picture key, and three of them refused to work
+  at all on a radio board: Alt+Shift+V would not open, Alt+Shift+T would not
+  open, and Ctrl+Shift+V answered "Nothing" while a picture was being written
+  to a file. **Nothing on the picture side may gate on `live_to` again.** The
+  one place that question is still right is `_build_picture`, because a
+  stream to an Icecast station genuinely has nowhere to put a picture and
+  opening a camera for it is a light on in the room for nothing;
+  `picturefeed.wanted_for` is that question and it is asked in one place.
+
+- **One picture pipeline, reference counted, because a camera has ONE
+  owner.** `picturefeed.PictureFeed`. Four things want the picture (the RTMP
+  stream, the file recording, the preview behind the shot check, and the
+  framing watcher) and each of them used to build its own with
+  `picture.build`. That is not a performance problem, it is a correctness
+  one: measured 12 September 2026, a second `CameraSource` on one device
+  kills the first one's reader thread **for good**, `start()` will not
+  relaunch it, and the app then blames another program for a camera Drop Deck
+  is holding itself. `picture.build` has exactly one caller now and it must
+  stay that way. Start on the first taker, close on the LAST, and put a new
+  source in before taking the old one out.
+
+- **`start()` is where a capture lives, and a source that was never started
+  looks perfectly healthy.** This is the whole of the fault Tony reported.
+  `ui._record_picture_run` built a source and did not start it, so every
+  `frame()` answered None, `FallbackSource` substituted the card, and a
+  recording of a card with his station name on it was written with every
+  count correct and nothing said. Measured: 175 frames in six seconds, mean
+  pixel difference from a freshly drawn card **zero**.
+
+- **"Not yet" and "broken" are different answers.** `FallbackSource` treated
+  the first None as a failure, latched onto the card for
+  `PICTURE_RETRY_SECONDS` and announced that the picture had stopped, about a
+  camera that was still opening. Measured: five of the first eight seconds of
+  a split screen recording, and a spoken sentence that was false in the
+  alarming direction. `_starting()` tells them apart, and the grace is **opt
+  in**: only a source that counts its own `frames_read` can claim it, so a
+  stand-in with neither an error nor a frame count keeps the old behaviour
+  and the checks in `tests/test_video.py` still describe something real.
+
+- **`Overlay.draw_on` never writes the array it is given, and that is not
+  tidiness.** Two silent faults lived in the in-place version. `CardSource`
+  hands back `np.asarray(pil_image)`, which is READ ONLY, so it raised
+  `ValueError` into a swallowed except and **the overlay had never once been
+  drawn on a card, on any path, since 3.5.0**: measured off a real stream, a
+  lower third 1.33 grey levels from a bare card, which is absent, while
+  Ctrl+Shift+V read the words out. And every source hands back its own
+  CACHED array, so drawing in place drew into the cache: changed words piled
+  up, and repeated blending converged a panel to fully opaque within four
+  passes. A copy is about a millisecond at 720p against a 33 ms budget.
+
+- **More stamp lead puts the content LATER, not earlier.** The name says the
+  opposite and it cost two wrong guesses. Swept 12 September 2026 with
+  `tools/check_recording.py`, one variable, sixteen seconds a run: lead -2
+  gave +1.1 ms, **-1 gave +0.6 ms**, 0 gave -30.0, +1 gave -65.4, +2 gave
+  -98.6. Exactly 33 ms a frame and monotonic. `RECORD_TAP_LEAD_FRAMES` is
+  -1 because `FrameTap.take` hands over the oldest of two. **Sweep it, do
+  not reason about it**, and if `FrameTap.DEPTH` changes, sweep it again.
+
+- **Read the pixels, not the boxes.** The container says a recording's video
+  starts 66.7 ms after its audio, and with `empty_moov` there is no edit list
+  to correct the reorder delay, so from the headers the sound leads the
+  picture by more than a viewer tolerates. Setting `bf=0` fixes the headers
+  and **moved real sync 20 ms the wrong way**, measured off the decoded file
+  against the decoded audio, for 14 per cent more bytes. The decoder applies
+  the offset consistently. Same rule as the BT.601 colour fault, from the
+  other direction: the file's numbers are the answer and its headers are not.
+
+- **A one slot handover between two independent clocks loses a quarter of the
+  frames.** The producer runs at 30 Hz and the recorder is clocked by the
+  audio, so they beat: measured by burning a decodable index into every
+  produced frame and decoding the file back, **455 of 1800 pictures (25.3 per
+  cent) never arrived** at 640x360, with the same share of the file being
+  duplicates, and six of twelve single frame events vanished completely.
+  `FrameTap.DEPTH` is 2 and `take()` hands over the OLDEST, which is what
+  makes the file carry the motion that was captured. Deliberately not deeper:
+  a deep queue lets a slow encoder play stale pictures late, which the
+  original one slot design was right to avoid.
+
+- **A card is cheap to encode and a real picture is not, so a static picture
+  proves nothing about the encoder.** `RECORD_VIDEO_PRESET` was "medium" and
+  had always been encoding a card. Measured with real screen capture: medium
+  is 34.57 ms a frame against a 33.33 ms budget, so it cannot sustain 30 fps,
+  the ring backs up and the file **deletes audio**. veryfast is 17.85 ms for
+  a file about one per cent larger. Any change here needs the measurement
+  repeated with a MOVING picture.
+
+- **Two recorders are two files with two faults.** `_on_record_state` was
+  handed to both, and `videorecord.FAILED` is the same string as
+  `recorder.FAILED`, so a disk fault on the MP4 ran the audio recorder's
+  teardown: the WAV was abandoned mid write with its thread still alive, the
+  menu label reset, nothing was said about it, and the show ended up in
+  neither file. Anything given to both recorders has to work out which one it
+  is talking about.
+
 - **`_stream_settings` answers for the DESTINATION, so it is the wrong place
   to ask about the picture.** When `live_to` is the radio station it returns
   the audio dict, which has no `picture` key at all, and `picture.build` on a

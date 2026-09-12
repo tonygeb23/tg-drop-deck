@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.8.0"
+APP_VERSION = "3.8.1"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -587,13 +587,13 @@ FEEDING TEAMTALK, ZOOM, OBS, OR ANY OTHER PROGRAM
   It can leave one source out, so sending to a program you are also capturing
   does not hand that program its own audio back.
   Ctrl+Shift+H hears exactly what is going. Ctrl+Shift+O says whether it is
-  arriving cleanly. Ctrl+Shift+R reads out where everything is going.
+  arriving cleanly. Ctrl+Shift+W reads out where everything is going.
   Do NOT point Preferences, Output at a cable for this. That output carries
   your sounds and NOT your microphone, so the other program would get a
   soundboard with no voice on it.
 
 WHERE YOUR AUDIO GOES
-  Three separate questions, and Ctrl+Shift+R answers all three at once.
+  Three separate questions, and Ctrl+Shift+W answers all three at once.
   Preferences, Output is where your SOUNDS play, and a bank can have a card
   of its own if you ride levels on a desk.
   Preferences, Microphone, Hear yourself through is what YOU hear. It carries
@@ -683,15 +683,16 @@ PUTTING THE SHOW ON THE INTERNET
                             playing. Works off air too
   Alt+Shift+S               Set up other inputs besides your microphone: a
                             card, a cable, or one program
-  Alt+Shift+V               Change what the stream is showing. Works while
-                            you are on air: a card, your artwork, a camera,
-                            your screen, or your screen with the camera in
-                            the corner
+  Alt+Shift+V               Change the picture: a card, your artwork, a
+                            camera, your screen, or your screen with the
+                            camera in the corner. It is the same picture for
+                            a stream and for a recording, and it changes
+                            while you are on air or recording
   Alt+Ctrl+Shift+S          Source control, for while you are on air: mute,
                             solo, rename or remove, without leaving the
                             keyboard
 
-THE PICTURE, WHEN YOU ARE STREAMING VIDEO
+THE PICTURE, FOR A STREAM OR A RECORDING
   Alt+Shift+T               Screen text: your station name, what is playing,
                             a clock or your own words, in four named places
   Alt+Shift+C               Colours: your background, your words and your
@@ -711,13 +712,17 @@ GIVING ANOTHER PROGRAM ON THIS MACHINE YOUR SHOW
   Ctrl+Shift+H              Hear exactly what is being sent
   Ctrl+Shift+O              Is the send keeping up
   Ctrl+Shift+W              Where is everything going: your sounds, what you
-                            hear, and what is being sent, all in one go
+                            hear, what is being sent, and your picture and
+                            what is using it, all in one go
 
 RECORDING THE PICTURE AS WELL AS THE SOUND
   Ctrl+R                    Record the sound
   Ctrl+Shift+R              Record the picture AND the sound, to one MP4.
                             It does not need you to be on air, and it takes
-                            the same picture that would go out
+                            whatever Alt+Shift+V is set to. It says which
+                            picture that is when it starts. If you are
+                            already live it takes the identical frames the
+                            stream is sending, so one camera serves both
   Both say what is really in the recording when they start, including
   anything you can hear but is NOT on the air and therefore not in the file.
   Both also write a .cue track list beside the recording, with the same file
@@ -899,6 +904,12 @@ CUE_GRACE = 10.0
 CUE_REFRESH_MS = 500
 
 # --------------------------------------------------------- video recording --
+#: How much of a recording may be repeated frames before it is worth
+#: saying the file is close to a still. Not a fault: a card IS a still and a
+#: screen nobody touched is nearly one. Said only when it is high enough that
+#: somebody would be surprised.
+RECORD_STILL_SHARE = 0.98
+
 # Recording the picture as well as the sound, Ctrl+Shift+R. See videorecord.py,
 # which explains why none of these match the streaming ones.
 
@@ -913,7 +924,30 @@ RECORD_FRAGMENT_SECONDS = 1.0
 #: the same ten seconds: CBR at 6000k gave 7.62 MB, this gave 2.20 MB, and the
 #: smaller one looks better. 18 is visually lossless for most material.
 RECORD_VIDEO_CRF = 18
-RECORD_VIDEO_PRESET = "medium"
+#: Measured 12 September 2026, 1280x720 at 30, REAL screen capture through
+#: the real recorder, twenty seconds each, threads still capped at 4. Until
+#: today the picture being encoded was a static card, which x264 squeezes to
+#: nothing, so none of this showed:
+#:
+#: | preset    | audio kept | bus backlog | size |
+#: |-----------|------------|-------------|------|
+#: | medium    | 100%       | 210 ms      | 4.2 MB |
+#: | faster    | 100%       | 37 ms       | 0.9 MB |
+#: | veryfast  | 100%       | 37 ms       | 1.0 MB |
+#: | ultrafast | 100%       | 37 ms       | 10.9 MB |
+#:
+#: Tiffany measured the frame cost behind those numbers: medium at four
+#: threads is 34.57 ms a frame against a 33.33 ms budget, so it cannot
+#: sustain 30 fps at all, and veryfast is 17.85 ms for a file about one per
+#: cent larger. On a longer run she measured medium deleting 0.6 seconds of
+#: audio from the file and finishing with the picture a second ahead of the
+#: sound. `_run` reads audio then encodes video on ONE thread, so every
+#: millisecond over budget is a millisecond the audio drain falls behind
+#: real time: the ring overflows and the file loses sound.
+#:
+#: Do not put this back to a slower preset without repeating that
+#: measurement with a real moving picture. A card proves nothing here.
+RECORD_VIDEO_PRESET = "veryfast"
 
 #: Bounded on purpose. Two unbounded x264 instances, one for the stream and
 #: one for the recording, oversubscribe every core on the machine, and the
@@ -961,6 +995,32 @@ RECORD_DRAIN_FRAMES_PER_PICTURE = 1
 #: taking the 33 ms case from 57 ms to 23 ms, and called it secondary to the
 #: drain size, which it is.
 RECORD_STAMP_LEAD_FRAMES = 4
+
+#: The frames of stamp lead that pay for the tap's own depth. NEGATIVE, and
+#: the sign is the whole of it: more lead puts the content LATER, not
+#: earlier, which is the opposite of what the name suggests and cost me two
+#: wrong guesses before I measured it.
+#:
+#: `FrameTap.take` hands over the oldest of up to `FrameTap.DEPTH` pictures,
+#: which is what stops a quarter of them being lost, and that picture is
+#: therefore up to one frame older than the newest capture. Swept 12
+#: September 2026 with `tools/check_recording.py`, which burns each frame's
+#: capture time into the picture and reads it back out of the decoded file,
+#: sixteen seconds a run, one variable:
+#:
+#: | lead | content offset |
+#: |------|----------------|
+#: | -2   | +1.1 ms |
+#: | **-1** | **+0.6 ms, slope -0.59 ms per minute** |
+#: | 0    | -30.0 ms |
+#: | +1   | -65.4 ms |
+#: | +2   | -98.6 ms |
+#:
+#: Exactly 33 ms a frame, monotonic, so this is one frame of correction and
+#: not a fudge. If `FrameTap.DEPTH` ever changes, sweep it again rather than
+#: doing the arithmetic: the sign caught me out and it will catch the next
+#: person out.
+RECORD_TAP_LEAD_FRAMES = -1
 
 #: Headroom before the AAC encoder, in decibels. `_soft_clip` ceilings at
 #: exactly 0 dBFS with no headroom at all, which is right for the speakers and
@@ -1475,6 +1535,16 @@ CAMERA_BUFFER = "64M"
 #: source again. Often enough that a camera coming back is noticed within a
 #: song, rare enough that a dead one is not hammered.
 PICTURE_RETRY_SECONDS = 5.0
+
+#: How long a picture source may be STARTING before its silence counts as a
+#: failure. A camera is about six tenths of a second to its first frame and a
+#: screen is one compositor tick, so the first few frames asked of either are
+#: legitimately None. Treating that as a failure swapped to the card, latched
+#: for PICTURE_RETRY_SECONDS and announced that the picture had stopped, about
+#: a source that was about to work. A source that really cannot open sets its
+#: own `error` and is failed at once, so this ceiling only ever catches one
+#: that goes quiet without saying why.
+PICTURE_START_SECONDS = 3.0
 
 
 # ---------------------------------------------------------------------------

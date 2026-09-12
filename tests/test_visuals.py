@@ -189,18 +189,43 @@ marks.set_title("Never Lose Sight")
 
 frame = a_frame()
 before = frame.copy()
-marks.draw_on(frame)
+# draw_on RETURNS the marked frame and leaves the one it was given alone.
+# It used to write in place, and that was two silent faults: a CardSource
+# hands back a read only array, so it raised ValueError into a swallowed
+# except and the overlay was never once drawn on a card; and every source
+# hands back its own CACHED array, so drawing in place drew into the cache
+# and changed words piled up on top of one another.
+marked = marks.draw_on(frame)
 check("three places were drawn", marks.renders == 3, marks.renders)
-check("the frame really changed", not np.array_equal(frame, before))
+check("the marked frame really changed", not np.array_equal(marked, before))
+check("and the frame it was GIVEN was left alone",
+      np.array_equal(frame, before))
+
+read_only = a_frame()
+read_only.setflags(write=False)
+check("it can draw on a read only frame, which is what a card hands back",
+      not np.array_equal(marks.draw_on(read_only), read_only))
 
 left, top, right, bottom = rects[C.PLACE_LOWER]
 check("the lower third's own rectangle changed",
-      not np.array_equal(frame[top:bottom, left:right],
+      not np.array_equal(marked[top:bottom, left:right],
                          before[top:bottom, left:right]))
 # The middle of the frame is nobody's place, so nothing may touch it.
 check("and the middle of the picture was left alone",
-      np.array_equal(frame[H // 2 - 40:H // 2 + 40, W // 2 - 40:W // 2 + 40],
+      np.array_equal(marked[H // 2 - 40:H // 2 + 40, W // 2 - 40:W // 2 + 40],
                      before[H // 2 - 40:H // 2 + 40, W // 2 - 40:W // 2 + 40]))
+
+# And the same source frame, drawn on again and again the way a stream does
+# thirty times a second, gives the same answer every time. In place blending
+# could not: it wrote into the source's own cached array, so each pass
+# blended on top of the last and the panel converged to fully opaque within
+# four of them, taking whatever was behind it with it.
+source_frame = a_frame()
+first = marks.draw_on(source_frame)
+for _ in range(8):
+    latest = marks.draw_on(source_frame)
+check("the same frame drawn nine times gives the same picture",
+      np.array_equal(first, latest))
 
 # RENDER ON CHANGE, NEVER PER FRAME.
 again = a_frame()

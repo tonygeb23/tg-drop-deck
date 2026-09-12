@@ -1,5 +1,140 @@
 # Changelog
 
+## 3.8.1 for Windows, 12 September 2026
+
+**A video recording now records what you are actually capturing.**
+
+Tony, 12 September 2026: "when recording video, it should not send out a still
+freeze frame of the radio show title... if visual streaming is being done, it
+should default to what's being captured, camera + screen, just camera,
+whatever is selected. none of this still frame of a radio show. that is
+different. ice cast, shoucast, is not the same as facebook and youtube."
+
+He was right, and the reason is the second half of that sentence. The picture
+had quietly become a property of the video PLATFORM rather than a thing the
+app owns, so a board set up to go live to a radio station recorded a card with
+the station name on it, could not open the picture chooser at all, and was
+told there was no picture when asked.
+
+Measured against his own board before the fix: 175 frames in six seconds, mean
+pixel difference from a freshly drawn card **zero**. Nothing anywhere reported
+it, and a card is not a thing a blind presenter can see.
+
+### What was wrong
+
+**The capture was never started.** The recording built a picture source and
+never called `start()`. Every capture runs on a thread behind that call, so
+asking for a frame answered nothing for ever, and the card that stands in for
+a failed camera stood in permanently.
+
+**And a recording made while live built a SECOND pipeline.** The path meant to
+share the frames the stream was already sending asked for an attribute that
+does not exist, so it had never run once since it was written. A second
+pipeline means a second camera, and a camera has one owner.
+
+**The words on the picture had never once been drawn on a card.** On any path,
+since 3.5.0. The card hands back a read only array, the overlay wrote in
+place, and the error was swallowed on every frame. Measured off a real
+stream: a lower third **1.33 grey levels** from a bare card, which is absent.
+So anybody who set a lower third on the app's own default picture got a
+picture with no words on it, while Ctrl+Shift+V read the words out.
+
+### One picture, however many things are looking at it
+
+There is now one picture pipeline, shared and reference counted. The stream,
+the recording, the preview behind the shot check and the framing watcher all
+take a hold on the same one, so there is one camera and one screen capture
+however many of them are running. It starts when the first thing wants it and
+closes when the last one lets go, so a preview can no longer close a camera
+out from under a live show.
+
+That is also what makes **Alt+Shift+V work during a recording**: the swap
+happens inside the shared pipeline, so it reaches the file, the stream and the
+shot check at once. It used to speak to the stream alone, so changing the
+picture during a recording changed nothing in the file and said "next time you
+go live".
+
+### The picture stops belonging to Ctrl+B
+
+Alt+Shift+V, Alt+Shift+T and Ctrl+Shift+V refused to work at all unless Ctrl+B
+happened to be pointed at a video platform. A recording carries a picture
+whatever Ctrl+B is pointed at, so all three are open now.
+
+- **Alt+Shift+V** is titled **Picture** rather than Video source, its column
+  says what is USING the picture rather than "On air", and it always offers
+  the source you already have even if this machine cannot do it.
+- **Ctrl+Shift+V** says which of the two it is describing, and names a
+  recording rather than answering "Nothing".
+- **Ctrl+Shift+W** now reads out the picture and what is using it, which is
+  the one question nothing anywhere answered.
+- The picture pre-flight runs for **Ctrl+Shift+R** as well as Ctrl+B, and its
+  warnings name the recording rather than the stream. A stream you can
+  restart; ninety minutes of a dark rectangle is gone.
+
+### The file itself
+
+**Every frame reaches it now.** The handover between the picture and the
+encoder held one frame with no way to tell a new one from the one it already
+had, and the two clocks beat against each other: measured by burning an index
+into every frame and decoding the file back, **455 of 1800 pictures, 25.3 per
+cent, never arrived**, with the same share of the file being duplicates. Six
+of twelve single frame events vanished completely. Frozen frames in a real
+recording are down from 14.4 per cent to **0.6 per cent**.
+
+**And it is in sync.** Measured over a hundred seconds, decoded back with
+every frame carrying its own capture time painted into the picture: offset
+**2 ms**, drift **0.10 ms per minute**, delivered frame rate exactly 30.0000
+with one distinct frame interval in the whole file.
+
+**The encoder can keep up.** With a real moving picture to encode for the
+first time, the old setting could not: 34.6 ms a frame against a 33.3 ms
+budget, which backs the sound up and then deletes it. Measured across four
+settings on a real recording, the new one is 17.9 ms a frame for a file about
+one per cent larger.
+
+**A recording that got no picture says so.** A file with nothing in the tap is
+black, and every count in it is correct, so it reported itself as clean.
+
+### Found on the way, all of them silent
+
+- **No camera was ever offered to anybody who had not already chosen one.**
+  The camera list raised an error into a swallowed except and answered "none",
+  every time, for as long as it has existed. Only a board with a camera
+  already saved in it hid the fault, which is why nobody saw it.
+- **A failed picture recording tore down the sound recording.** One handler
+  served both and knew about only one of them, so an ordinary disk fault on
+  the MP4 abandoned the WAV mid write, said nothing about it, and left the
+  show in neither file.
+- **"The recording is losing audio" was worked out and thrown away.** It was
+  only ever said at the end, which is an epitaph rather than a warning. The
+  sound recorder never said it at all.
+- **A stream dropping froze a recording's picture** for the whole outage, with
+  every frame count, length and log still perfect.
+- **A reconnect lost the shared frames** and would have frozen a recording's
+  picture for the rest of the show.
+- **A camera whose reader thread died could never come back**, so unplugging
+  and replugging one, or another program letting go of it, left it dead for
+  the session while the app politely retried a source that could not answer.
+- **A camera that is not plugged in was blamed on another program**, so the
+  advice was to close OBS over a camera that was not there.
+- **The screen capture read its rectangle once**, so a monitor unplugged, a
+  resolution change or a dock mid show kept capturing the old rectangle.
+- **Moving the camera's corner rebuilt the whole pipeline**, closing and
+  reopening the camera on every arrow key and freezing the window for up to a
+  third of a second each time.
+- **The shot check sent the whole desktop with no confirmation** whenever it
+  was not on air, because it worked out camera or screen by looking at the
+  live stream. A screen is confirmed every single time, and that is the rule
+  it broke.
+- **Compositing cost 41 ms a frame on the thread carrying the audio**, doing a
+  resize that was not one: the picture already arrives at the size the encoder
+  wants. It is 0.1 ms now.
+- **The in app help named Ctrl+Shift+R twice where it meant Ctrl+Shift+W**, so
+  following it started a video recording mid show.
+- Both windows on the picture side now speak their detail as well as showing
+  it, a short recording is no longer announced as "0 megabytes", and an audio
+  only recording no longer claims to have a picture in it.
+
 ## 3.8.0 for Windows, 11 September 2026
 
 **The cable can now be checked, and it tells you which device to pick at the

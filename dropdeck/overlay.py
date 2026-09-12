@@ -382,15 +382,44 @@ class Overlay:
         return self._tiles[key]
 
     def draw_on(self, frame):
-        """Put everything on a frame, in place. Returns the frame.
+        """Put everything on a frame. Returns the frame with the words on it.
 
         Called on the streaming thread, once per video frame, so it does the
         least possible: a cache lookup per place and an integer blend over
         that place's rectangle only.
+
+        **It used to write the caller's array in place, and that was two
+        separate faults, both silent, both measured on 12 September 2026.**
+
+        First, **the overlay had never once been drawn on a card.**
+        `CardSource._draw_real` returns `np.asarray(pil_image)`, which is
+        READ ONLY, so this raised `ValueError: assignment destination is
+        read-only` and all four callers swallow it. Measured off a real RTMP
+        stream: a lower third 1.33 grey levels from a bare card, which is
+        absent. So anybody who set words on top of the app's own default
+        picture got a picture with no words on it, `Ctrl+Shift+V` read the
+        words out, and the shot check was asked whether a lower third that
+        was not in the frame covered the presenter's face. Since 3.5.0, when
+        Pillow started being bundled: without Pillow the blocky card is
+        writable and it worked.
+
+        Second, every source hands back its own CACHED array, so drawing in
+        place drew into the source's cache. Measured: changing a tile's
+        words left 4562 pixels of the old caption underneath the new one,
+        and blending the same array repeatedly converged the panel to fully
+        opaque within four passes, so whatever was behind it disappeared
+        rather than ghosting through.
+
+        A copy at 720p is about one millisecond against a 33 ms budget, and
+        it buys correctness on every path. The three measurements in
+        CLAUDE.md that hold this up, a tile rendered only when its text
+        changes, the RECTANGLE blended rather than the frame, and integer
+        maths, are all untouched.
         """
         if Image is None or frame is None:
             return frame
         height, width = frame.shape[0], frame.shape[1]
+        frame = np.array(frame, dtype=np.uint8, copy=True)
         with self._lock:
             for spot in PLACES:
                 try:

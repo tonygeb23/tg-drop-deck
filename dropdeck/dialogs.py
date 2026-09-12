@@ -2307,6 +2307,19 @@ class SettingsDialog(wx.Dialog):
         if not settings["camera"]:
             self._say_picture("There is no camera to look through.")
             return
+        # NOT WHILE SOMETHING ELSE HAS THE CAMERA. This button builds its
+        # own CameraSource, and a second owner kills the first one's reader
+        # thread for good: pressing it mid show would take the camera off the
+        # air permanently and the app would blame another program for it.
+        # Preferences is exactly where somebody goes mid show, so this is
+        # the one that had to be guarded rather than rewritten.
+        feed = getattr(self.frame, "picture_feed", None)
+        if feed is not None and feed.running:
+            who = (feed.describe_holders() or "something").capitalize()
+            self._say_picture("%s already has the camera, so it cannot be "
+                              "opened twice. Press Ctrl+Shift+F to look "
+                              "through the one that is running." % who)
+            return
         self._say_picture("Opening the camera...")
         wx.BeginBusyCursor()
         try:
@@ -2388,7 +2401,10 @@ class SettingsDialog(wx.Dialog):
                    "Ctrl+R starts and stops recording. It records the same "
                    "mix that goes on air, including your microphone if that "
                    "is set to go out, and it does not need you to be on air. "
-                   "The cue before a track ends and previews are never in it.")
+                   "The cue before a track ends and previews are never in it. "
+                   "Ctrl+Shift+R records the picture as well, to one MP4. "
+                   "Which picture that is, and its size, are on the Picture "
+                   "page, and Alt+Shift+V changes it from anywhere.")
 
         self._label(panel, sizer, "&Record as")
         self.record_format = wx.Choice(
@@ -4734,19 +4750,27 @@ class VideoSourceDialog(wx.Dialog):
     """
 
     def __init__(self, parent, board, live=False):
-        super().__init__(parent, title="Video source",
+        # "Picture", not "Video source". This window sets the picture for a
+        # stream, a recording, the shot check and the framing watcher, and
+        # "video" read as "streaming" to the one user who most needed it: a
+        # radio presenter recording video went looking for it under YouTube.
+        super().__init__(parent, title="Picture",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.frame = parent
         self.board = board
+        #: Whether a change takes effect THIS INSTANT, which is true when the
+        #: stream OR a recording is holding the picture. It used to be passed
+        #: `_showing()`, which is the air alone, so during a video recording
+        #: this window said a change was for next time.
         self.live = bool(live)
         self.chosen = ""
 
         outer = wx.BoxSizer(wx.VERTICAL)
         note = wx.StaticText(
-            self, label=("Up and down read the choices. Enter puts one on "
-                         "the air." if live else
-                         "Up and down read the choices. Enter picks one for "
-                         "the next time you go live."))
+            self, label=("Up and down read the choices. Enter changes the "
+                         "picture now." if live else
+                         "Up and down read the choices. Enter picks one. It "
+                         "applies to a stream and to a recording."))
         note.Wrap(self.FromDIP(560))
         outer.Add(note, 0, wx.ALL, 10)
 
@@ -4759,7 +4783,10 @@ class VideoSourceDialog(wx.Dialog):
         # searches, and no "on air" marker goes in front of it for the same
         # reason. Same rule as the running order.
         self.list.InsertColumn(0, "Source", width=250)
-        self.list.InsertColumn(1, "On air", width=70)
+        # "Using", not "On air". A recording is not on air, and this column
+        # said "yes" against the chosen row whether or not anything at all
+        # was happening.
+        self.list.InsertColumn(1, "Using", width=130)
         self.list.InsertColumn(2, "What it sends", width=250)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _e: self._apply())
@@ -4814,12 +4841,53 @@ class VideoSourceDialog(wx.Dialog):
         cameras = self.frame.known_cameras()
         can_screen = screen.available()
         for kind in C.PICTURE_SOURCES:
+            # The one the board is already set to is ALWAYS offered, even
+            # when it cannot work here. Leaving it out dropped the row
+            # silently, landed the cursor on something else, and left nobody
+            # anywhere told that the setting they had was not in the list.
+            if kind == self.board.picture:
+                out.append(kind)
+                continue
             if kind in C.PICTURE_NEEDS_CAMERA and not cameras:
                 continue
             if kind in C.PICTURE_NEEDS_SCREEN and not can_screen:
                 continue
             out.append(kind)
         return out
+
+    def _use_label(self, kind):
+        """What is using this picture right now, in words.
+
+        Empty for every row but the chosen one, so the column reads as a
+        state and not as a tick. "chosen" is the honest word when nothing is
+        consuming it: it is set up and nothing is looking at it.
+        """
+        if kind != self.board.picture:
+            return ""
+        uses = []
+        try:
+            if self.frame._showing():
+                uses.append("on air")
+            if self.frame.recording_video():
+                uses.append("recording")
+        except Exception:
+            pass
+        return " and ".join(uses) if uses else "chosen"
+
+    def _missing_note(self, rows):
+        """Why a source is not in the list, said rather than left out.
+
+        A machine with no camera is not offered a camera, which is right, and
+        was invisible: the list was simply shorter. Somebody wondering where
+        the camera went had nothing to read.
+        """
+        said = []
+        if not self.frame.known_cameras():
+            said.append("A camera is not offered: Windows can see none")
+        if not screen.available():
+            said.append(screen.why_unavailable()
+                        or "Your screen cannot be captured on this machine")
+        return ". ".join(said)
 
     def _on_corner(self, _event=None):
         """Move the camera, live if we are live.
@@ -4834,8 +4902,23 @@ class VideoSourceDialog(wx.Dialog):
         self.board.split_corner = C.SPLIT_CORNERS[at]
         self.frame._touch()
         self.frame.announce("Camera in the %s" % self.board.split_corner)
-        if self.board.picture == C.PICTURE_SPLIT:
-            # Rebuild, so it moves now rather than at the next Ctrl+B.
+        if self.board.picture != C.PICTURE_SPLIT:
+            return
+        # MOVED ON THE LIVE SOURCE. It used to rebuild the whole picture
+        # pipeline through set_video_source, which closes and reopens the
+        # camera: measured by Mark, walking the four corners with the arrow
+        # keys opened the camera five times and blocked the UI thread for
+        # 0.28, 0.32, 0.13 and 0.07 seconds, putting about half a second of
+        # card on the air per arrow press. `SplitSource._inset` reads
+        # `self.corner` on every frame, so there was never anything to
+        # rebuild. Freezing the UI on an arrow key is a screen reader
+        # problem as much as a picture one.
+        feed = getattr(self.frame, "picture_feed", None)
+        if feed is None or not feed.running:
+            return
+        if not feed.set_corner(self.board.split_corner):
+            # The live source is not a split after all, so a rebuild is the
+            # only way. Rare: the board says split and the feed does not.
             try:
                 self.frame.set_video_source(C.PICTURE_SPLIT)
             except Exception:
@@ -4848,8 +4931,7 @@ class VideoSourceDialog(wx.Dialog):
         rows = self.kinds()
         for at, kind in enumerate(rows):
             self.list.InsertItem(at, C.PICTURE_LABELS.get(kind, kind))
-            self.list.SetItem(at, 1, "yes" if kind == self.board.picture
-                              else "no")
+            self.list.SetItem(at, 1, self._use_label(kind))
             self.list.SetItem(at, 2, C.PICTURE_DESCRIPTIONS.get(kind, ""))
         if rows:
             if self.board.picture in rows and not self.list.GetFirstSelected() > 0:
@@ -4889,8 +4971,21 @@ class VideoSourceDialog(wx.Dialog):
             detail = ("Your screen filling the frame with the camera small "
                       "in the %s corner. The screen stays readable this way."
                       % self.board.split_corner)
-        self.doing.SetLabel("%s  %s" % (said, detail) if detail else said)
+        whole = ("%s  %s" % (said, detail)) if detail else said
+        self.doing.SetLabel(whole)
         self.doing.Wrap(self.FromDIP(600))
+        # AND into the status bar, because this label is a wx.StaticText: it
+        # is not in the tab order and changing its text announces nothing, so
+        # the whole of "this is the one going out now", "Enter changes the
+        # picture now" and the split's live corner was unreachable to a
+        # screen reader in the one window whose job is telling a blind
+        # presenter what each picture costs. note() rather than announce(),
+        # so it does not talk over NVDA reading the row.
+        missing = self._missing_note(self.kinds())
+        try:
+            self.frame.note(("%s %s" % (whole, missing)) if missing else whole)
+        except Exception:
+            pass
         # The corner only means anything for the split, so it is alive only
         # there. Disabled rather than hidden: a control that appears and
         # disappears as you arrow moves everything under it.
@@ -5312,21 +5407,39 @@ class ShotCheckDialog(wx.Dialog):
     # -- what is going out -------------------------------------------------
 
     def _kind(self):
-        """Camera or screen, decided by what the picture source really is."""
-        source = getattr(self.frame, "video_source", None)
-        for name in ("ScreenSource", "SplitSource"):
-            if type(source).__name__ == name:
-                return "screen"
+        """Camera or screen, decided by what the picture IS SET TO.
+
+        Asked of the board, not of the live source. It used to read
+        `frame.video_source`, which is None until Ctrl+B has been pressed, so
+        off air `type(None).__name__` matched neither name and it answered
+        "camera" for every board. On a screen or split board that meant the
+        whole desktop went to a vision model with **no confirmation asked**,
+        and the window's own first line said it was sending a camera.
+
+        The rule it broke is in CLAUDE.md and it is Tony's: a camera still is
+        the face they are about to broadcast anyway, a screen may hold
+        anything at all and the person sending it cannot see what is in it,
+        so the screen is confirmed every single time.
+        """
+        if self.frame.board.picture in C.PICTURE_NEEDS_SCREEN:
+            return "screen"
         return "camera"
 
     def _what_line(self):
         who = vision.PROVIDER_NAMES.get(self.frame.board.vision_provider,
                                         self.frame.board.vision_provider)
+        # "going out" is wrong off air and wrong during a recording, and
+        # this line is the one somebody reads before deciding to send their
+        # desktop to a company.
+        where = "going out"
+        if not self.frame._showing():
+            where = ("going into your recording" if self.frame.recording_video()
+                     else "that would go out")
         if self._kind() == "screen":
-            return ("This describes the picture going out, which right now "
-                    "includes your screen. %s is asked." % who)
-        return ("This describes the picture going out, camera and anything "
-                "on top of it. %s is asked." % who)
+            return ("This describes the picture %s, which includes your "
+                    "screen. %s is asked." % (where, who))
+        return ("This describes the picture %s, camera and anything on top "
+                "of it. %s is asked." % (where, who))
 
     def _last_or_fresh(self):
         """The picture the check looked at, or a new one if it never ran."""
