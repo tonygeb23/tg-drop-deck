@@ -255,5 +255,122 @@ check("a cue that cannot be written never raises",
 check("and it says why afterwards rather than during a show",
       "could not be written" in broken.describe(), broken.describe())
 
+
+
+print("\nThe cable format check, which is the fault that started all of this")
+from dropdeck import endpoints as EP                      # noqa: E402
+
+
+def _pt(side, name, device, rate, bits):
+    return EP.Endpoint(side, name, device, rate, bits, 2)
+
+
+# Tony's machine as it really was on 9 September 2026.
+BROKEN = [_pt(EP.RENDER, "CABLE Input", "VB-Audio Virtual Cable", 48000, 24),
+          _pt(EP.CAPTURE, "CABLE Output", "VB-Audio Virtual Cable", 192000, 16),
+          _pt(EP.RENDER, "Speakers", "Yeti Stereo Microphone", 44100, 16),
+          _pt(EP.CAPTURE, "Microphone", "Yeti Stereo Microphone", 48000, 16)]
+FIXED = [_pt(EP.RENDER, "CABLE Input", "VB-Audio Virtual Cable", 48000, 24),
+         _pt(EP.CAPTURE, "CABLE Output", "VB-Audio Virtual Cable", 48000, 24)]
+
+# The board stores what PortAudio calls the device, which is the endpoint
+# and the sound card joined: "CABLE Input (VB-Audio Virtual Cable)". The
+# short name on its own is deliberately not enough, because "Speakers" names
+# three different cards on this machine.
+CABLE = BROKEN[0].full_name
+said = EP.mismatch_for(CABLE, BROKEN)
+check("the 48000 against 192000 split is caught", bool(said))
+check("and both formats are named, so it can be acted on",
+      "48000 hertz, 24 bit" in said and "192000 hertz, 16 bit" in said, said)
+check("it says where to change it", "Advanced" in said, said)
+check("and it does NOT claim the audio is broken, because it is not",
+      "works as it is" in said, said)
+check("a cable set the same at both ends says nothing at all",
+      EP.mismatch_for(CABLE, FIXED) == "")
+check("no device named means no opinion", EP.mismatch_for("", BROKEN) == "")
+check("and a name matching nothing is not an excuse to warn about something "
+      "else", EP.mismatch_for("Nothing By That Name", BROKEN) == "")
+
+check("the partner is found, so the app can name what to pick elsewhere",
+      EP.partner_of(CABLE, BROKEN) == "CABLE Output")
+check("and is empty for something with no other side",
+      EP.partner_of("Nothing", BROKEN) == "")
+
+# Two sided is NOT the same as a cable, and assuming it was is a mistake this
+# module made once: one run against the real registry showed Realtek and the
+# Yeti both pairing Speakers with Microphone.
+pairs = dict((d, (r, c)) for d, r, c in EP.two_sided(BROKEN))
+check("a headset pairs up exactly like a cable does",
+      "Yeti Stereo Microphone" in pairs and "VB-Audio Virtual Cable" in pairs,
+      sorted(pairs))
+yeti_render, yeti_capture = pairs["Yeti Stereo Microphone"]
+check("and this headset's two halves disagree, 44100 against 48000",
+      (yeti_render.rate, yeti_capture.rate) == (44100, 48000))
+check("which is why judging every pair would nag about somebody's headset: "
+      "the send is elsewhere, so the Yeti is never mentioned",
+      "Yeti" not in said and "Microphone" not in said, said)
+
+# The blob parser, which is where the eight byte offset lives.
+import struct as _struct                                  # noqa: E402
+blob = b"\x41\x00\x00\x00\x01\x00\x00\x00" + _struct.pack(
+    "<HHIIHHH", 0xFFFE, 2, 48000, 288000, 6, 24, 22)
+check("a real property blob parses to the right numbers",
+      EP._read_format(blob) == (48000, 24, 2), EP._read_format(blob))
+check("something that is not a blob is refused rather than guessed at",
+      EP._read_format(b"") == (0, 0, 0) and EP._read_format(None) == (0, 0, 0))
+check("and a nonsense rate is refused, rather than reported as fact",
+      EP._read_format(b"\x00" * 8 + _struct.pack(
+          "<HHIIHHH", 1, 2, 7, 0, 4, 16, 0)) == (0, 0, 0))
+check("a machine with no registry at all just says nothing",
+      EP.mismatch_for(CABLE, []) == ""
+      and EP.two_sided([]) == [] and EP.describe([]) == [])
+
+
+# The board stores what PORTAUDIO calls the device and the registry holds
+# what WINDOWS calls it, and they are not the same string. Measured on this
+# machine, 11 September 2026, under all three host APIs.
+PA_FULL = "CABLE Input (VB-Audio Virtual Cable)"
+PA_MME = PA_FULL[:EP.MME_NAME_LIMIT]        # 'CABLE Input (VB-Audio Virtual C'
+
+check("the registry's two halves join up the way PortAudio says them",
+      BROKEN[0].full_name == PA_FULL, BROKEN[0].full_name)
+check("so the name off the board matches, which is the whole point",
+      bool(EP.mismatch_for(PA_FULL, BROKEN)))
+check("and MME's 31 character truncation matches too, because it is a "
+      "PREFIX and not a different name", bool(EP.mismatch_for(PA_MME, BROKEN)))
+check("31 is measured, not a round number", EP.MME_NAME_LIMIT == 31)
+check("the partner is found by either spelling",
+      EP.partner_of(PA_FULL, BROKEN) == "CABLE Output"
+      and EP.partner_of(PA_MME, BROKEN) == "CABLE Output")
+check("a short prefix is NOT enough, or 'Speakers' would match three cards",
+      EP.mismatch_for("CABLE Input", BROKEN) == ""
+      and EP.partner_of("CABLE", BROKEN) == "")
+
+# Two identical sound cards agree for the first 31 characters, so under MME
+# they really are one string and nothing here can tell them apart.
+TWINS = [_pt(EP.RENDER, "Speakers", "Realtek(R) Audio Rear Panel", 48000, 16),
+         _pt(EP.CAPTURE, "Microphone", "Realtek(R) Audio Rear Panel",
+             44100, 16),
+         _pt(EP.RENDER, "Speakers", "Realtek(R) Audio Rear Port", 48000, 16),
+         _pt(EP.CAPTURE, "Microphone", "Realtek(R) Audio Rear Port",
+             48000, 16)]
+ambiguous = TWINS[0].full_name[:EP.MME_NAME_LIMIT]
+check("two cards really can share a truncated name",
+      TWINS[2].full_name.startswith(ambiguous)
+      and TWINS[0].full_name != TWINS[2].full_name, ambiguous)
+check("and then it says NOTHING, rather than naming the wrong one and "
+      "sending somebody to change a setting that was already right",
+      EP.mismatch_for(ambiguous, TWINS) == ""
+      and EP.partner_of(ambiguous, TWINS) == "")
+check("while the unambiguous full name still works",
+      EP.mismatch_for(TWINS[0].full_name, TWINS) != "")
+
+# A WDM-KS device is not an MMDevices endpoint at all. "Speakers (VB-Audio
+# Point)" is on this machine and corresponds to nothing in the registry, so
+# there is nothing to say about it and it must not guess.
+check("a name that is not an endpoint is silent rather than approximate",
+      EP.mismatch_for("Speakers (VB-Audio Point)", BROKEN) == ""
+      and EP.partner_of("Speakers (VB-Audio Point)", BROKEN) == "")
+
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)

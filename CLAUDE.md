@@ -736,6 +736,31 @@ would have had me editing correct prose.
   "skipped" rather than reporting a failure it cannot stand behind. It must
   run inside `MainLoop`; keystrokes dispatched outside an event loop get no
   accelerator translation at all, which is the very thing being tested.
+- **A worker thread with no COM apartment cannot open a WASAPI stream, and
+  the error names the wrong thing entirely.** Measured 11 September 2026,
+  with a wx dialog on screen and the cable test on a background thread,
+  opening a device that had resolved correctly to WASAPI:
+
+      Error starting stream: Unanticipated host error [PaErrorCode -9999]:
+      'GetNameFromCategory: usbTerminalGUID = 7D1E ' [Windows WDM-KS error]
+
+  A WDM-KS error, for a WASAPI device, meaning neither. The same call from
+  the main thread worked every single time, and the same call on a worker
+  thread with no dialog open also worked, which is exactly the shape of
+  fault that gets written off as flaky and left in. Three runs out of three
+  failed with the dialog up; three out of three passed with
+  `CoInitializeEx` on the worker, in either apartment model.
+  `cabletest._Apartment` is it, MULTITHREADED because an apartment threaded
+  worker owes a message loop and a two second measurement has no window.
+  **It never uninitialises an apartment it did not open**, because on the UI
+  thread the one that opened it is wx.
+  Nothing else in this app opens a stream off the UI thread, which was
+  checked rather than assumed. Anything that starts to, needs this.
+  **And the only reason it was found is that `tools/check_cable.py` presses
+  the real button**: `tests/test_cabletest.py` checks every verdict against
+  audio made by hand and passed throughout, because it calls the measurement
+  directly. Same lesson as `ID_STATION_BASE` and the crossfade box.
+
 - **A modal message box in a test hangs it for ever.** `wx.MessageBox` waits
   for a click that a test cannot give, and `test_feedback_2_4` drives a path
   that raises one on purpose: assigning an empty folder is refused with a

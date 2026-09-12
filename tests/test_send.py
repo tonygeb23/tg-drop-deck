@@ -350,7 +350,14 @@ try:
     frame.announce = lambda text, *a, **k: said.append(text)
     check("it refuses rather than sending to the wrong card",
           not frame._start_send())
-    check("it turns the send off on the board", not frame.board.send_on)
+    # This used to assert `not frame.board.send_on`, which was asserting the
+    # bug. `send_on` is INTENT and a failure must never erase it: it is saved
+    # with the board, so one launch with the card missing used to write "no
+    # send" to disk and the send never came back. Found by Jackson, 11 Sep.
+    check("the user's intent SURVIVES on the board, so it comes back when the "
+          "card does", frame.board.send_on is True)
+    check("and the reason is kept separately from the intent",
+          "not here at the moment" in frame.send_failed, frame.send_failed)
     check("and it says which card is missing",
           said and "A sound card nobody has" in said[-1], said)
 
@@ -393,6 +400,62 @@ try:
           line)
 
     frame._stop_send(quiet=True)
+
+    # ---- the cable format check, reaching a real report -------------------
+    print("\nWhat the report says about the cable itself")
+    from dropdeck import endpoints as EP
+
+    def _pt(side, name, device, rate, bits):
+        return EP.Endpoint(side, name, device, rate, bits, 2)
+
+    # Tony's machine as it was on 9 September 2026, which is the fault that
+    # started all of this and which nothing in the app could see at the time.
+    NINTH = [_pt(EP.RENDER, "CABLE Input", "VB-Audio Virtual Cable",
+                 48000, 24),
+             _pt(EP.CAPTURE, "CABLE Output", "VB-Audio Virtual Cable",
+                 192000, 16)]
+    real_endpoints = EP.endpoints
+    try:
+        EP.endpoints = lambda: NINTH
+        frame.board.send_device_name = NINTH[0].full_name
+        frame.board.send_on = True
+        frame._start_send(quiet=True)
+
+        line = frame.send_report()
+        check("the send status names the input device to pick over there",
+              "choose CABLE Output as its input device" in line, line)
+        check("and it says the two ends of the cable disagree",
+              "192000 hertz, 16 bit" in line, line)
+
+        where = frame.routing_report()
+        check("the routing readout carries it too, because that is the key "
+              "somebody presses when they cannot work out where the sound "
+              "went", "CABLE Output" in where, where)
+
+        # Off air, with a send set up but not running, is exactly when it is
+        # most use: before the call rather than during it.
+        frame._stop_send(quiet=True)
+        idle = frame.routing_report()
+        check("and it still says it with the send not running, which is when "
+              "somebody is setting the thing up", "CABLE Output" in idle,
+              idle)
+
+        # A registry read is allowed to fail for any reason at all. It must
+        # cost a sentence, never a send.
+        def explode():
+            raise OSError("no registry today")
+
+        EP.endpoints = explode
+        check("a registry that throws costs a sentence and nothing else",
+              frame._cable_lines() == [])
+        frame._start_send(quiet=True)
+        check("and the send still starts and still reports",
+              frame.sending() and "Sending to" in frame.send_report())
+        frame._stop_send(quiet=True)
+    finally:
+        EP.endpoints = real_endpoints
+        frame.board.send_device_name = None
+        frame.board.send_on = False
 finally:
     uimod.sendout.Send = real_send
     frame.stop_background_work()

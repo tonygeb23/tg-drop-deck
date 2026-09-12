@@ -88,11 +88,10 @@ check("the shipped version accepts it",
 # Windows build that EXISTS. Raise it when one is built, not when a version
 # is bumped.
 #
-# 3.6.0 is built but NOT published to the feed as of 9 September 2026. An
-# installed 3.6.0 therefore answers "you have the newest one" to every update
-# check, which is the very failure this file guards. Publish it with
-# release_app.py before it goes over anybody's working copy.
-newest_build = "3.7.1"
+# 3.8.0 is built AND published, 11 September 2026. The 3.6.0 note that used
+# to sit here (built, never published, so every installed copy answered "you
+# have the newest one" for ever) was cleared by the 3.7.0 release.
+newest_build = "3.8.0"
 
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)

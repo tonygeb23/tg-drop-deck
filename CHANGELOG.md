@@ -1,5 +1,87 @@
 # Changelog
 
+## 3.8.0 for Windows, 11 September 2026
+
+**The cable can now be checked, and it tells you which device to pick at the
+other end.**
+
+Sending your show to another program means a virtual audio cable, and a cable
+has two ends that Windows sets separately. Nothing in Windows keeps them in
+step, nothing tells you when they disagree, and nothing anywhere will tell you
+whether a single sample is actually arriving. All three of those are now
+answered.
+
+## Test the cable
+
+A new button on the send page, Alt+Shift+O. It plays a tone down the cable,
+records the other end of it, and tells you what came back.
+
+That is the only question that matters and it is the one nothing could answer
+before. A stream can look perfectly healthy and be losing audio: the fault
+fixed in 3.6.0 was throwing away up to seven per cent of the show into a cable
+while Windows reported no trouble at all, and it does not sound like dropouts,
+it sounds like a slight change in pitch. Now you press a button and you get a
+sentence.
+
+Three things it can say. Nothing came back, and where to go and look. It came
+back with holes in it, how much and how many. Or it is working, at this level,
+listening on this device.
+
+It refuses while you are on air or recording, because it would put a tone into
+a call.
+
+## Which device to choose in the other program
+
+The two ends of a cable are named from the cable's point of view rather than
+from yours, so the one called Input is a playback device and the one called
+Output is a recording device, and everybody reads that backwards the first
+time. Drop Deck now just says it:
+
+> In the other program, choose CABLE Output as its input device.
+
+On the send page while you are choosing the output, on Ctrl+Shift+O and on
+Ctrl+Shift+W.
+
+## When Windows has the two ends set differently
+
+Both halves of a cable have their own sample rate and bit depth in Windows,
+and nothing keeps them together. On this machine, in September, one end was
+set to 48000 hertz 24 bit and the other to 192000 hertz 16 bit. It still
+worked, because the driver converts, but it was converting twice for no reason
+and carrying four times the data on the way back.
+
+Drop Deck now notices and says so, with both numbers and where to change them.
+Only for the device your show is going to: your headset has two ends as well,
+and there is no reason on earth its two halves should match.
+
+## Drop Deck Audio, on Windows, is coming
+
+The Mac version of Drop Deck now installs a virtual audio cable of its own,
+called Drop Deck Audio. Nothing to download, nothing to buy, one name in one
+list.
+
+**Windows will get it, and it is not in this release.** On a Mac a virtual
+audio device is a plug in that lives in a folder. On Windows it is a kernel
+driver, and a kernel driver has to be signed by Microsoft before Windows will
+load it at all. That is a longer road than a release, and doing it badly is
+how a free app starts tripping virus scanners.
+
+So for now, Windows uses VB-CABLE, which is free and takes two minutes, and
+everything above is about making that as painless as it can be. Drop Deck
+Audio is coming to Windows.
+
+## Also
+
+- The send page now updates its advice as you change the output, rather than
+  only when the page opens.
+- Every check in the app runs against the real cable as well as against audio
+  made by hand, which is what turned up the fault below.
+- Fixed: the cable test could not open the sound card at all when it was run
+  from the button, while the same measurement run any other way worked every
+  time. Windows would not let a background job open a sound card without
+  asking permission first, and reported it as an error about a completely
+  different kind of driver.
+
 ## 3.8.0 for Mac, 11 September 2026
 
 **Everything Windows gained between 3.6.0 and 3.7.1, and a virtual audio cable

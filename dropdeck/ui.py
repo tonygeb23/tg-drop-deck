@@ -20,6 +20,7 @@ import webbrowser
 from . import appicon
 from . import constants as C
 from . import dsp
+from . import endpoints
 from . import feedback
 from . import framing
 from . import health
@@ -680,11 +681,11 @@ class DropDeckFrame(wx.Frame):
         #: the speakers anyway. See send.py.
         self.send = None
 
-        #: What the board asked for, kept because _start_send turns send_on
-        #: OFF when it cannot open the card. Without this the startup line
-        #: cannot tell "no send was ever set up" from "the send you set up
-        #: yesterday is not running", and those are very different sentences.
-        self.board_wanted_send = bool(self.board.send_on)
+        #: Why the send is not running, when the board asked for one. Empty
+        #: when there is nothing wrong. `board.send_on` is the intent and
+        #: survives a failure, so these two together answer both halves of
+        #: "should there be a send" and "is there one".
+        self.send_failed = ""
 
         #: The stream, once there is one. None is off air, and off air is
         #: where this starts every single time: a program that could begin
@@ -950,10 +951,11 @@ class DropDeckFrame(wx.Frame):
         # quietly at startup with a comment saying this line would say so,
         # and this line had no send branch at all, so a cable that had been
         # unplugged since yesterday was silent in every single place.
-        send_failed = bool(self.board_wanted_send) and not self.sending()
+        send_failed = bool(self.board.send_on) and not self.sending()
         if send_failed:
-            bits.append("The send could not start, so nothing is going to "
-                        "another program. Alt+Shift+O to set it up again")
+            bits.append(getattr(self, "send_failed", "")
+                        or "The send could not start, so nothing is going to "
+                           "another program. Alt+Shift+O to set it up again")
         elif self.sending():
             # Said out loud every time, on the channel that is not silenced.
             # A board file decides this, and a board file quietly putting the
@@ -4535,20 +4537,32 @@ class DropDeckFrame(wx.Frame):
         """Open the send. True if audio is really going out of it."""
         self._stop_send(quiet=True)
         device = self._resolve_send_device()
+        # **board.send_on is INTENT and is never cleared by a failure.**
+        #
+        # It used to be switched off here, and it is saved with the board, so
+        # one launch with the card missing wrote "no send" to disk. Plug the
+        # card back in, restart, and the send did not come back and nothing
+        # said why, because the startup line reads the same field that had
+        # just been overwritten. One variable was answering two questions:
+        # "do you want a send" and "is one running". Found by Jackson,
+        # 11 September 2026. `sending()` answers the second one.
         if self.board.send_device_name and device is None:
-            self.board.send_on = False
+            self.send_failed = ("%s is not here at the moment, so the show is "
+                                "not going to another program. It will start "
+                                "again by itself when the card is back."
+                                % self.board.send_device_name)
             if not quiet:
-                self.announce("%s is not here any more, so the send is off."
-                              % self.board.send_device_name)
+                self.announce(self.send_failed)
             return False
         send = sendout.Send(device=device, gain_db=self.board.send_gain_db)
         if not send.is_running:
             send.close()
-            self.board.send_on = False
+            self.send_failed = ("The send could not be opened. %s"
+                                % (send.last_error or "No reason was given."))
             if not quiet:
-                self.announce("The send could not be opened. %s"
-                              % (send.last_error or "No reason was given."))
+                self.announce(self.send_failed)
             return False
+        self.send_failed = ""
         self.send = send
         self.board.send_on = True
         # The confidence feed is an EXTRA on the source group, which is what
@@ -4729,6 +4743,8 @@ class DropDeckFrame(wx.Frame):
             bank_names=self.board.bank_names)]
         if self.sending():
             parts.append(self.send_report())
+        elif self.board.send_device_name:
+            parts.extend(self._cable_lines())
         ok, why = self.mixer.keeping_up()
         if not ok:
             parts.append("One of your outputs is not keeping up: %s." % why)
@@ -4786,7 +4802,36 @@ class DropDeckFrame(wx.Frame):
         ok, why = self.mixer.keeping_up()
         if not ok:
             parts.append("Your output is not keeping up: %s." % why)
+        parts.extend(self._cable_lines())
         return " ".join(parts)
+
+    def _cable_lines(self):
+        """What the other program should pick up, and whether Windows agrees.
+
+        Both halves of this come off the Windows registry rather than out of
+        PortAudio, because PortAudio cannot see either one: it knows what it
+        can open, not what the endpoint is SET to and not which capture
+        device is the far end of the same cable.
+
+        Reading the registry is allowed to fail for any reason at all and
+        must never cost anybody a send, so it is wrapped. A missing sentence
+        is a worse report; a raised exception in a status line is a broken
+        program.
+        """
+        name = self.board.send_device_name
+        lines = []
+        try:
+            found = endpoints.endpoints()
+            partner = endpoints.partner_of(name, found)
+            if partner:
+                lines.append("In the other program, choose %s as its input "
+                             "device." % partner)
+            said = endpoints.mismatch_for(name, found)
+            if said:
+                lines.append(said)
+        except Exception:
+            pass
+        return lines
 
     def stop_stream(self, quiet=False):
         """Come off air and put everything back the way it was."""

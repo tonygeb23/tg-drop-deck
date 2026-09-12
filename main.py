@@ -305,6 +305,60 @@ def selftest():  # noqa: C901
     except Exception as exc:
         problems.append("screen capture raised in this build: %r" % exc)
     try:
+        # **Read the real registry, not an import.** Every endpoint on the
+        # machine, with the format Windows has it set to. A build that lost
+        # winreg would answer an empty list here rather than raising, so the
+        # check is that it found SOMETHING and could parse a format out of
+        # it, which is the difference between the module loading and the
+        # feature working.
+        from dropdeck import endpoints as _endpoints
+        found = _endpoints.endpoints()
+        readable = [p for p in found if p.known]
+        if not found:
+            problems.append("no sound endpoints could be read out of "
+                            "Windows, so the cable check can say nothing")
+        elif not readable:
+            problems.append("%d sound endpoints were found and not one of "
+                            "them would give up its format" % len(found))
+        else:
+            pairs = _endpoints.two_sided(found)
+            notes.append("cable check: %d endpoints read, %d with a format, "
+                         "%d two sided"
+                         % (len(found), len(readable), len(pairs)))
+    except Exception as exc:
+        problems.append("the cable check raised in this build: %r" % exc)
+    try:
+        # The tone and the judgement, with no sound card involved. This is
+        # the arithmetic the Test the cable button stands on: a tone made at
+        # a known level has to read back at the level the maths says, or
+        # every verdict it gives is a number out of a broken meter.
+        from dropdeck import cabletest as _cabletest
+        import numpy as _np3
+        rate = 48000
+        seconds = _np3.arange(rate) / rate
+        made = (_cabletest.TONE_LEVEL
+                * _np3.sin(2 * _np3.pi * _cabletest.TONE_HZ * seconds)
+                ).astype(_np3.float32)
+        want = 20.0 * _np3.log10(_cabletest.TONE_LEVEL)
+        got = _cabletest.level_at(made, rate)
+        verdict = _cabletest.judge(made, rate)
+        silent = _cabletest.judge(_np3.zeros(rate, _np3.float32), rate)
+        if abs(got - want) > 0.5:
+            problems.append("the cable meter reads %.1f where it should read "
+                            "%.1f, so its verdicts cannot be trusted"
+                            % (got, want))
+        elif not verdict.ok or silent.ok:
+            problems.append("the cable test judged a clean tone %s and "
+                            "silence %s" % (verdict.ok, silent.ok))
+        else:
+            with _cabletest._Apartment() as room:
+                room_ok = room is not None
+            notes.append("cable test: meter within %.2f dB, verdicts right, "
+                         "apartment %s" % (abs(got - want),
+                                           "opens" if room_ok else "did not"))
+    except Exception as exc:
+        problems.append("the cable test raised in this build: %r" % exc)
+    try:
         from dropdeck import framing
         if framing.available():
             watcher = framing.Framer(level=framing.FRAMING_OFF)

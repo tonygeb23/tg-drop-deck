@@ -18,7 +18,9 @@ import webbrowser
 import wx
 
 from . import audiofile
+from . import cabletest
 from . import constants as C
+from . import endpoints
 from . import feedback
 from . import dsp
 from . import camera
@@ -5944,6 +5946,10 @@ class SendDialog(wx.Dialog):
         self.device = wx.Choice(self, choices=self._device_labels(), size=wide)
         self.device.SetName("Send it out of")
         self.device.SetSelection(self._device_index())
+        # Choosing a different output changes both sentences below: which
+        # device to pick in the other program, and whether Windows has the
+        # two ends of this one set the same.
+        self.device.Bind(wx.EVT_CHOICE, lambda _e: self._describe())
         grid.Add(self.device, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(self, label="&Leave out of the send"), 0,
@@ -5985,8 +5991,19 @@ class SendDialog(wx.Dialog):
         self.hear.SetValue(bool(board.send_monitor))
         outer.Add(self.hear, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # **The one control here that proves anything.** Everything above it
+        # is a setting, and a setting that looks right is exactly what the
+        # 3.6.0 fault looked like: PortAudio reported a perfectly healthy
+        # stream while seven per cent of the audio never reached the far end.
+        # This plays a tone down the cable and listens to the other end.
+        self.test = wx.Button(self, label="&Test the cable")
+        self.test.Bind(wx.EVT_BUTTON, self._on_test)
+        outer.Add(self.test, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         self.doing = wx.StaticText(self, label="")
-        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 2 + 4))
+        # Four lines rather than two: the cable verdict is a real paragraph
+        # and a label that clips it loses the half that says what to do.
+        self.doing.SetMinSize((-1, self.doing.GetTextExtent("Ay")[1] * 4 + 4))
         outer.Add(self.doing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         row = wx.StdDialogButtonSizer()
@@ -6069,10 +6086,92 @@ class SendDialog(wx.Dialog):
         if not self.on.GetValue():
             self.doing.SetLabel("Nothing is being sent.")
             return
+        lines = []
         if send is None:
-            self.doing.SetLabel("The send starts when you press OK.")
+            lines.append("The send starts when you press OK.")
+        else:
+            lines.append(send.report())
+        # The two ends of a cable are set separately in Windows and nothing
+        # keeps them in step. This is the page where somebody is choosing
+        # that cable, so it is the right place to say so.
+        index = self.device.GetSelection()
+        if 0 <= index < len(self.devices):
+            try:
+                found = endpoints.endpoints()
+                chosen = self.devices[index]["name"]
+                partner = endpoints.partner_of(chosen, found)
+                if partner:
+                    lines.append("In the other program, choose %s as its "
+                                 "input device." % partner)
+                said = endpoints.mismatch_for(chosen, found)
+                if said:
+                    lines.append(said)
+            except Exception:
+                pass
+        self.doing.SetLabel(" ".join(lines))
+        self.doing.Wrap(self.FromDIP(520))
+
+    # ------------------------------------------------------------ the test --
+    def _on_test(self, _event=None):
+        """Send a tone down the cable and say what came back.
+
+        On a thread, because it takes two seconds of real time and a dialog
+        that stops answering for two seconds is a dialog a screen reader
+        user believes has crashed.
+
+        It refuses while the show is on air or recording, and that is not
+        caution: this puts a loud tone into the cable, and the cable is
+        very probably carrying a live call.
+        """
+        frame = self.frame
+        if getattr(frame, "streaming", lambda: False)() or \
+                getattr(frame, "recording", lambda: False)():
+            self._say("Not while you are on air or recording. This puts a "
+                      "tone down the cable, which everybody listening would "
+                      "hear.")
             return
-        self.doing.SetLabel(send.report())
+        index = self.device.GetSelection()
+        dev = (self.devices[index]
+               if 0 <= index < len(self.devices) else None)
+        if dev is None:
+            self._say("Choose an output first, and then I can test it.")
+            return
+
+        self.test.Enable(False)
+        self._say("Testing %s. Two seconds." % dev["name"])
+        name = dev["name"]
+
+        def work():
+            try:
+                result = cabletest.run(name)
+                said = result.said
+            except Exception as why:                   # never raise at a user
+                said = ("The cable could not be tested. %s" % why)
+            wx.CallAfter(self._tested, said)
+
+        threading.Thread(target=work, name="dropdeck-cable",
+                         daemon=True).start()
+
+    def _tested(self, said):
+        """Back on the UI thread with a verdict."""
+        if not self:                                   # dialog already closed
+            return
+        self.test.Enable(True)
+        self._say(said)
+
+    def _say(self, words):
+        """Put a sentence on the page AND speak it.
+
+        Both, because a wx.StaticText changing is not an event any screen
+        reader reports: a verdict written silently into a label is a verdict
+        Tony would never know had arrived.
+        """
+        self.doing.SetLabel(words)
+        self.doing.Wrap(self.FromDIP(520))
+        self.Layout()
+        announce = getattr(self.frame, "announce", None)
+        if callable(announce):
+            announce(words)
 
     # --------------------------------------------------------------- result --
     def result(self):
