@@ -84,6 +84,104 @@ space in it could not be typed; and a read only text view swallowed Return, so
 every panel that puts focus on what it has to say had a dead Return, including
 the update panel. Both are fixed and both have checks.
 
+## Drop Deck Audio, the cable, which arrived on 11 September 2026
+
+`mac/driver/` is an **AudioServerPlugIn**: a virtual audio cable called Drop
+Deck Audio that the app installs, so a presenter gets Drop Deck into TeamTalk,
+Zoom or Skype with nothing to download and nothing to wire up. It is the one
+thing this copy has that the Windows one does not.
+
+**The route was decided by Apple, not by us.** AudioDriverKit needs
+`com.apple.developer.driverkit.family.audio`, and Apple will not grant it for a
+device with no hardware behind it: virtual devices are told, in as many words
+and as recently as March 2025, to keep using the plug-in model. So this is the
+supported road and the modern looking one is a dead end. An AudioServerPlugIn
+needs **no entitlement at all** and any Developer ID account can ship one.
+
+**It began as Apple's `NullAudio` sample, which is MIT.** `APPLE-LICENSE.txt`
+is kept verbatim beside the source and inside the bundle, because the licence
+requires it. That sample already advertises exactly what we want, two channels
+of 32 bit float at 44100 and 48000 with transport type virtual, and its
+`DoIOOperation` throws the audio away. **BlackHole is GPL-3.0 and was read and
+not used**: this product is MIT and vendoring GPL code into it would change its
+licence. Everything ours in that file is marked DROP DECK.
+
+Three things we added, and each is the difference between working and not:
+
+1. **The ring.** Both sides index one buffer by their own sample time. The HAL
+   already schedules input behind output by the latency and safety offset the
+   device advertises, so the delay comes out for free and computing an offset
+   by hand is how this goes wrong.
+2. **The silence guard.** Without it the input side goes on reading a ring
+   nobody is refilling, so the far end of a call hears the last fraction of a
+   second of the show over and over for as long as they stay connected. A buzz
+   that never stops and appears nowhere in the app. Measured idle: peak
+   0.000000.
+3. **A seed that moves.** Apple's sample returns a hard coded 1 from
+   `GetZeroTimeStamp`, which tells the HAL the timeline has never changed for
+   the life of the process. It is bumped on `StartIO` and on a rate change.
+
+**Exactly two channels, and it is a decision rather than a default.** Zoom sums
+any input wider than two to mono whatever its stereo setting says, so a cable
+with more would arrive in a call as one ear of the show.
+
+**The ring is an exact multiple of the zero timestamp period.** That is what
+keeps the modulo arithmetic coherent across a wrap, and it is why
+`kDevice_RingBufferSize` was renamed `kDevice_ZeroTimeStampPeriod`: in Apple's
+sample there was no ring at all and the number was only the period. Conflating
+the two is what makes a cable click once per wrap.
+
+**A crash here is smaller than the folklore says and a hang is worse.** Each
+plug-in runs in its OWN sandboxed helper process, confirmed on this machine:
+`Core Audio Driver (Drop Deck Audio.driver)` sits beside Zoom's and Rogue
+Amoeba's under `_coreaudiod`. So a segfault takes out our driver's host rather
+than the machine's audio. Wedging the real time thread does take the machine
+down, which is why there is no allocation, no blocking lock and no logging in
+the IO path.
+
+**Installing it needs a password and there is no way round that**, because
+`/Library/Audio/Plug-Ins/HAL` belongs to root. The app does it with one
+`osascript` call so macOS asks once for the whole job. **The `chown` and
+`chmod` in it are not tidiness**: the commonest real failure anywhere in this
+area is a HAL folder left at the wrong mode, after which the driver is there,
+nothing loads it, and no error appears anywhere a user could find.
+
+**Core Audio has to be restarted, and that stops every sound on the Mac,
+VoiceOver included.** It is said in words BEFORE the password box, and skipping
+it is offered: the cable appears at the next login either way.
+`sudo launchctl kickstart` is NOT an alternative, it has been refused under
+System Integrity Protection since macOS 14.4. `killall -9` is what works, and
+the `-9` matters because coreaudiod traps SIGTERM.
+
+**A signed `.pkg` is Apple's own recommendation and is not available yet.** It
+needs a Developer ID *Installer* certificate, which this account does not have
+and only the Account Holder can create. Tony chose the password prompt for now,
+11 September 2026. The `.pkg` route is the upgrade when that certificate exists.
+
+**The driver is universal and the app is not, and that is deliberate.**
+`coreaudiod` runs natively on an Intel Mac even under Rosetta, so an arm64 only
+driver would be invisible there however the app was built.
+
+`build.sh` builds the driver and copies it into `Contents/Resources`, signed,
+before the app is sealed around it: codesign works inside out and notarytool
+checks every nested Mach-O, so one notarization covers both.
+
+**`--check-send [seconds] [uid]` is the proof, and it is the only thing that
+can be.** Every layer of a send can report itself healthy while nothing
+arrives; that is exactly what Windows found. It drives the real `Send` through
+the real `AirBus` out of the real card and records that card's input side.
+Measured 11 September 2026, eight seconds at 48000 and five at 44100: no gaps,
+1000.0 Hz against 1000.0, nothing dropped, nothing rebuffered, and peak
+0.000000 with nothing playing.
+
+**The first three runs of that check failed, and all of it was the harness.**
+It stopped feeding the bus, waited, then closed both ends, so the recording
+ended with the ring draining into silence and the send counting a rebuffer for
+a ring nobody was filling. It reported one 188 ms gap and a tone at 968 Hz,
+which is indistinguishable from the real fault it exists to catch. A show does
+not stop feeding its send and then ask whether the send is keeping up: the
+feeder runs on its own thread and the health is read BEFORE anything closes.
+
 ## Why not the Python
 
 The obvious plan was to run the existing wxPython app on macOS. It was rejected
@@ -420,10 +518,29 @@ Several of the checks are there because they have already caught a real fault:
   one escape wrong and every update manifest is "signed by the wrong key" for
   ever, with nothing anywhere reporting why.
 
-Two other switches on the binary: `--dump-keys` prints every key the app
-binds, for `mac/check_guide.py`, and `--verify-manifest <file>` verifies a
-staged update manifest with the key baked into that build, for
-`tools/release_mac.py rehearse`.
+Four other switches on the binary: `--dump-keys` prints every key the app
+binds, for `mac/check_guide.py`; `--dump-help` prints the F1 list exactly as
+the app shows it, so the half of it that is derived can be read rather than
+taken on trust; `--check-send` is the cable proof described above; and
+`--verify-manifest <file>` verifies a staged update manifest with the key baked
+into that build, for `tools/release_mac.py rehearse`.
+
+Three checks added in 3.8.0 are there because they caught something on their
+first run:
+
+- **`Recorder.fileExtension` fell through to `.wav` for anything it did not
+  know**, so the first MP4 this app ever wrote would have gone into a file
+  called `.wav`. That is the same fault Windows found the first time it
+  recorded a picture.
+- **F1 was eight keys behind**, missing every key the video work added in
+  3.5.0 and 3.5.2. It is now half hand written chapters and half derived from
+  `KeyMap.bindings`, and the check refuses a build where anything bound is
+  missing from the text.
+- **`Board.replaceContents` was missing all twenty two video properties**, so
+  File, Open loaded a board's picture, colours, platform and stream size and
+  then discarded them. The replacement check cannot fall behind: it sets every
+  property to a non default, copies, and compares the two boards as the
+  dictionaries they save as.
 
 ## Boards from elsewhere, and the file menu
 
@@ -591,6 +708,27 @@ other app, and the manual and the product page say so. Updates installed from
 inside the app never needed notarization, because nothing the app downloads
 itself is quarantined.
 
+## Three traps found on 11 September 2026
+
+**Python's `round` is banker's rounding and Swift's `.rounded()` is not.** A
+`.cue` timestamp lands on exactly half a frame every 150th of a second, and the
+Mac put those one frame later than Windows on every one of them.
+`.rounded(.toNearestOrEven)` is the fix and `cross_check.py` found it on the
+first run of the new case. Anywhere a port rounds, this is waiting.
+
+**`KeyMap.spell` put Shift before Command and every sentence in the product
+puts Command first.** The manual has said `Command+Shift+B` since it was
+written and so has F1, and nothing noticed for six months because
+`check_guide.py` normalises the modifier order before comparing. F1 does not:
+it matches a derived key against a hand written chapter as plain text, so the
+moment the F1 list was derived, every key in it appeared twice.
+
+**"Hear yourself through" was saved, carried across a File Open, and read by
+nothing.** Monitoring came out of the main card whatever the board said, from
+the day the microphone landed. `MixerGroup.monitorMixer` returned `primary`
+unconditionally while its own doc comment described the behaviour it did not
+have. A setting that does nothing is worse than no setting.
+
 ## Still to do
 
 - **A real broadcast to YouTube and Facebook.** The RTMP client is proved end
@@ -606,6 +744,13 @@ itself is quarantined.
   (`disable-library-validation`), the parameter list the chain uses is the
   shape a hosted plugin's parameters would take, and the manual says plugins
   are not hosted yet.
-- **An Intel build.** `build.sh` targets arm64 only. A universal binary is a
-  second `-target` and a `lipo`, and nothing in the code is architecture
-  specific, but it has not been built or tested.
+- **An Intel build of the APP.** `build.sh` targets arm64 only. A universal
+  binary is a second `-target` and a `lipo`, and nothing in the code is
+  architecture specific, but it has not been built or tested. The DRIVER is
+  already universal, and has to be: see the note under Drop Deck Audio.
+- **A signed `.pkg` for the cable**, once a Developer ID Installer certificate
+  exists. It is Apple DTS's own recommendation over the password prompt, and
+  Installer.app is well trodden ground with VoiceOver.
+- **The cable has not been through a real call yet.** It is proved with a tone
+  and a recording at both rates; nobody has yet put Drop Deck into TeamTalk and
+  asked the far end how it sounds.

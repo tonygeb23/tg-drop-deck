@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.5.28"
+    static let appVersion = "3.8.0"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -262,6 +262,11 @@ enum C {
     static let airRingSeconds: Double = 2.0
     static let streamChunkSeconds: Double = 0.25
     static let streamPollSeconds: Double = 0.02
+    /// How long to wait for a writing thread to drain and finish when coming
+    /// off air or stopping a recording. The recorder has always used three
+    /// seconds by hand; this is that number, named, and shared with the video
+    /// recorder, which has a file to close as well as a thread to join.
+    static let streamStopSeconds: Double = 5.0
 
     /// A preview and the end of track pip are yours, not the listener's.
     static let offAirBuses = [busPreview, busCue]
@@ -857,6 +862,186 @@ enum C {
     static let healthBlackSaid = "The picture has gone black. Your viewers are seeing nothing"
     static let healthFrozenSaid = "The picture has frozen. It is stuck on one frame"
     static let healthBack = "The picture is back"
+
+    // ------------------------------------ sending the show to another app ---
+    //
+    // Mirrors dropdeck/constants.py. The programme output: the whole show out
+    // of a sound card, for TeamTalk, Zoom, Discord or OBS on this machine to
+    // take as its microphone. See Send.swift and Routing.swift.
+
+    /// What the send's own output asks the card for. Deep on purpose, and
+    /// deliberately unlike the mixer's: a send is never on the path between a
+    /// key and a sound, so the tens of milliseconds it costs are invisible
+    /// beside the network delay of whatever it is feeding, and a deep buffer
+    /// is what keeps it clean.
+    ///
+    /// Windows measured this on a real virtual cable and found a short output
+    /// buffer losing several per cent of the audio with nothing reporting it.
+    /// A Mac AUHAL takes its size from the device rather than from the caller,
+    /// so this is a request and not a promise: `Send.requestedFrames` asks the
+    /// device for it and accepts whatever it says.
+    static let sendBlockFrames = 2048
+
+    /// How much audio sits between the mixers and the send's own card. Longer
+    /// than the stream's ring because it is absorbing the difference between
+    /// two hardware clocks rather than a network hiccup.
+    static let sendRingSeconds: Double = 3.0
+
+    /// How full that ring gets before the first sample goes out, and again
+    /// after it has ever run dry. A quarter of a second is far longer than any
+    /// scheduling hiccup and short enough that turning the send on feels
+    /// immediate.
+    static let sendPrimeSeconds: Double = 0.25
+
+    /// How much the confidence feed holds. It only has to bridge the gap
+    /// between the send's callback and the monitor output's, which are
+    /// milliseconds apart.
+    static let sendMonitorSeconds: Double = 0.5
+
+    /// How far a source may be held back, in milliseconds. Darrell, 10
+    /// September 2026, on a capture card: "there is some lag there ... in obs,
+    /// we can adjust the offset for the source, so it does not lag as much."
+    ///
+    /// Two seconds is more than any card is out by and short enough that
+    /// somebody lining one up by ear is not scrolling for ever. Zero is the
+    /// default and costs nothing at all: the delay line hands back the block
+    /// it was given.
+    static let maxSourceDelayMS = 2000
+
+    // ---------------------------------------------------------- the monitor ---
+    //
+    // Hearing the WHOLE show on one card while the show itself goes out of
+    // another. Measured on Windows, 10 September 2026, banks routed to one card
+    // and the monitor on another: the banks' card carried the pads and NO
+    // microphone, and the monitor carried the microphone and NO pads. Neither
+    // output had the whole show, in opposite directions.
+
+    /// How much audio sits between the other cards and the monitor's own card.
+    /// Shorter than the send's ring because this one is in the presenter's ears
+    /// and every millisecond of it is delay they can hear.
+    static let monitorRingSeconds: Double = 1.0
+
+    /// How full it gets before a sample comes out, and again after it runs dry.
+    /// Forty milliseconds is the trade, stated plainly: a bank on ANOTHER sound
+    /// card cannot reach these headphones sooner than the two cards' own
+    /// buffers plus this, and hearing it forty milliseconds late is strictly
+    /// better than not hearing it at all. Nothing on the ordinary path pays it:
+    /// with one card, or with the banks on the monitor's own card, no bus
+    /// exists at all.
+    static let monitorPrimeSeconds: Double = 0.04
+
+    // ------------------------------------------------- is an output healthy ---
+
+    /// A callback that arrives later than this multiple of its own length has
+    /// been late. Not an error on its own: one late block is a scheduling
+    /// hiccup. It is counted so that "is this output actually keeping up" is a
+    /// question the app can answer instead of guess.
+    ///
+    /// Windows added this because PortAudio reported a perfectly healthy
+    /// stream through a measured seven per cent loss into a virtual cable. Core
+    /// Audio is not PortAudio, but the lesson is about trusting a driver's own
+    /// account of itself, and that lesson travels.
+    static let lateBlockFactor: Double = 1.8
+
+    /// And how many of them, as a share of all blocks, before it is worth
+    /// saying anything. One in two hundred is a machine having a moment. One in
+    /// fifty is audible.
+    static let lateBlockWarnShare: Double = 0.005
+
+    // -------------------------------------------------------- the cue sheet ---
+    // What is coming up next, Command+Shift+C. See CueSheet.swift.
+
+    /// How long a track stays on the cue sheet after it starts. Tyler asked for
+    /// ten seconds, and the number is his. It applies ONLY to the most recently
+    /// started item: anything earlier leaves the moment something new begins,
+    /// however short it was, or a nine second ident would leave two rows both
+    /// claiming to be on air.
+    static let cueGrace: Double = 10.0
+
+    /// How often the cue sheet's clock line is rewritten while it is open. It
+    /// never touches the list itself: a counting cell inside a row is a name
+    /// change every second, and a name change on the row somebody is standing
+    /// on makes a screen reader stop and start again. The clock is a static
+    /// text, which is never the focus object and is therefore silent by
+    /// construction.
+    static let cueRefreshMS = 500
+
+    // --------------------------------------------------- recording the picture ---
+    // Command+Shift+R records the picture and the sound to one MP4. See
+    // VideoRecorder.swift, which explains why none of these match the streaming
+    // ones.
+
+    /// What a picture recording is written as. One entry, because there is one
+    /// right answer, and a list so the settings page reads the same as the
+    /// audio one does.
+    static let recordVideoFormatKeys = ["mp4"]
+    static let recordVideoFormatLabels: [String: String] = [
+        "mp4": "MP4, H.264 and AAC",
+    ]
+    static let defaultRecordVideoFormat = "mp4"
+
+    /// How often the file is made safe to open. A crash costs one of these and
+    /// no more, so a three hour show loses its last second rather than all of
+    /// it. On a Mac this is `AVAssetWriter.movieFragmentInterval`, which is the
+    /// same idea as the fragmented MP4 flags Windows passes FFmpeg.
+    static let recordFragmentSeconds: Double = 1.0
+
+    /// The picture's bitrate in a FILE, in kilobits.
+    ///
+    /// **AverageBitRate here, and never ConstantBitRate.** That is the exact
+    /// opposite of `VideoStream.swift`, and both are right. A platform
+    /// publishes a bitrate FLOOR and pads up to it with filler, which is why
+    /// the stream measured 2375 kbps against 329 when it was asked for an
+    /// average. A file has no floor to pad up to and no reason to carry
+    /// filler, so it takes the average and comes out several times smaller for
+    /// the same picture. Windows reaches the same place with CRF, which
+    /// VideoToolbox has no equivalent of on a hardware encoder.
+    static let recordVideoBitrate = 6000
+
+    /// The most frames the picture may emit in one pass to catch up with the
+    /// sound. A cap, so a long stall becomes a small drop rather than a burst
+    /// of a thousand frames that starves the audio behind it. Anything beyond
+    /// it is counted as a skip and the timeline still moves, which is the part
+    /// that keeps sync.
+    static let recordCatchupFrames = 30
+
+    /// **How much audio the video recorder takes at a time, and it is not
+    /// `streamChunkSeconds`.** This is the single number that decides whether
+    /// the finished file is in sync, and copying the audio recorder's quarter
+    /// of a second puts the sound a quarter of a second late in every file.
+    ///
+    /// Why: the picture in the tap was grabbed a moment ago, and it is stamped
+    /// where the AUDIO has got to, which is now minus whatever is still waiting
+    /// in the bus. So the backlog IS the error, one for one. Measured by
+    /// Jackson on Windows, 10 September 2026, marks read back out of a finished
+    /// MP4:
+    ///
+    ///     drain 250 ms (streamChunkSeconds)   sound late by 257 ms
+    ///     drain 33 ms (one frame)             sound late by 57 ms
+    ///
+    /// ITU-R BT.1359 puts audio-late detectability at 125 ms. **And it survives
+    /// every check this app has**: the lengths match, nothing is dropped,
+    /// nothing is announced and the file plays. It shows up only when somebody
+    /// who can see watches it and says the lips are out, which Tony cannot do.
+    ///
+    /// A frame's worth of audio, so the two are drained in step. Never raise
+    /// this to make the loop cheaper.
+    static let recordDrainFramesPerPicture = 1
+
+    /// How far ahead of the audio ALREADY WRITTEN a frame may be stamped, in
+    /// frames. The picture is grabbed now and the audio has not caught up, so
+    /// stamping against audio still waiting in the bus removes another 20 to 30
+    /// ms of the error. Capped so it can never run away.
+    static let recordStampLeadFrames = 4
+
+    /// Headroom before the AAC encoder, in decibels. The soft clip ceilings at
+    /// exactly 0 dBFS with no headroom at all, which is right for the speakers
+    /// and for WAV and wrong for a lossy codec: Windows measured decode peaks
+    /// of +0.24, +0.26 and +0.63 dBFS at 128, 192 and 256 kbps on material that
+    /// soft clipped to minus nothing. This trim lives in the recorder's own
+    /// feed and NOWHERE near the mixer, because the mixer is on the path to the
+    /// speakers and the stream.
+    static let recordAACHeadroomDB: Float = -1.0
 
     // ------------------------------------------------------- bank hints ---
     //

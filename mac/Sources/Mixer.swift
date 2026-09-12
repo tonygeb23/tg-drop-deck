@@ -80,6 +80,68 @@ final class Mixer {
     weak var airSource: AudioSource?
     var tap: ProgramTap?
 
+    /// A THIRD reader of the same mix, and the one that does not need anything
+    /// to be live: the show, out of a sound card, for another program on this
+    /// machine. It has a bus of its own for the same reason the recorder does,
+    /// because reading a bus takes the audio out of it. See `Send.swift`.
+    var sendTap: ProgramTap?
+    /// The one source the send leaves out, by NAME. Mix minus. Only the mixer
+    /// holding the `airSource` can do anything with it, which is the primary.
+    var sendMinus: String?
+
+    /// What this card is playing, offered to the card the presenter listens on.
+    /// Taken after the voices and before anything that belongs only to the
+    /// presenter: a monitor wants the show, not a second copy of somebody
+    /// else's headphone feed.
+    var monitorTap: ProgramTap?
+    /// And the other way round, on the one card the presenter listens on:
+    /// every OTHER card's show, added to this one's. This is what makes a
+    /// monitor carry the whole programme rather than only whatever happens to
+    /// be routed to it.
+    var monitorFeed: AirBus?
+    private var monitorPrimed = false
+    private(set) var monitorGaps = 0
+
+    // ---------------------------------------------------- is it keeping up ---
+    //
+    // Timed here rather than trusted to the driver. Two clock reads and a
+    // compare, which is nothing beside the mixing below, and it is the only
+    // reason this app can say "that output is not keeping up" instead of
+    // shrugging: on Windows, PortAudio reported a clean stream through a
+    // measured seven per cent loss into a virtual cable.
+
+    private(set) var blocks = 0
+    private(set) var lateBlocks = 0
+    private(set) var worstGap: Double = 0
+    private(set) var lastFrames = 0
+    private var lastCallback: Double = 0
+
+    var lateShare: Double { blocks > 0 ? Double(lateBlocks) / Double(blocks) : 0 }
+
+    /// One callback arrived. Called from the audio thread, so it does nothing
+    /// but read a clock and add up.
+    func timeBlock(frames: Int) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let previous = lastCallback
+        lastCallback = now
+        blocks += 1
+        lastFrames = frames
+        guard previous > 0, frames > 0, sampleRate > 0 else { return }
+        let gap = now - previous
+        if gap > worstGap { worstGap = gap }
+        if gap > (Double(frames) / sampleRate) * C.lateBlockFactor { lateBlocks += 1 }
+    }
+
+    /// Is this output healthy, and one line saying why if it is not.
+    func keepingUp() -> (Bool, String) {
+        if !isRunning { return (false, lastError ?? "not running") }
+        if lateBlocks > 0 && lateShare > C.lateBlockWarnShare {
+            return (false, "\(lateBlocks) of \(blocks) blocks arrived late, "
+                + "worst gap \(Int((worstGap * 1000).rounded())) milliseconds")
+        }
+        return (true, "keeping up")
+    }
+
     private var voices: [Voice] = []
     private let voiceLock = NSLock()
     private var duck: Float = 1.0
@@ -94,6 +156,11 @@ final class Mixer {
     private var duckBuf: UnsafeMutablePointer<Float>
     private var airBuf: UnsafeMutablePointer<Float>
     private var srcBuf: UnsafeMutablePointer<Float>
+    /// The send's own sum and the one member subtracted out of it. Both are
+    /// allocated whether or not anything is sending, because allocating them
+    /// the moment somebody presses a key would allocate on the audio thread.
+    private var sendBuf: UnsafeMutablePointer<Float>
+    private var takenBuf: UnsafeMutablePointer<Float>
     private var capacity = 4096
 
     init(key: String, deviceUID: String?, sampleRate: Double, duckBus: DuckBus,
@@ -108,32 +175,44 @@ final class Mixer {
         duckBuf = .allocate(capacity: capacity)
         airBuf = .allocate(capacity: capacity * 2)
         srcBuf = .allocate(capacity: capacity * 2)
+        sendBuf = .allocate(capacity: capacity * 2)
+        takenBuf = .allocate(capacity: capacity * 2)
     }
 
     deinit {
         voiceBuf.deallocate(); rampBuf.deallocate(); duckBuf.deallocate()
         airBuf.deallocate(); srcBuf.deallocate()
+        sendBuf.deallocate(); takenBuf.deallocate()
     }
 
     private func grow(_ frames: Int) {
         guard frames > capacity else { return }
         voiceBuf.deallocate(); rampBuf.deallocate(); duckBuf.deallocate()
         airBuf.deallocate(); srcBuf.deallocate()
+        sendBuf.deallocate(); takenBuf.deallocate()
         capacity = frames * 2
         voiceBuf = .allocate(capacity: capacity * 2)
         rampBuf = .allocate(capacity: capacity)
         duckBuf = .allocate(capacity: capacity)
         airBuf = .allocate(capacity: capacity * 2)
         srcBuf = .allocate(capacity: capacity * 2)
+        sendBuf = .allocate(capacity: capacity * 2)
+        takenBuf = .allocate(capacity: capacity * 2)
     }
 
     // ------------------------------------------------------------ the door ---
 
     func start() {
         stop()
+        blocks = 0; lateBlocks = 0; worstGap = 0; lastCallback = 0
         let out = DeviceOutput(deviceUID: deviceUID)
         out.render = { [weak self] buf, frames in
-            self?.render(frames: frames, into: buf)
+            guard let self else { return }
+            // Timed HERE and not inside `render`, because the self test calls
+            // `render` by hand as fast as it can and would otherwise report
+            // every block as catastrophically late.
+            self.timeBlock(frames: frames)
+            self.render(frames: frames, into: buf)
         }
         if out.start() {
             output = out
@@ -354,7 +433,10 @@ final class Mixer {
         let count = frames * 2
         out.update(repeating: 0, count: count)
 
-        let wantAir = tap != nil
+        // The send is a reader of the same sum and does not need anything to be
+        // live, so it counts as a reason to build it.
+        let wantSend = sendTap != nil
+        let wantAir = tap != nil || wantSend
         if wantAir { airBuf.update(repeating: 0, count: count) }
 
         let flatDuck = duckRamp(frames: frames)
@@ -429,6 +511,21 @@ final class Mixer {
         _ = anyFailed
         faderStart = faderEnd
 
+        // What this card is playing, offered to a monitor on another card.
+        // Taken HERE, after the voices and before anything that belongs only
+        // to the presenter: a monitor wants the show, not a second copy of
+        // somebody's headphone feed.
+        monitorTap?.write(key: key, samples: out, frames: frames, rate: sampleRate)
+
+        // And the other way round, on the card the presenter listens on: every
+        // OTHER card's show, added to this one's.
+        if let feed = monitorFeed {
+            srcBuf.update(repeating: 0, count: count)
+            if readMonitorFeed(frames: frames, feed: feed, into: srcBuf) {
+                for i in 0..<count { out[i] += srcBuf[i] }
+            }
+        }
+
         // Monitoring is added AFTER the duck. The point of the duck is to get
         // the music out from under the voice; ducking the voice as well would
         // undo it. A monitor that starves returns silence rather than stalling.
@@ -444,16 +541,69 @@ final class Mixer {
         softClip(out, count: count)
 
         if wantAir {
+            // ONE read of the sources, because reading one drains its ring.
+            // `takenBuf` comes back holding the block belonging to the source
+            // the send leaves out, or silence when there is no mix minus, no
+            // such source, or nothing arrived from it.
+            var subtract = false
             if let air = airSource {
                 srcBuf.update(repeating: 0, count: count)
-                air.read(frames: frames, into: srcBuf)
+                if wantSend, let group = air as? SourceGroup, sendMinus != nil {
+                    group.read(frames: frames, into: srcBuf,
+                               minus: sendMinus, taken: takenBuf)
+                    subtract = true
+                } else {
+                    air.read(frames: frames, into: srcBuf)
+                }
                 for i in 0..<count { airBuf[i] += srcBuf[i] }
             }
-            softClip(airBuf, count: count)
-            tap?.write(key: key, samples: airBuf, frames: frames, rate: sampleRate)
+            // **Both sums are finished before either is soft clipped**, and
+            // neither array is ever clipped twice. Everything upstream of the
+            // clip is a plain addition, and that is exactly what makes the
+            // subtraction exact.
+            if wantSend {
+                if subtract {
+                    for i in 0..<count { sendBuf[i] = airBuf[i] - takenBuf[i] }
+                } else {
+                    sendBuf.update(from: airBuf, count: count)
+                }
+                softClip(sendBuf, count: count)
+                sendTap?.write(key: key, samples: sendBuf, frames: frames,
+                               rate: sampleRate)
+            }
+            if tap != nil {
+                softClip(airBuf, count: count)
+                tap?.write(key: key, samples: airBuf, frames: frames, rate: sampleRate)
+            }
         }
 
         reap()
+    }
+}
+
+extension Mixer {
+
+    /// One block of the other cards' show. Never blocks, never raises.
+    ///
+    /// Primed the way the send is, and for the same reason: two sound cards run
+    /// on two clocks, so a ring read the moment it is created is a ring that is
+    /// empty. Running dry re-primes rather than starving on every block from
+    /// then on, because one short silence beats a permanent stutter in the ears
+    /// of somebody who cannot see a meter.
+    fileprivate func readMonitorFeed(frames: Int, feed: AirBus,
+                                     into out: UnsafeMutablePointer<Float>) -> Bool {
+        let prime = Int(sampleRate * C.monitorPrimeSeconds)
+        if !monitorPrimed {
+            if feed.available() < prime { return false }
+            monitorPrimed = true
+        }
+        if feed.available() < frames {
+            monitorPrimed = false
+            monitorGaps += 1
+            return false
+        }
+        feed.read(frames: frames, into: out)
+        return true
     }
 }
 
@@ -475,6 +625,21 @@ final class DeviceOutput {
     private let deviceUID: String?
 
     init(deviceUID: String?) { self.deviceUID = deviceUID }
+
+    /// Is the unit REALLY running, asked of Core Audio rather than remembered.
+    ///
+    /// An unplugged card leaves the object exactly where it was, so a flag set
+    /// at `start` goes on saying yes for ever. On Windows that is what made the
+    /// send report "Sending to" with nothing coming out: the stream had aborted
+    /// and only PortAudio knew. Found by Mark, 10 September 2026.
+    var isRunning: Bool {
+        guard let unit else { return false }
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_IsRunning,
+                                          kAudioUnitScope_Global, 0, &running, &size)
+        return status == noErr && running != 0
+    }
 
     func start() -> Bool {
         var desc = AudioComponentDescription(

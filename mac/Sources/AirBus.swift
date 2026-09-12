@@ -263,6 +263,11 @@ final class AirBus {
 ///
 /// Swallows everything. It runs in the audio callback, where one exception
 /// escaping silences that sound card for the rest of the show.
+/// An AirBus IS a programme tap: its `write` is the protocol's `write`. Stated
+/// rather than left implicit because the monitor bus is written by every mixer
+/// directly, with no `Taps` in the middle, there being exactly one reader.
+extension AirBus: ProgramTap {}
+
 final class Taps: ProgramTap {
     private var buses: [ObjectIdentifier: AirBus] = [:]
     private let lock = NSLock()

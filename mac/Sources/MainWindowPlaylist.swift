@@ -53,6 +53,9 @@ extension MainWindow: PlaylistViewDelegate {
             self.speaker.announcePlayback(
                 length.isEmpty ? track.displayName : "\(track.displayName), \(length)")
             self.playlistView.refresh(rowsChanged: false)
+            // The track list beside any recording, and the cue sheet window if
+            // one is open. Pads are deliberately not in a track list.
+            self.trackWentOut(track)
         }
         player.onStopped = { [weak self] in
             guard let self else { return }

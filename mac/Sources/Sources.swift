@@ -32,6 +32,11 @@ struct SourceConfig {
     var onAir: Bool = true
     var monitor: Bool = false
     var muted: Bool = false
+    /// How far this source is held back, in milliseconds. Darrell, a listener,
+    /// 10 September 2026, on a capture card: "in obs, we can adjust the offset
+    /// for the source, so it does not lag as much." Zero is the default and
+    /// costs nothing at all. See `DelayLine`.
+    var delayMS: Double = 0
 
     var isProcess: Bool { kind == "process" }
 
@@ -43,6 +48,8 @@ struct SourceConfig {
             "channel": channel.rawValue,
             "gain_db": Double(gainDB),
             "on_air": onAir, "monitor": monitor, "muted": muted,
+            // The Windows spelling, because a board moves between the copies.
+            "delay_ms": delayMS,
         ]
     }
 
@@ -60,7 +67,101 @@ struct SourceConfig {
         c.onAir = d["on_air"] as? Bool ?? true
         c.monitor = d["monitor"] as? Bool ?? false
         c.muted = d["muted"] as? Bool ?? false
+        // Clamped on the way in, the same as every other board number, because
+        // a source file from anywhere may carry anything and this one ends up
+        // as an allocation.
+        let delay = d["delay_ms"] as? Double ?? 0
+        c.delayMS = delay.isFinite ? min(Double(C.maxSourceDelayMS), max(0, delay)) : 0
         return c
+    }
+}
+
+// ------------------------------------------------------ holding one back ---
+
+/// Holds a source back by a fixed number of frames.
+///
+/// Darrell, a listener, 10 September 2026: "when using external audio sources,
+/// there is some lag there. For example, I would stream my capture card as an
+/// audio or video source for game audio. In obs, we can adjust the offset for
+/// the source, so it does not lag as much. Could this be done in drop deck?"
+///
+/// Yes, and this is it. A capture card, a console, a games call over a cable:
+/// each arrives whenever its own hardware gets round to it, and nothing in the
+/// world lines them up for you.
+///
+/// **What this can and cannot do, said plainly because the panel has to say it
+/// too.** It can only ever make a source LATER. Nothing can make live audio
+/// arrive earlier than it does, so a source that is running behind is corrected
+/// by delaying everything it is out with, not by delaying it. That is also how
+/// OBS works and it surprises everybody once.
+///
+/// One line per source rather than one per tap, which is the one place this
+/// differs from the Windows copy and is better rather than merely different.
+/// There the delay sits on the READ side, so what you hear and what goes out
+/// need a line each; here both rings are filled from a single block on the way
+/// in, so one line ahead of the push delays both by exactly the same amount and
+/// cannot drift.
+///
+/// It is a circular buffer of the delay's own length, swapped a frame at a
+/// time: what comes out is what went in that many frames ago. **Nothing here
+/// allocates and nothing here can block**, because it runs inside a capture
+/// callback, which is why it is not the "concatenate and slice" shape the
+/// Windows copy can afford in numpy. The first version of this file was that
+/// shape and it allocated two arrays per block.
+final class DelayLine {
+
+    private var frames = 0
+    private var held: UnsafeMutablePointer<Float>
+    private var capacity = 2
+    private var position = 0
+
+    init() {
+        held = .allocate(capacity: capacity)
+        held.update(repeating: 0, count: capacity)
+    }
+
+    deinit { held.deallocate() }
+
+    var heldFrames: Int { frames }
+
+    /// How long the delay is. Allocation happens HERE, on the settings thread,
+    /// and never on the audio one.
+    func set(frames wanted: Int) {
+        let want = max(0, wanted)
+        if want == frames { return }
+        frames = want
+        let need = max(2, want * 2)
+        if need > capacity {
+            held.deallocate()
+            capacity = need
+            held = .allocate(capacity: capacity)
+        }
+        // Start again rather than stretch what is held: a delay changed mid
+        // show is somebody lining a source up by ear, and a click while they
+        // do it is better than an answer that keeps sliding.
+        held.update(repeating: 0, count: capacity)
+        position = 0
+    }
+
+    /// Delay `count` frames of interleaved stereo, in place.
+    func feed(_ block: UnsafeMutablePointer<Float>, frames count: Int) {
+        guard frames > 0, count > 0 else { return }
+        let ring = frames * 2
+        var p = position
+        var i = 0
+        let n = count * 2
+        while i < n {
+            let left = held[p]
+            let right = held[p + 1]
+            held[p] = block[i]
+            held[p + 1] = block[i + 1]
+            block[i] = left
+            block[i + 1] = right
+            p += 2
+            if p >= ring { p = 0 }
+            i += 2
+        }
+        position = p
     }
 }
 
@@ -98,6 +199,10 @@ class BaseSource: RunningSource {
     let airRing = AudioRing(frames: C.micRingFrames)
     var outputRate: Double = C.defaultSampleRate
     var resampler: RTResampler?
+    /// One line, ahead of BOTH rings. See `DelayLine` for why that is one and
+    /// not two. It is resized here, on the settings thread, and never inside
+    /// the capture callback.
+    let delayLine = DelayLine()
 
     var stereo: UnsafeMutablePointer<Float>
     var resampled: UnsafeMutablePointer<Float>
@@ -115,6 +220,13 @@ class BaseSource: RunningSource {
 
     /// Start the arriving-audio meter again, for a fresh look at a source.
     func resetMeter() { framesIn = 0; peakIn = 0; sawStereo = false }
+
+    /// Line the delay up with the rate this source is really running at.
+    /// Called after `start`, because that is where `outputRate` is settled.
+    func syncDelay() {
+        let ms = min(Double(C.maxSourceDelayMS), max(0, config.delayMS))
+        delayLine.set(frames: Int((ms / 1000.0) * outputRate))
+    }
 
     /// How the incoming channels are folded down to the two that go out.
     ///
@@ -164,6 +276,11 @@ class BaseSource: RunningSource {
             out = resampled
             count = produced
         }
+        // Held back, if the user has lined this source up against the others.
+        // Ahead of both rings, so what is heard and what goes out are late by
+        // exactly the same amount and can never drift apart.
+        delayLine.feed(out, frames: count)
+
         // An extra source is never processed and never ducked: both of those
         // belong to the microphone.
         if config.monitor { monitorRing.push(out, count: count) }
@@ -609,6 +726,14 @@ final class SourceGroup: AudioSource {
 
     var mic: MicInput?
     private(set) var sources: [RunningSource] = []
+    /// Members that are not the user's sources and are heard rather than sent.
+    /// Today that is the send's confidence feed, and the reason it is a member
+    /// here rather than anything cleverer is that this class already sums
+    /// `readMonitor` into what the presenter hears and `readAir` into what goes
+    /// out. A member answering silence to the second one is heard and never
+    /// sent, which is what makes hearing the send unable to put the send inside
+    /// itself. See `Confidence`.
+    var extras: [RunningSource] = []
     /// While one source is soloed everything else is silent, which is the
     /// fastest way to find out what a noise is mid link.
     var soloed: String?
@@ -629,7 +754,10 @@ final class SourceGroup: AudioSource {
         }
         let list = sources
         lock.unlock()
-        for source in list { source.start(outputRate: outputRate) }
+        for source in list {
+            source.start(outputRate: outputRate)
+            (source as? BaseSource)?.syncDelay()
+        }
         return trouble
     }
 
@@ -681,6 +809,16 @@ final class SourceGroup: AudioSource {
         return cameOn
     }
 
+    /// Put stand-in members in without opening a single device.
+    ///
+    /// For the self test only, which is why it takes `RunningSource` rather
+    /// than a list of configs: the properties worth proving here are about the
+    /// SUM, and a real device would make them untestable on a machine with no
+    /// sound card in it.
+    func useForTesting(_ members: [RunningSource]) {
+        lock.lock(); sources = members; lock.unlock()
+    }
+
     func stopAll() {
         lock.lock(); let list = sources; sources = []; lock.unlock()
         for source in list { source.stop() }
@@ -709,17 +847,68 @@ final class SourceGroup: AudioSource {
 
     /// The programme side: the microphone plus every source that is on air.
     func read(frames: Int, into out: UnsafeMutablePointer<Float>) {
+        read(frames: frames, into: out, minus: nil, taken: nil)
+    }
+
+    /// The same single read, ALSO writing one named member's own block into
+    /// `taken` so a caller can subtract it. This is mix minus.
+    ///
+    /// Feeding a program back its own audio is how a call gets an echo of
+    /// itself, so a send that carries a captured program has to leave that
+    /// program out, and **it has to do it off the one read everything else is
+    /// already using**. Reading a source drains its ring: a second pass over
+    /// the same sources would give each sum half a voice. That is not an
+    /// optimisation to undo, it is the only way both sums can be right.
+    ///
+    /// `taken` is zeroed first and left at zero when the named member is not
+    /// here, is silent, or is not named at all, so the caller's subtraction is
+    /// a no-op and a mix minus that is not happening cannot look like one that
+    /// is. `MainWindow.sendReport` is what says so out loud.
+    ///
+    /// The member is found by NAME rather than by index, because a source list
+    /// gets reordered and an index would quietly start excluding somebody else.
+    func read(frames: Int, into out: UnsafeMutablePointer<Float>,
+              minus name: String?, taken: UnsafeMutablePointer<Float>?) {
         grow(frames)
-        out.update(repeating: 0, count: frames * 2)
+        let count = frames * 2
+        out.update(repeating: 0, count: count)
+        taken?.update(repeating: 0, count: count)
+
+        let members = all
+        // Who is being left out is decided BEFORE any audio moves, so the
+        // choice cannot change halfway down a block.
+        //
+        // **A real source is looked for first.** On Windows the microphone
+        // label used to win, so somebody with a second microphone on a cable
+        // named "My microphone" had the real microphone taken out of the send
+        // and that source left in it, which is the exact echo this prevents.
+        var minusSource: RunningSource?
+        var minusMic = false
+        let wanted = (name ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        if !wanted.isEmpty {
+            minusSource = members.first {
+                $0.config.name.trimmingCharacters(in: .whitespaces).lowercased() == wanted
+            }
+            if minusSource == nil { minusMic = (wanted == SourceGroup.micLabel.lowercased()) }
+        }
+
         if let mic, mic.isOpen, mic.onAir, audible(micDuckKey) {
             mic.readAir(frames: frames, into: scratch)
-            for i in 0..<(frames * 2) { out[i] += scratch[i] }
+            for i in 0..<count { out[i] += scratch[i] }
+            if minusMic, let taken { for i in 0..<count { taken[i] = scratch[i] } }
         }
-        for source in all where audible(source.config.id) {
+        for source in members where audible(source.config.id) {
             source.readAir(frames: frames, into: scratch)
-            for i in 0..<(frames * 2) { out[i] += scratch[i] }
+            for i in 0..<count { out[i] += scratch[i] }
+            if source === minusSource, let taken {
+                for i in 0..<count { taken[i] = scratch[i] }
+            }
         }
     }
+
+    /// What the microphone is called when a send is asked to leave it out. The
+    /// panel offers this string and the board stores it, so it is one place.
+    static let micLabel = "My microphone"
 
     /// What the presenter hears of all this, which never reaches the stream.
     func readMonitor(frames: Int, into out: UnsafeMutablePointer<Float>) {
@@ -731,6 +920,13 @@ final class SourceGroup: AudioSource {
         }
         for source in all where audible(source.config.id) {
             source.readMonitor(frames: frames, into: scratch)
+            for i in 0..<(frames * 2) { out[i] += scratch[i] }
+        }
+        // The extras are never soloed away. A confidence feed is the presenter
+        // checking what the other end is being handed, and taking it off
+        // because they pressed Solo on something is the opposite of useful.
+        for extra in extras {
+            extra.readMonitor(frames: frames, into: scratch)
             for i in 0..<(frames * 2) { out[i] += scratch[i] }
         }
     }

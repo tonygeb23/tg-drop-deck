@@ -40,6 +40,22 @@ if CommandLine.arguments.contains("--dump-keys") {
     exit(0)
 }
 
+// A real send into a real cable, recorded off the other end and counted for
+// gaps. The one thing about a send that cannot be proved from inside the app.
+if let at = CommandLine.arguments.firstIndex(of: "--check-send") {
+    let rest = CommandLine.arguments.dropFirst(at + 1)
+    let seconds = rest.first.flatMap(Double.init) ?? 6.0
+    let uid = rest.first(where: { Double($0) == nil })
+    exit(SendCheck.run(seconds: seconds, deviceUID: uid))
+}
+
+// The F1 list exactly as the app would show it, so the half of it that is
+// derived can be read rather than taken on trust.
+if CommandLine.arguments.contains("--dump-help") {
+    print(KeyboardHelp.chapters() + KeyboardHelp.everythingElse(nil))
+    exit(0)
+}
+
 // Ask the live server, the way the daily check does, and say what came back.
 // This is how a release is proved end to end: the installed app itself reads
 // the feed, verifies the signature and compares versions.

@@ -60,9 +60,11 @@ final class SelfTest {
         testHandover()
         testCueTone()
         testSettingsLayout()
+        testKeyboardHelp()
         testStreamEncoders()
         runMoreChecks()
         runAirChecks()
+        runSendChecks()
         runVideoChecks()
         testRealDevice()
 
@@ -877,6 +879,40 @@ extension SelfTest {
     /// It replaced an NSTabView, and the failure it would have is quiet: a pane
     /// that is never put in front of you, or one with no accessibility label,
     /// looks like an empty Preferences window and says nothing about why.
+    /// F1 cannot fall behind the app.
+    ///
+    /// Windows shipped an F1 list that went eight keys behind between 3.5.0 and
+    /// 3.7.0 and still taught the wiring of a release that had been replaced.
+    /// Nothing reported it, because a hand kept list is only wrong when
+    /// somebody reads it. This is the check that makes "derived from the menus"
+    /// a guarantee rather than an intention.
+    fileprivate func testKeyboardHelp() {
+        out.append("F1 says every key the app really binds")
+
+        let help = KeyboardHelp.chapters() + KeyboardHelp.everythingElse(nil)
+        var missing: [String] = []
+        var bindings = 0
+        for command in Command.allCases {
+            guard let (key, mods) = KeyMap.menuKey(command) else { continue }
+            bindings += 1
+            let said = KeyMap.spell(key: key, mods: mods)
+                .replacingOccurrences(of: "+", with: " ")
+            if !help.contains(said) { missing.append("\(command.rawValue) on \(said)") }
+        }
+        check("this build binds keys at all", bindings > 20, "\(bindings)")
+        check("every key this build binds is in the F1 list", missing.isEmpty,
+              missing.joined(separator: "; "))
+
+        // And the other way: a key the chapters teach that the app does not
+        // bind is a sentence that sends somebody to press nothing.
+        let bound = Set(KeyMap.dump().map { $0.replacingOccurrences(of: "+", with: " ") })
+        check("the new keys are all taught",
+              ["Command Shift R", "Command Shift C", "Command Shift W",
+               "Command Shift H", "Command Shift O", "Option Shift O"]
+                  .allSatisfy { bound.contains($0) && help.contains($0) })
+        out.append("")
+    }
+
     fileprivate func testSettingsLayout() {
         out.append("The Preferences layout")
         let pane = SettingsCategories()

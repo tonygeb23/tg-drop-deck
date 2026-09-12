@@ -232,9 +232,89 @@ extension SearchPanel: NSTextFieldDelegate {
 
 enum KeyboardHelp {
 
-    /// The F1 text, built from the live key map rather than typed out, so a
-    /// key that moves cannot leave the help behind saying the old one.
+    /// The F1 text.
+    ///
+    /// **Two halves, and the second one is why this can never fall behind.**
+    /// The chapters below are written by hand, because the bank layout and the
+    /// digit map need explaining and a bare list of keys explains nothing. Then
+    /// `everythingElse` walks the REAL menu bar and adds every command the
+    /// chapters did not already mention, so a feature added without a thought
+    /// for the help still turns up in it.
+    ///
+    /// Windows reached the same place from the other direction: its F1 was
+    /// hand kept, went eight keys behind between 3.5.0 and 3.7.0, and still
+    /// taught the pre 3.6.0 wiring. `SelfTest.testKeyboardHelp` asserts that
+    /// every primary binding this build has appears here somewhere, which is
+    /// the check that makes the guarantee real rather than intended.
     static func text() -> String {
+        chapters() + everythingElse()
+    }
+
+    /// Every command this build binds that the chapters do not already name.
+    ///
+    /// **Derived from `KeyMap.bindings`, not from the menu bar**, and that is
+    /// the whole point: the bindings are what the app really answers to, they
+    /// are complete by construction, and they are readable with no window on
+    /// screen, so `SelfTest.testKeyboardHelp` can hold this to them. The menu
+    /// bar is consulted only for the WORDS, because a menu item's title is
+    /// what a user will go looking for; with no menu bar up, a readable form
+    /// of the command's own name stands in.
+    static func everythingElse(_ bar: NSMenu? = NSApp.mainMenu) -> String {
+        let written = chapters()
+        let titles = menuTitles(bar)
+        var lines: [String] = []
+        for command in Command.allCases {
+            guard let (key, mods) = KeyMap.menuKey(command) else { continue }
+            let said = KeyMap.spell(key: key, mods: mods)
+                .replacingOccurrences(of: "+", with: " ")
+            // Already taught, in whatever words that chapter chose. Matched on
+            // the KEY rather than the title: the chapters name keys, and the
+            // sentence explaining one is free to differ from a menu item.
+            if written.contains(said) { continue }
+            // Column 32, the same as every chapter above, so the two halves
+            // of this list read as one list. `pad` is for the short bank keys.
+            let gap = String(repeating: " ", count: max(2, 30 - said.count))
+            lines.append("  \(said)\(gap)\(titles[command] ?? readable(command))")
+        }
+        guard !lines.isEmpty else { return "" }
+        return """
+
+        EVERYTHING ELSE THIS BUILD BINDS
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    /// What each command is called on the menu that carries it.
+    static func menuTitles(_ bar: NSMenu?) -> [Command: String] {
+        guard let bar else { return [:] }
+        var out: [Command: String] = [:]
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if let sub = item.submenu { walk(sub) }
+                guard let raw = item.representedObject as? String,
+                      let command = Command(rawValue: raw) else { continue }
+                // The trailing ellipsis is a promise about a window opening,
+                // which is worth keeping, and the ampersand accelerators
+                // Windows uses have no place here.
+                out[command] = item.title
+            }
+        }
+        walk(bar)
+        return out
+    }
+
+    /// "recordVideo" said as words, for a run with no menu bar up. Never seen
+    /// in the shipped app, which always has one.
+    static func readable(_ command: Command) -> String {
+        var said = ""
+        for character in command.rawValue {
+            if character.isUppercase && !said.isEmpty { said.append(" ") }
+            said.append(said.isEmpty ? Character(character.uppercased()) : character)
+        }
+        return said
+    }
+
+    static func chapters() -> String {
         let bank2 = KeyMap.scheme == .command ? "Command" : "Control"
         let bank3 = KeyMap.scheme == .command ? "Option plus Command" : "Option plus Control"
         return """
@@ -380,12 +460,60 @@ enum KeyboardHelp {
           arrows change the setting you are on; hold Shift for ten at a time.
 
         RECORDING THE SHOW
-          Command R                     Start and stop recording
+          Command R                     Start and stop recording, sound only
+          Command Shift R               Record the PICTURE and the sound, to
+                                        one MP4
 
           The same mix that goes on air, to your Documents folder, in WAV, MP3,
           AAC or FLAC. It does not need you to be on air, it does not fight with the
           stream, and closing the app finishes the file first so a recording
           always opens.
+
+          Command Shift R takes the same picture that would go out, so it works
+          off air too, and if you are already live it uses the identical frames
+          the stream is sending. The sound is the master clock and the picture
+          is fitted to it.
+
+          Both keys say what is really in the file when they start, including
+          anything you can HEAR that is not on the air and therefore not in the
+          recording. Monitoring is what you hear; a recording takes the on air
+          mix.
+
+          Both also write a .cue track list beside the recording, with the same
+          file name, listing every running order track that went out and the
+          moment it started. Hand the pair to Mixcloud and the track list is
+          already done. Pads are deliberately not in it.
+
+        WHAT IS COMING UP
+          Command Shift C               The cue sheet: everything ticked, top
+                                        to bottom, draining as the show runs
+          N                             Say the next three, in one sentence
+          Return                        Cross into the track you are on
+
+          Your pads and every other key still work while it is open. The row
+          you are standing on never moves, so a song changing underneath you
+          cannot interrupt what is being read out.
+
+        GIVING ANOTHER PROGRAM ON THIS MACHINE YOUR SHOW
+          Option Shift O                Send this show to another program:
+                                        TeamTalk, Zoom, Discord, OBS
+          Command Shift H               Hear exactly what is being sent
+          Command Shift O               Is the send keeping up
+          Command Shift W               Where is everything going: your sounds,
+                                        what you hear, and what is being sent
+
+          Point it at a virtual audio cable and set the other program's
+          microphone to the other end of the same cable. It sends the whole
+          show: pads, beds, running order, your microphone and every source you
+          are catching, and it does not need you to be on air.
+
+          It can leave ONE source out, so sending to a program you are also
+          capturing does not hand that program its own audio back. Broadcasting
+          calls that mix minus.
+
+          Do NOT point Preferences, Output at a cable for this. That output
+          carries your sounds and NOT your microphone, so the other program
+          would get a soundboard with no voice on it.
 
         OTHER AUDIO ON THE AIR WITH YOU
           Option Shift S                Audio sources
@@ -408,6 +536,8 @@ enum KeyboardHelp {
           Command B                     Go live, and come off air
           Command Shift B               What the stream is doing
           Command Shift A               Who is listening
+          Command Shift Return          Play the running order from the top,
+                                        from anywhere in the app
 
           Sounds, beds, the playlist and your microphone go out. Your preview
           and the end of track beep do not, because those are yours. Encoding
@@ -415,6 +545,29 @@ enum KeyboardHelp {
           stream and never your own audio, and it reconnects by itself.
 
           Nothing goes out until you press Command B.
+
+        THE PICTURE, WHEN YOU ARE STREAMING VIDEO
+          Option Shift V                Video source: a card, a picture, your
+                                        camera, your screen, or both
+          Option Shift T                Screen text: your station name, what is
+                                        playing, a clock or your own words, in
+                                        four named places
+          Option Shift C                Colours: your background, your words
+                                        and your accent, each one scored for
+                                        how well it reads
+          Option Shift D                Check my shot: have the picture going
+                                        out described to you
+          Command Shift F               What the camera can see: whether you
+                                        are in shot, centred and lit
+          Command Shift V               What is on screen right now, including
+                                        anything sitting on top of the picture
+
+          Every one of these works off air, because checking after you are live
+          is not checking.
+
+        MOVING AROUND
+          Option Command Tab            Swap between the soundboard and the
+                                        running order
 
         GLOBAL HOTKEYS
           Command G                     Turn them on and off

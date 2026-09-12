@@ -76,6 +76,34 @@ cp vendor/libmp3lame.dylib "${CONTENTS}/Frameworks/libmp3lame.dylib"
 chmod 755 "${CONTENTS}/Frameworks/libmp3lame.dylib"
 cp vendor/LAME-LICENSE.txt "${CONTENTS}/Resources/LAME-LICENSE.txt"
 
+# Drop Deck Audio, the virtual audio cable, rides inside the app.
+#
+# Shipping it here rather than as a second download is what makes it one
+# install and one notarization: notarytool checks every nested Mach-O, so the
+# cable is validated along with everything else, and the app can put it in
+# place itself when the user asks. The app never loads it: `coreaudiod` does,
+# after the user has copied it to /Library/Audio/Plug-Ins/HAL with a password.
+#
+# Built here rather than by hand, so the copy inside the app is always the copy
+# this source tree describes. It is signed by the driver's own script, which is
+# what codesign's inside out rule needs: a nested bundle carries its signature
+# before the app is sealed around it.
+if [ -f driver/build-driver.sh ]; then
+  echo "Building the audio cable..."
+  ( cd driver && DROPDECK_ADHOC_SIGN="${DROPDECK_ADHOC_SIGN:-0}" \
+      DROPDECK_NO_TIMESTAMP="${DROPDECK_NO_TIMESTAMP:-0}" ./build-driver.sh >/dev/null )
+  DRIVER_BUILT="${HOME}/Library/Application Support/TG Studios Build/drop-deck-driver/Drop Deck Audio.driver"
+  if [ -d "${DRIVER_BUILT}" ]; then
+    # Removed first, for the same reason the demo pack is: `cp -R src dst`
+    # copies INTO dst when dst exists, and a driver nested inside a driver is
+    # a bundle notarization will refuse.
+    rm -rf "${CONTENTS}/Resources/Drop Deck Audio.driver"
+    cp -R "${DRIVER_BUILT}" "${CONTENTS}/Resources/Drop Deck Audio.driver"
+  else
+    echo "The audio cable would not build; the app will say it is not inside it."
+  fi
+fi
+
 # The icon is drawn, not stored: the same mark appicon.py draws for Windows.
 # Only redrawn when it is missing or the drawing has changed, because a Swift
 # script takes a few seconds to compile and the build should not.

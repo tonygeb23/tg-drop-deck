@@ -23,6 +23,20 @@ final class Recorder {
     /// length of the wait.
     private(set) var framesWritten: Int = 0
 
+    /// The track list written beside the file, as the show goes out. Nil until
+    /// a recording starts. Every timestamp in it comes from `elapsed`, which is
+    /// frames written over the sample rate and never a wall clock: a machine
+    /// that stalls makes the file shorter than the clock says, and a list timed
+    /// against the wall drifts away from the audio it describes.
+    private(set) var cue: CueFile?
+
+    /// What `bus.dropped` was when this started. **Nothing anywhere read the
+    /// recorder's drop counter until 3.7.1**, so a recording that lost sound
+    /// said nothing at all, in either sense.
+    private var droppedAtStart = 0
+    /// Audio the bus threw away because this could not keep up.
+    var losingAudio: Int { max(0, (bus?.dropped ?? 0) - droppedAtStart) }
+
     private var bus: AirBus?
     private var file: AVAudioFile?
     // MP3 does not go through AVAudioFile, which cannot write one. It is LAME
@@ -47,12 +61,23 @@ final class Recorder {
         return base.appendingPathComponent(C.appName).path
     }
 
+    /// What a recording of this kind is called on disk.
+    ///
+    /// **A format nobody here recognises used to become `.wav`, quietly.** That
+    /// is the same fault Windows found the first time it recorded a picture: an
+    /// unknown format fell through to the audio default, so the first MP4 this
+    /// app ever wrote would have gone into a file called `.wav`, and it would
+    /// have played nowhere and looked like a broken encoder. Every format the
+    /// app can write is named here, including the video one, and anything else
+    /// keeps its own name rather than borrowing a lie.
     static func fileExtension(for format: String) -> String {
         switch format {
+        case "wav": return ".wav"
         case "aac": return ".m4a"
         case "flac": return ".flac"
         case "mp3": return ".mp3"
-        default: return ".wav"
+        case "mp4": return ".mp4"
+        default: return "." + format.filter { $0.isLetter || $0.isNumber }
         }
     }
 
@@ -149,6 +174,8 @@ final class Recorder {
         taps.add(bus)
         path = destination
         framesWritten = 0
+        droppedAtStart = bus.dropped
+        cue = CueFile(audioPath: destination)
         stopping = false
         isRecording = true
 
@@ -260,6 +287,8 @@ final class Recorder {
             if done { break }
             Thread.sleep(forTimeInterval: 0.02)
         }
+        // Read BEFORE the bus is let go, or the count goes with it.
+        let lost = losingAudio
         if let bus { taps.remove(bus) }
         bus = nil
         // If the writer did not finish inside the deadline the MP3 is still
@@ -275,8 +304,15 @@ final class Recorder {
         let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
         let megabytes = Double(size) / (1024 * 1024)
         let name = (finished as NSString).lastPathComponent
+        var said = [String(format: "Recording saved as %@, %@, %.1f megabytes",
+                           name, formatDuration(seconds), megabytes)]
+        if lost > 0 {
+            said.append("It lost audio \(lost) times, so there are gaps in it")
+        }
+        if let line = cue?.describe(), !line.isEmpty { said.append(line) }
+        cue = nil
         path = nil
-        return String(format: "Recording saved as %@, %@, %.1f megabytes",
-                      name, formatDuration(seconds), megabytes)
+        return said.joined(separator: ". ") + "."
+
     }
 }

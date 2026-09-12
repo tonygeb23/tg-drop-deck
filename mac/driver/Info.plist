@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>DropDeckAudio</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.tgstudios.dropdeck.audiodriver</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Drop Deck Audio</string>
+	<!-- BNDL, and never a four character type of its own. A custom type makes
+	     notarization finish without producing a ticket, and say nothing. -->
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>TG Studios. Parts derived from Apple's NullAudio sample, MIT licensed.</string>
+	<!-- The type UUID is kAudioServerPlugInTypeUUID, which is hard coded in
+	     CoreAudio's own header and is the same for every plug-in ever written.
+	     The factory UUID under it is ours, made with uuidgen, and it names the
+	     C function coreaudiod calls to build the driver. -->
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>4B1FB1B6-5E5E-4C2E-9E5C-2C1D0B7A9A21</key>
+		<string>DropDeckAudio_Create</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+		<array>
+			<string>4B1FB1B6-5E5E-4C2E-9E5C-2C1D0B7A9A21</string>
+		</array>
+	</dict>
+</dict>
+</plist>

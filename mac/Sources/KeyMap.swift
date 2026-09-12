@@ -114,7 +114,11 @@ enum Command: String, CaseIterable {
     case playlistStop, playlistCrossfade, playlistSave, playlistOpen, playlistClear
     case micToggle, micSettings
     case streamToggle, streamStatus, streamStats, streamSetup
-    case record, recordFolder, sources, sourceControl, muteSources, soloMic
+    case record, recordVideo, recordFolder, sources, sourceControl, muteSources, soloMic
+    // Giving another program on this machine the show, 3.7.1.
+    case sendSetup, sendMonitor, sendStatus, routing, virtualDevice
+    // What is coming up next, 3.7.1.
+    case cueSheet
     // The video half, 3.5.2.
     case videoSource, screenText, shotCheck, colours, cameraCheck, sayScreen
     case streamingLocation
@@ -326,6 +330,18 @@ enum KeyMap {
         .streamStatus:  [Binding("b", [.command, .shift])],
         .streamStats:   [Binding("a", [.command, .shift])],
         .record:        [Binding("r", [.command])],
+        // Windows records the picture on Ctrl+Shift+R, which pairs with
+        // Ctrl+R. Command+Shift+R here for the same reason.
+        .recordVideo:   [Binding("r", [.command, .shift])],
+        // Windows puts the send itself on Alt+Shift+O, alongside the other
+        // Alt+Shift windows, and its three reports on Ctrl+Shift. The Mac
+        // keeps that shape: Option+Shift opens something, Command+Shift asks
+        // something.
+        .sendSetup:     [Binding("o", [.option, .shift])],
+        .sendMonitor:   [Binding("h", [.command, .shift])],
+        .sendStatus:    [Binding("o", [.command, .shift])],
+        .routing:       [Binding("w", [.command, .shift])],
+        .cueSheet:      [Binding("c", [.command, .shift])],
         // The three source keys are one family: Option Command and then C, M or
         // S for control, mute and solo.
         //
@@ -462,14 +478,23 @@ enum KeyMap {
 
     // ------------------------------------------------------------ the dump ---
 
-    /// A key written the way the manual writes it: modifiers in the Mac order,
-    /// joined with plus signs, then the key by its name.
+    /// A key written the way the manual writes it: modifiers in the order the
+    /// manual and the F1 list already use, joined with plus signs, then the key
+    /// by its name.
+    ///
+    /// **Command comes before Shift**, which is not the order Apple's own
+    /// glyph strip draws them in and IS the order every sentence in this
+    /// product says them in: the manual has said `Command+Shift+B` since the
+    /// day it was written, and so does F1. `mac/check_guide.py` normalises
+    /// both sides before comparing, so the manual never noticed that this
+    /// function disagreed with it; F1 does notice, because it matches a
+    /// derived key against a hand written chapter as plain text.
     static func spell(key: String, mods: NSEvent.ModifierFlags) -> String {
         var parts: [String] = []
         if mods.contains(.control) { parts.append("Control") }
         if mods.contains(.option) { parts.append("Option") }
-        if mods.contains(.shift) { parts.append("Shift") }
         if mods.contains(.command) { parts.append("Command") }
+        if mods.contains(.shift) { parts.append("Shift") }
         let names: [String: String] = [
             "\r": "Return", " ": "Space", "\t": "Tab", ",": "comma", "\u{8}": "Delete",
             String(UnicodeScalar(NSDeleteFunctionKey)!): "Delete",
@@ -509,10 +534,12 @@ enum KeyMap {
             keys.insert(spell(key: digit, mods: [.option, .control]))
         }
         // Handled by the views rather than the map. See PlaylistTable.keyDown,
-        // SoundButton and AppDelegate.installKeyMonitor.
+        // SoundButton, CueSheetWindow.handle and AppDelegate.installKeyMonitor.
+        // `N` is the cue sheet's, and it is a bare letter on purpose: that
+        // window is not a dialog, so the map below it still has every pad.
         for fixed in ["Space", "Return", "Shift+Return", "Delete", "Escape",
                       "Option+Up", "Option+Down", "Option+Home", "Option+End",
-                      "Shift+A", "Shift+U", "Command+Q"] {
+                      "Shift+A", "Shift+U", "Command+Q", "N"] {
             keys.insert(fixed)
         }
         return keys.sorted()

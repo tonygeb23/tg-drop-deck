@@ -1,5 +1,244 @@
 # Changelog
 
+## 3.8.0 for Mac, 11 September 2026
+
+**Everything Windows gained between 3.6.0 and 3.7.1, and a virtual audio cable
+Windows has not got.**
+
+The Mac was four releases behind: 3.5.28 against 3.7.1. It is level now, and
+it has one thing of its own.
+
+## Drop Deck Audio, a cable that belongs to the app
+
+Tony, 11 September 2026: "would it be too ambitious to create a custom Drop
+Deck audio cable device like loopback? So, it's a specific wire customized to
+Drop Deck only that when set to its input on Team Talk, Zoom, Skype, it will
+automatically pick up on the audio from Drop Deck."
+
+It was not too ambitious. **On air, Drop Deck Audio** installs a virtual audio
+cable that comes with the app. After that it is in every program's microphone
+list, called Drop Deck Audio, and the send is already pointed at it. Nothing to
+download, nothing to buy, nothing to work out.
+
+**The name is the feature.** Every other virtual cable is named from the
+cable's point of view rather than yours, so the thing called Input is a
+playback device and the thing called Output is a recording one, and everybody
+reads that backwards the first time. There is one name here and it is in both
+lists.
+
+**What it really is.** An AudioServerPlugIn: two channels of 32 bit float at
+44100 and 48000, transport type virtual, living in
+`/Library/Audio/Plug-Ins/HAL` and loaded by Core Audio into a sandboxed helper
+of its own. It began as Apple's MIT licensed `NullAudio` sample, whose licence
+is kept beside the source and inside the bundle. What is ours is the ring
+buffer that makes it carry audio instead of throwing it away, a silence guard,
+and a seed that really moves.
+
+**Exactly two channels, and that is a decision.** Zoom sums any input wider
+than two to mono whatever its stereo setting says, so a cable with more would
+arrive in a call as one ear of the show.
+
+**Proved rather than assumed.** `--check-send` drives the real send through the
+real cable and records the far end:
+
+| | 48000 Hz | 44100 Hz |
+|---|---|---|
+| Gaps in eight seconds | none | none |
+| Tone out, tone back | 1000.0 against 1000.0 Hz | 1000.0 against 1000.0 |
+| Blocks dropped | 0 | 0 |
+| Rebuffers | 0 | 0 |
+| Idle, with nothing playing | peak 0.000000 | peak 0.000000 |
+
+**That last row is the one that matters most and is the easiest to miss.** With
+nothing feeding it, a cable made the obvious way goes on handing out the last
+fraction of a second it heard, over and over, for as long as anybody stays
+connected. It is a buzz that never stops and appears nowhere in the app. The
+guard against it is six lines and there is a check that listens for it.
+
+**The pitch is the measurement, not the gap count.** Audio that goes missing
+takes whole cycles with it, so a tone with holes in it reads LOW: Windows
+measured 1 kHz coming back as 974 Hz through a path that was losing three per
+cent, which Tony had already described as "a change in pitch, a little
+choppiness". A number is easier to argue with than a description.
+
+**Installing it needs your password and restarts Core Audio**, which stops
+every sound on the Mac for a second or two, VoiceOver included. The app says
+that in words BEFORE it asks, and offers to skip the restart and let the cable
+appear at your next login instead. There is no version of this that does not
+need a password: the folder belongs to the system.
+
+## Sending the show to another program
+
+**On air, Send this show to another program, or `Option+Shift+O`.** The whole
+show out of a sound card, for TeamTalk, Zoom, Discord or OBS on this machine.
+Pads, beds, running order at full level, your microphone with its processing,
+and every source you are catching. It does not need you to be on air or
+recording.
+
+Until now the only way was to point the main output at a cable, and that sends
+the pads and the beds and **nothing else**: your microphone and every captured
+program live on the mix that only exists while something is live. So the show
+and the send were two different mixes and the one going to the other program
+was missing the presenter.
+
+**It can leave one source out.** Broadcasting calls this mix minus. If you
+capture TeamTalk as a source and you are sending to TeamTalk, a send carrying
+everything hands TeamTalk its own audio back and everybody in the call hears
+themselves a moment late. Choose the source to leave out and everything else
+still goes. If that source is later renamed or removed, `Command+Shift+O` says
+so in as many words rather than letting a call full of echo be a mystery.
+
+**`Command+Shift+H` puts the send in your own headphones**, exactly as it is
+being handed over. A radio desk calls this a confidence feed. It goes to your
+monitor output only and can never find its way back into the send.
+
+**`Command+Shift+O` says whether it is arriving.** Where it is going, what it
+is leaving out, whether it has had to rebuffer, and whether your output is
+keeping up.
+
+**`Command+Shift+W` reads out where everything is going**, on or off air: which
+card your sounds play from, which card you listen on and whether it carries
+everything, where the show is being sent and what it is leaving out, and
+anything that is wrong with the arrangement. Three separate questions, one
+answer.
+
+**A card doing two jobs is refused, out loud.** Sharing one between the
+programme output and a bank means that card carries the show twice, which the
+far end hears as a strange hollowness rather than as an obvious fault. One
+sound card doing everything is still perfectly legal, because that is what
+almost every setup is.
+
+## Hear yourself through, which did nothing at all
+
+**Preferences, Microphone, Hear yourself through has existed since the
+microphone landed. It was saved, it was carried across a File Open, and
+nothing anywhere read it.** Monitoring came out of the main card every time. A
+setting that does nothing is worse than no setting, because somebody who
+cannot see it has no way to tell.
+
+It is a real output now. And with it real, **what you hear carries every
+card**: put a bank on a sound card of its own and you still hear it, through a
+bus that costs forty milliseconds on that one path and nothing at all on the
+ordinary one card setup.
+
+## Recording the picture, Command+Shift+R
+
+`Command+R` still records the sound alone. **`Command+Shift+R` records the
+picture and the sound together**, into one MP4, and neither needs you to be on
+air. It takes the same picture that would go out: if you are already live it
+uses the identical frames the stream is sending, which costs almost nothing
+and, more to the point, does not open the camera a second time.
+
+**The sound is the master clock and the picture is fitted to it**, counted in
+samples written to the file and never from a wall clock. A camera running slow
+has a frame repeated; one running fast has a frame skipped; neither can move
+the timeline.
+
+Three things in the streaming code are right for a socket and wrong for a
+file, and all three are different here. Frames are stamped as FRAMES at a time
+base of one over the frame rate, so the file is constant frame rate rather
+than the 33.312, 33.313 and 33.375 millisecond intervals milliseconds would
+give. A missing picture repeats the last frame rather than returning, because
+in a file that stalls the video timeline while the sound runs on. And the rate
+control is an AVERAGE bitrate rather than the constant one the stream uses,
+because a platform publishes a bitrate floor to pad up to and a file has none.
+
+**A crash costs the last second, not the recording.** The file is fragmented
+as it goes, so a three hour show that stops unexpectedly opens.
+
+## A .cue track list beside every recording
+
+Tyler McClain asked Windows for this and it arrives here at the same time.
+`Drop Deck Stream 004.mp3` now gets `Drop Deck Stream 004.cue` beside it,
+listing every running order track that went out and the moment it started.
+Both recording keys write one. Hand the pair to Mixcloud and the track list is
+already done.
+
+Timestamps come from the recording's own sample count, never a wall clock,
+because a machine that stalls makes the file shorter than the clock says. It
+is written and flushed as the show goes, so a show that stops unexpectedly
+keeps the track list for everything it got through. And pads are deliberately
+not in it: a track list with forty sound effects in it is not a track list.
+
+The format detail everybody gets wrong: `INDEX` is `mm:ss:ff` where `ff` is
+seventy fifths of a second, not hundredths, so half a second is 38 rather than
+50. **Python rounds halves to even and Swift rounds them away from zero**, so
+the Mac put a track one frame later than Windows did on every 150th of a
+second until the cross check caught it on its first run.
+
+## What is coming up, Command+Shift+C
+
+Everything ticked in the running order, top to bottom, draining as the show
+runs. `N` says the next three in one sentence. `Return` crosses into the track
+you are on. Your pads and every other key still work while it is open.
+
+**The row you are standing on never moves**, and that is the load bearing
+rule: removing the row under the cursor moves the selection, which is exactly
+the event a screen reader reads from, so it would stop mid sentence and read
+out a track you never chose, on air, at the moment a song changes. That one
+row is held until you arrow off it.
+
+## Holding a source back
+
+Darrell, a listener: "when using external audio sources, there is some lag
+there ... in obs, we can adjust the offset for the source, so it does not lag
+as much."
+
+A delay per source, in milliseconds, up to two seconds. It says plainly what
+it cannot do: it can only ever make a source **later**, so a card running
+behind the others is fixed by holding the others back. OBS works the same way
+and it surprises everybody once.
+
+## Opening a board brought most of it, not all of it
+
+**Not one of the twenty two video settings was carried across a File, Open.**
+From the day video landed in 3.5.2, opening a board loaded its picture, its
+colours, its platform and its stream size correctly and then threw every one
+of them away: you kept the PREVIOUS board's shot and the previous board's
+destination, and the only sign was on the air.
+
+The check that replaces it cannot fall behind: it builds a board with every
+property set to something that is not its default, copies it, and compares the
+two as the files they save as. A property left out fails it without anybody
+having to remember to add a line.
+
+## Also
+
+- **F1 had gone eight keys behind.** Every key the video work added in 3.5.0
+  and 3.5.2 was missing from it, which is the same rot Windows found. The list
+  is now half hand written chapters and half derived from the keys the app
+  really binds, and a check refuses a build where anything bound is missing
+  from it.
+- An unknown recording format used to become `.wav` quietly, so the first MP4
+  this app ever wrote would have gone into a file called `.wav`. Found by a new
+  check on its first run.
+- Both recording keys now say what is really in the file when they start,
+  including anything you can hear that is NOT on the air and therefore not in
+  it. Monitoring is what you hear; a recording takes the on air mix.
+- A recording that is losing audio says so. Nothing ever read that counter.
+- Changing any output device while sending would have stopped the other
+  program receiving audio, permanently and silently. It is the fault Windows
+  measured at 57.7 per cent of the audio missing, and it is fixed here before
+  anybody met it.
+- A send whose card has stopped no longer reports itself as running.
+- A send that a board file turns on at launch is announced, because a board
+  deciding to hand this machine's whole show to another program is not
+  something to discover later.
+- NaN or Infinity in a board file would have loaded as +24 dB, a sixteenfold
+  boost into somebody's call. It loads as 0.
+- A source you named "My microphone" no longer shadows the real one.
+- Preferences, Output now says what that output is and is not, because it is
+  the page somebody hunting for "how do I get Drop Deck into Zoom" reads first
+  and the answer is not on it.
+- `Command+Shift+A` and the rest are spelled Command before Shift everywhere
+  now. The manual and F1 have always said it that way and the code said the
+  other, which nothing noticed because the manual checker normalises both.
+
+585 checks, 0 failed. Twelve cross checks against the real Windows modules,
+byte for byte identical. `--check-send` is the proof of the cable, and
+`--dump-help` prints the F1 list so the derived half can be read rather than
+taken on trust.
+
 ## 3.7.1 for Windows, 11 September 2026
 
 **A .cue track list beside every recording.**

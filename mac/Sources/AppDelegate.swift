@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var goLiveItem: NSMenuItem!
     private var micItem: NSMenuItem!
     private var recordItem: NSMenuItem!
+    private var recordVideoItem: NSMenuItem!
+    private var sendItem: NSMenuItem!
+    private var sendMonitorItem: NSMenuItem!
+    private var virtualDeviceItem: NSMenuItem!
     private var globalHotkeyItem: NSMenuItem!
     private var loopItem: NSMenuItem!
     private var muteSourcesItem: NSMenuItem!
@@ -198,6 +202,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if ModalKeys.active(), let claim = ModalKeys.current, claim(event) {
                 return nil
             }
+
+            // The cue sheet is a WINDOW and not a panel, on purpose: the show
+            // is running, so every pad and every other key still has to work
+            // while it is open. It claims exactly two keys of its own, N and
+            // Return, and lets the rest fall through to the map below.
+            if let cue = self.main.cueWindow, cue.handle(event) { return nil }
 
             // Somebody is typing. The field editor is an NSTextView whatever
             // control it belongs to, so this one check covers every text field,
@@ -494,7 +504,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         air.addItem(.separator())
         recordItem = item("Start recording", .record, #selector(toggleRecording))
         air.addItem(recordItem)
+        recordVideoItem = item("Record the picture and the sound", .recordVideo,
+                               #selector(toggleVideoRecording))
+        air.addItem(recordVideoItem)
         air.addItem(plain("Open the recordings folder", #selector(openRecordings)))
+        air.addItem(.separator())
+        // The send. Four items, because the answer to "where is my audio
+        // going" is not one question: where it goes, whether it arrives,
+        // whether you can hear it, and where everything else goes too.
+        sendItem = item("Send this show to another program...", .sendSetup,
+                        #selector(sendSetup))
+        air.addItem(sendItem)
+        sendMonitorItem = item("Hear what is being sent", .sendMonitor,
+                               #selector(sendMonitor))
+        air.addItem(sendMonitorItem)
+        air.addItem(item("Is the send keeping up", .sendStatus, #selector(sendStatus)))
+        air.addItem(item("Where is everything going", .routing, #selector(sayRouting)))
+        virtualDeviceItem = item("Drop Deck Audio, the cable...", .virtualDevice,
+                                 #selector(virtualDevice))
+        air.addItem(virtualDeviceItem)
         air.addItem(.separator())
         air.addItem(item("Source control...", .sourceControl, #selector(sourceControl)))
         muteSourcesItem = item("Mute every source", .muteSources, #selector(muteSources))
@@ -625,6 +653,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         micItem?.title = main.mic.isOpen ? "Microphone off" : "Microphone on"
         micItem?.state = main.mic.isOpen ? .on : .off
         recordItem?.title = main.recorder.isRecording ? "Stop recording" : "Start recording"
+        recordVideoItem?.title = main.videoRecorder.isRecording
+            ? "Stop recording the picture" : "Record the picture and the sound"
+        // The On air menu says whether you are sending AND whether you are
+        // hearing it, because those are two states you cannot see and the
+        // second one explains an echo in your own headphones.
+        sendItem?.title = main.sending
+            ? "Stop sending this show" : "Send this show to another program..."
+        sendItem?.state = main.sending ? .on : .off
+        sendMonitorItem?.isEnabled = main.send != nil
+        sendMonitorItem?.state = (main.send?.confidence.on ?? false) ? .on : .off
+        // The menu says whether the cable is there, because that is the one
+        // thing somebody opening this menu wants to know about it.
+        virtualDeviceItem?.title = VirtualDevice.isPresent
+            ? (VirtualDevice.needsUpdating
+               ? "Drop Deck Audio, update the cable..."
+               : "Drop Deck Audio, the cable is installed...")
+            : "Drop Deck Audio, install the cable..."
+        virtualDeviceItem?.state = VirtualDevice.isPresent ? .on : .off
         globalHotkeyItem?.state = main.hotkeys.enabled ? .on : .off
         let sources = main.sourceGroup.all
         let allMuted = !sources.isEmpty && sources.allSatisfy { $0.config.muted }
@@ -734,6 +780,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleMic() { main.toggleMic(); refreshAirMenu() }
     @objc func micSettings() { main.showPreferences(tab: "Microphone") }
     @objc func toggleRecording() { main.toggleRecording(); refreshAirMenu() }
+    @objc func toggleVideoRecording() { main.toggleVideoRecording(); refreshAirMenu() }
+    @objc func sendSetup() { main.toggleSend(); refreshAirMenu() }
+    @objc func sendMonitor() { main.toggleSendMonitor(); refreshAirMenu() }
+    @objc func sendStatus() { main.saySendStatus() }
+    @objc func sayRouting() { main.sayRouting() }
+    @objc func cueSheet() { main.showCueSheet() }
+    @objc func virtualDevice() { main.showVirtualDevice(); refreshAirMenu() }
     @objc func openRecordings() { main.openRecordingsFolder() }
     @objc func sourceControl() { main.showSourceControl() }
     @objc func videoSource() { main.showVideoSource() }

@@ -23,21 +23,47 @@ final class MixerGroup {
 
     /// The presenter's headphones when one is set, the ordinary output when it
     /// is not. A cue is for the person running the show.
-    var monitorMixer: Mixer { primary }
+    ///
+    /// **Until 3.7.1 this returned the main output whatever the board said.**
+    /// Preferences has offered "Hear yourself through" since the microphone
+    /// landed, it was saved, it was carried across a File Open, and nothing
+    /// anywhere read it: monitoring came out of the main card every time. A
+    /// setting that does nothing is worse than no setting, because somebody
+    /// who cannot see it has no way to tell.
+    var monitorMixer: Mixer { monitor ?? primary }
+
+    /// The card the presenter listens on, when it is not one of the cards the
+    /// show is already coming out of.
+    private(set) var monitor: Mixer?
+    private(set) var monitorUID: String?
+
+    /// Does the monitor carry every card's show, or only what is routed to it.
+    ///
+    /// On by default. With one sound card it costs nothing at all: there are no
+    /// other mixers, so there is no bus, no ring and no added latency anywhere
+    /// near the path between a key and a sound.
+    private(set) var monitorEverything = true
+    private var monitorBus: AirBus?
 
     var isRunning: Bool { mixers.values.contains { $0.isRunning } }
     var lastError: String? { primary?.lastError ?? mixers.values.compactMap(\.lastError).first }
     var sampleRate: Double { primary?.sampleRate ?? C.defaultSampleRate }
 
-    init(mainDeviceUID: String?, bankDevices: [Int: String]) {
+    init(mainDeviceUID: String?, bankDevices: [Int: String],
+         monitorDeviceUID: String? = nil, monitorEverything: Bool = true) {
         cache = DecodeCache(rate: C.defaultSampleRate)
-        rebuild(mainDeviceUID: mainDeviceUID, bankDevices: bankDevices)
+        self.monitorEverything = monitorEverything
+        rebuild(mainDeviceUID: mainDeviceUID, bankDevices: bankDevices,
+                monitorDeviceUID: monitorDeviceUID)
     }
 
-    func rebuild(mainDeviceUID: String?, bankDevices: [Int: String]) {
+    func rebuild(mainDeviceUID: String?, bankDevices: [Int: String],
+                 monitorDeviceUID: String? = nil) {
         stop()
         mixers.removeAll()
         bankMixer.removeAll()
+        monitor = nil
+        monitorUID = monitorDeviceUID
 
         let mainKey = mainDeviceUID ?? "default"
         let main = Mixer(key: mainKey, deviceUID: mainDeviceUID,
@@ -59,6 +85,89 @@ final class MixerGroup {
                 bankMixer[bank] = m
             }
         }
+        wireMonitorMixer(monitorDeviceUID)
+    }
+
+    /// Give the presenter's own card a mixer, making one if the show is not
+    /// already coming out of it.
+    ///
+    /// A monitor card that is ALSO a bank card is not a second mixer: it is
+    /// that one. Two mixers on one device is two output streams fighting over
+    /// the same hardware, which is the one arrangement Core Audio will let you
+    /// build and will not let you hear.
+    private func wireMonitorMixer(_ uid: String?) {
+        guard let uid, !uid.isEmpty else { monitor = nil; return }
+        if let existing = mixers[uid] { monitor = existing; return }
+        let m = Mixer(key: uid, deviceUID: uid, sampleRate: C.defaultSampleRate,
+                      duckBus: duckBus, cache: cache)
+        mixers[uid] = m
+        monitor = m
+    }
+
+    /// Give the card the presenter listens on every other card's show.
+    ///
+    /// One bus, written by every mixer except the monitor's own and drained by
+    /// that one. The monitor mixer is left out of its own bus for the obvious
+    /// reason: what it plays already comes out of the card it is playing on,
+    /// and putting it through the ring as well would be a second copy of itself
+    /// a few milliseconds late.
+    ///
+    /// **With one sound card this does nothing at all**, which is the ordinary
+    /// case: there are no other mixers, so there is no bus, no ring and no
+    /// added latency on the path between a key and a sound.
+    func wireMonitor() {
+        for m in mixers.values { m.monitorTap = nil; m.monitorFeed = nil }
+        monitorBus = nil
+        guard monitorEverything, let listening = monitor ?? primary else { return }
+        let others = mixers.values.filter { $0 !== listening }
+        guard !others.isEmpty else { return }
+        let bus = AirBus(sampleRate: listening.sampleRate,
+                         seconds: C.monitorRingSeconds)
+        monitorBus = bus
+        listening.monitorFeed = bus
+        for m in others { m.monitorTap = bus }
+    }
+
+    /// Turn the full programme monitor on or off, and rewire. True if it moved.
+    @discardableResult
+    func setMonitorEverything(_ on: Bool) -> Bool {
+        guard on != monitorEverything else { return false }
+        monitorEverything = on
+        wireMonitor()
+        return true
+    }
+
+    /// Times the monitor feed ran dry. A monitoring fault, never an air one.
+    var monitorGaps: Int { mixers.values.reduce(0) { $0 + $1.monitorGaps } }
+
+    // ------------------------------------------------------------ the send ---
+
+    /// Where the whole show goes for another program on this machine, or nil.
+    /// Set on EVERY mixer, because a bank on its own card is part of the show.
+    var sendTap: ProgramTap? {
+        get { primary?.sendTap }
+        set { for m in mixers.values { m.sendTap = newValue } }
+    }
+
+    /// The one source the send leaves out. Only the mixer holding the sources
+    /// can act on it, but it is set everywhere so nothing has to know which.
+    var sendMinus: String? {
+        get { primary?.sendMinus }
+        set { for m in mixers.values { m.sendMinus = newValue } }
+    }
+
+    // ------------------------------------------------- are they keeping up ---
+
+    var lateBlocks: Int { mixers.values.reduce(0) { $0 + $1.lateBlocks } }
+
+    /// The worst answer any of the outputs gives, because one card stuttering
+    /// is the whole show stuttering as far as a listener is concerned.
+    func keepingUp() -> (Bool, String) {
+        for m in mixers.values {
+            let (ok, why) = m.keepingUp()
+            if !ok { return (false, why) }
+        }
+        return (true, "keeping up")
     }
 
     func start() {
@@ -72,6 +181,9 @@ final class MixerGroup {
         if let rate = primary?.sampleRate, cache.rate != rate {
             cache.clear(newRate: rate)
         }
+        // After `start`, because the ring is sized from the rate the card
+        // really answered with rather than the one that was guessed.
+        wireMonitor()
     }
 
     func stop() {

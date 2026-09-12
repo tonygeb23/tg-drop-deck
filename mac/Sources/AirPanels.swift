@@ -154,6 +154,8 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private var gainSlider: NSSlider!
     private var onAirBox: NSButton!
     private var monitorBox: NSButton!
+    private var delaySlider: NSSlider!
+    private var delayReadout: NSTextField!
 
     private var devices: [AudioDeviceInfo] = []
     private var programs: [AudioProcessInfo] = []
@@ -300,6 +302,38 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         monitorBox.frame = NSRect(x: 310, y: 30, width: 250, height: 22)
         box.addSubview(monitorBox)
 
+        // Holding a source back. Darrell, a listener, 10 September 2026, on a
+        // capture card: "in obs, we can adjust the offset for the source, so it
+        // does not lag as much."
+        //
+        // Everything above is laid out by hand against the bottom of the box,
+        // so a new row at the bottom means moving all of it. One nudge here
+        // rather than thirty numbers edited by hand, which is the version of
+        // this that gets one of them wrong and clips a control off the window.
+        box.setFrameSize(NSSize(width: 620, height: 452))
+        for view in box.subviews { view.frame.origin.y += 32 }
+        label("Hold this one back, in milliseconds", 4)
+        delaySlider = NSSlider(value: 0, minValue: 0,
+                               maxValue: Double(C.maxSourceDelayMS),
+                               target: self, action: #selector(fieldChanged))
+        delaySlider.frame = NSRect(x: 220, y: 0, width: 240, height: 24)
+        delaySlider.numberOfTickMarks = 21
+        delaySlider.allowsTickMarkValuesOnly = false
+        // **The label says what it cannot do, because the control cannot.** It
+        // can only ever make a source LATER: nothing can make live audio arrive
+        // earlier than it does, so a source running BEHIND is corrected by
+        // holding the others back instead. OBS works the same way and it
+        // surprises everybody once.
+        delaySlider.setAccessibilityLabel("Hold this one back, in milliseconds. "
+            + "It can only ever make a source later. If this one is running "
+            + "behind the others, hold the others back instead")
+        box.addSubview(delaySlider)
+        delayReadout = NSTextField(labelWithString: "")
+        delayReadout.frame = NSRect(x: 470, y: 4, width: 140, height: 16)
+        delayReadout.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        delayReadout.textColor = .secondaryLabelColor
+        box.addSubview(delayReadout)
+
         alert.accessoryView = box
         if !working.isEmpty {
             table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -318,7 +352,8 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private func loadSelection() {
         let enabled = selected >= 0 && selected < working.count
         let controls: [NSControl] = [nameField, kindPopup, devicePopup, programPopup,
-                                     channelPopup, gainSlider, onAirBox, monitorBox]
+                                     channelPopup, gainSlider, onAirBox, monitorBox,
+                                     delaySlider]
         for control in controls { control.isEnabled = enabled }
         guard enabled else {
             nameField.stringValue = ""
@@ -341,9 +376,20 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         gainSlider.doubleValue = Double(c.gainDB)
         onAirBox.state = c.onAir ? .on : .off
         monitorBox.state = c.monitor ? .on : .off
+        delaySlider.doubleValue = c.delayMS
+        sayDelay(c.delayMS)
         devicePopup.isEnabled = !c.isProcess
         programPopup.isEnabled = c.isProcess
         channelPopup.isEnabled = !c.isProcess
+    }
+
+    /// The delay in words beside the slider. Zero is "not held back at all"
+    /// rather than "0 ms", because zero is the ordinary state and a number
+    /// invites somebody to wonder what is wrong with it.
+    private func sayDelay(_ ms: Double) {
+        delayReadout?.stringValue = ms <= 0
+            ? "not held back"
+            : "\(Int(ms)) ms later"
     }
 
     @objc private func fieldChanged() {
@@ -369,6 +415,8 @@ final class SourcesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         c.gainDB = Float(gainSlider.doubleValue.rounded())
         c.onAir = onAirBox.state == .on
         c.monitor = monitorBox.state == .on
+        c.delayMS = delaySlider.doubleValue.rounded()
+        sayDelay(c.delayMS)
         working[selected] = c
         devicePopup.isEnabled = !c.isProcess
         programPopup.isEnabled = c.isProcess

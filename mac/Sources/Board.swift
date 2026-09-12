@@ -139,6 +139,32 @@ final class Board {
     /// has its own idents.
     let drops = DropLibrary()
 
+    // -------------------------------- sending the show to another program ---
+    //
+    // Off until it is set up. This is the ON AIR MIX out of a sound card, and
+    // not one more place the pads can be routed to: the main output carries
+    // the pads, the beds and the running order, and the microphone and every
+    // captured source live on the air mix. See Send.swift.
+
+    var sendOn = false
+    /// The Windows spelling, so a person reading the file on either machine
+    /// sees the card's name. The Mac resolves by UID, beside it.
+    var sendDeviceName: String?
+    var sendDeviceUID: String?
+    var sendGainDB: Float = 0
+    /// The NAME of the one source the send leaves out. Mix minus: a send to
+    /// TeamTalk must not carry the TeamTalk capture, or everybody in the call
+    /// hears themselves. By name rather than by index, because a source list
+    /// gets reordered and an index would silently start excluding somebody
+    /// else.
+    var sendMinus = ""
+    /// Whether the presenter is listening to the send. **Deliberately not
+    /// saved**: it is a confidence check you do during a show, like a mute, and
+    /// coming back tomorrow to a second copy of everything in your headphones
+    /// is worse than pressing the key again. Same as the Windows copy, and the
+    /// same rule as the microphone never opening itself at launch.
+    var sendMonitor = false
+
     /// Everything in the saved file this build did not recognise.
     private var unknown: [String: Any] = [:]
 
@@ -285,6 +311,15 @@ final class Board {
         d["playlist_monitor_only"] = playlistMonitorOnly
         d["sources"] = sources.map { $0.toDict() }
 
+        // The send. `send_device_hostapi` is Windows's half of naming a card
+        // and is deliberately absent here, so it stays in `unknown` and goes
+        // back out untouched for the machine that wrote it.
+        d["send_on"] = sendOn
+        d["send_device_name"] = sendDeviceName as Any? ?? NSNull()
+        d["send_gain_db"] = Double(sendGainDB)
+        d["send_minus"] = sendMinus
+        d["mac_send_device_uid"] = sendDeviceUID as Any? ?? NSNull()
+
         // The video half. Written whether or not this board has ever been on
         // a video platform, because a Windows copy reading this file expects
         // the keys to be there and falls back to ITS defaults when they are
@@ -397,6 +432,8 @@ final class Board {
             "mac_mic_device_uid", "mac_mic_output_uid", "mic_device_name",
             "mic_gain_db", "mic_monitor", "mic_channel", "voice_on", "voice_settings",
             "global_hotkeys_on", "playlist_monitor_only", "sources",
+            "send_on", "send_device_name", "send_gain_db", "send_minus",
+            "mac_send_device_uid",
             "stream_server", "stream_host", "stream_port", "stream_mount",
             "stream_user", "stream_password", "stream_format", "stream_bitrate",
             "stream_name", "stream_description", "stream_genre", "stream_url",
@@ -479,6 +516,23 @@ final class Board {
         if let rows = dict["sources"] as? [[String: Any]] {
             b.sources = rows.compactMap { SourceConfig.fromDict($0) }
         }
+
+        // The send. Every value clamped or whitelisted on the way in, the same
+        // as everything else here: a board file arrives from anywhere and the
+        // gain ends up multiplying somebody's call.
+        b.sendOn = dict["send_on"] as? Bool ?? false
+        b.sendDeviceName = dict["send_device_name"] as? String
+        b.sendDeviceUID = dict["mac_send_device_uid"] as? String
+        if let v = dict["send_gain_db"] as? Double, v.isFinite {
+            // NaN and Infinity are the reason this is not a bare cast. On
+            // Windows they loaded as +24 dB, a sixteenfold boost into
+            // somebody's call, because the clamp was written as a comparison
+            // and every comparison against NaN is false.
+            b.sendGainDB = Float(min(Double(C.maxMicGainDB), max(Double(C.minMicGainDB), v)))
+        } else {
+            b.sendGainDB = 0
+        }
+        b.sendMinus = dict["send_minus"] as? String ?? ""
         if let v = dict["stream_server"] as? String, C.streamServers.contains(v) {
             b.stream.server = v
         }
@@ -880,6 +934,42 @@ final class Board {
         playlistMonitorOnly = other.playlistMonitorOnly
         sources = other.sources
         globalHotkeysOn = other.globalHotkeysOn
+
+        // The video half. **Not one of these was here until 3.7.1**, so from
+        // the day video landed, File, Open loaded a board's picture, colours,
+        // platform and stream size correctly and then threw every one of them
+        // away: you kept the PREVIOUS board's shot and the previous board's
+        // destination, and the only sign was on the air. This is the bug this
+        // method's own comment warns about, in the code the comment is on.
+        askBeforeLive = other.askBeforeLive
+        videoServer = other.videoServer
+        videoHost = other.videoHost
+        videoKey = other.videoKey
+        liveTo = other.liveTo
+        picture = other.picture
+        pictureFile = other.pictureFile
+        pictureClock = other.pictureClock
+        camera = other.camera
+        screen = other.screen
+        splitCorner = other.splitCorner
+        textPlaces = other.textPlaces
+        colourBackground = other.colourBackground
+        colourText = other.colourText
+        colourAccent = other.colourAccent
+        visionProvider = other.visionProvider
+        visionModel = other.visionModel
+        videoWidth = other.videoWidth
+        videoHeight = other.videoHeight
+        videoFPS = other.videoFPS
+        videoBitrate = other.videoBitrate
+        framingLevel = other.framingLevel
+
+        // The send. `sendMonitor` is deliberately absent: it is never saved.
+        sendOn = other.sendOn
+        sendDeviceName = other.sendDeviceName
+        sendDeviceUID = other.sendDeviceUID
+        sendGainDB = other.sendGainDB
+        sendMinus = other.sendMinus
         playlist.tracks = other.playlist.tracks
         playlist.crossfade = other.playlist.crossfade
         drops.replace(with: other.drops)

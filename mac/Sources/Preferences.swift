@@ -42,6 +42,16 @@ extension MainWindow {
             "Leave a bank on the main output unless you want it on a separate channel of "
             + "your mixer. Ducking still works across outputs, and so does the stream: the "
             + "encoder takes the sum of everything whatever card it went to."))
+        // Said HERE, under the control it is about, because this is the page
+        // somebody hunting for "how do I get Drop Deck into Zoom" reads first,
+        // and the answer is not on it. The Windows copy's version of this note
+        // claimed the opposite outright until 3.6.1.
+        outputBox.addArrangedSubview(note(
+            "This is where your SOUNDS play, and it is not the whole show: your "
+            + "microphone and every source you are catching live on the on air mix "
+            + "rather than on this output. To give TeamTalk, Zoom or OBS the whole "
+            + "show, use On air, Send this show to another program, Option+Shift+O. "
+            + "Command+Shift+W reads out where everything is going."))
 
         var bankPopups: [Int: NSPopUpButton] = [:]
         for bank in 1...C.bankCount {
@@ -795,7 +805,14 @@ extension MainWindow {
         board.micGainDB = Float(micGain.doubleValue.rounded())
         board.micMonitor = micMonitorBox.state == .on
         let micOut = micOutputPopup.indexOfSelectedItem
-        board.micOutputUID = micOut == 0 ? nil : outputs[micOut - 1].uid
+        let newMonitorUID = micOut == 0 ? nil : outputs[micOut - 1].uid
+        if newMonitorUID != board.micOutputUID {
+            board.micOutputUID = newMonitorUID
+            // The card you listen on is a real output now, so changing it
+            // rebuilds the group exactly as changing the main output does.
+            // Until 3.7.1 this setting was saved and never read.
+            deviceChanged = true
+        }
         mic.gainDB = board.micGainDB
         mic.channel = board.micChannel
         mic.monitorWanted = board.micMonitor
@@ -841,13 +858,29 @@ extension MainWindow {
         group.apply(board)
         if deviceChanged {
             group.stopAll(fadeOut: 0.0)
-            group.rebuild(mainDeviceUID: board.deviceUID, bankDevices: board.bankDevices)
+            group.rebuild(mainDeviceUID: board.deviceUID,
+                          bankDevices: board.bankDevices,
+                          monitorDeviceUID: board.micOutputUID)
             group.apply(board)
             group.start()
             group.primary.airSource = sourceGroup
-            group.primary.monitorSource = sourceMonitor
+            group.monitorMixer.monitorSource = sourceMonitor
             for m in group.mixers.values { m.playlistMonitorOnly = board.playlistMonitorOnly }
             group.warmCache(board)
+            // **The send has to be put back, and this is the line Windows was
+            // missing.** Rebuilding makes new mixers, and a new mixer has no
+            // send tap on it, so changing any output device while sending
+            // stopped the other program receiving audio and never started it
+            // again until the send was switched off and on. Recorded off a
+            // real cable there: 57.7 per cent of the audio missing, one gap
+            // 8.4 seconds long and still going, with nothing anywhere saying
+            // so. The send is restarted rather than merely re-pointed, because
+            // its own card may be one of the ones that just moved.
+            if sending {
+                startSend(quiet: true)
+            } else {
+                syncSend()
+            }
         }
         if schemeChanged { refreshAllPads() }
         playlistView.refresh(rowsChanged: false)

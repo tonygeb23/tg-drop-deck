@@ -32,6 +32,16 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     var sourceMonitor: SourceMonitor!
     let recorder = Recorder()
     let streamer = Streamer()
+    /// The picture and the sound together, into one MP4. A second recorder
+    /// rather than a mode on the first: they write different files, they can
+    /// run at the same time, and only one of them has a clock to keep.
+    let videoRecorder = VideoRecorder()
+    /// What is coming up, when that window is open. Nil otherwise.
+    var cueWindow: CueSheetWindow?
+    /// The show, out of a sound card, for another program on this machine.
+    /// Nil until Option+Shift+O sets one up. It is not a mode on the streamer:
+    /// it does not need anything to be live and it has a bus of its own.
+    var send: Send?
     /// The video half. A second streamer rather than a mode on the first,
     /// because Icecast and RTMP divide the work differently: one makes bytes
     /// and something else owns the socket, the other is a session that owns
@@ -80,7 +90,9 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     init(board: Board) {
         self.board = board
         KeyMap.scheme = board.bankScheme
-        group = MixerGroup(mainDeviceUID: board.deviceUID, bankDevices: board.bankDevices)
+        group = MixerGroup(mainDeviceUID: board.deviceUID,
+                           bankDevices: board.bankDevices,
+                           monitorDeviceUID: board.micOutputUID)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1040, height: 720),
@@ -160,10 +172,28 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         // would take the same audio away from each other and a voice would
         // arrive in pieces.
         group.primary.airSource = sourceGroup
-        group.primary.monitorSource = sourceMonitor
+        // Monitoring goes to the card the presenter listens on, which is NOT
+        // always the main output. See MixerGroup.monitorMixer.
+        group.monitorMixer.monitorSource = sourceMonitor
         for m in group.mixers.values { m.playlistMonitorOnly = board.playlistMonitorOnly }
         announceSourceTrouble(
             sourceGroup.replace(with: board.sources, outputRate: group.sampleRate))
+        // A send the board says was on comes back on, and IS ANNOUNCED. A
+        // board file deciding that this machine is handing its whole show to
+        // another program is not something to discover later, so it is said out
+        // loud at startup rather than left to be noticed.
+        if board.sendOn {
+            if startSend(quiet: true) {
+                speaker.announce("This board turns on a send: the whole show is "
+                    + "going to \(send?.describe() ?? "another program") for another "
+                    + "program to pick up. Option+Shift+O changes it, "
+                    + "Command+Shift+O says how it is doing.")
+            } else {
+                speaker.announce("This board turns on a send to "
+                    + "\(board.sendDeviceName ?? "another program") and it would not "
+                    + "open, so nothing is being sent.")
+            }
+        }
         if board.globalHotkeysOn { armGlobalHotkeys(announce: false) }
         group.warmCache(board)
         updateStatusLine()

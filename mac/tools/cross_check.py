@@ -78,6 +78,14 @@ SOURCES = {
                 "Overlay.swift"],
     "framing": ["Constants.swift", "KeyMap.swift", "Colours.swift",
                 "Framing.swift"],
+    "routing": ["Constants.swift", "KeyMap.swift", "Colours.swift",
+                "Routing.swift"],
+    # CueFile.swift reads no constants at all, which is why it needs nothing
+    # beside it. Keep it that way: it is the one module a recording writes to
+    # while a show is going out.
+    "cuefile": ["CueFile.swift"],
+    "cuesheet": ["Constants.swift", "KeyMap.swift", "Colours.swift",
+                 "CueSheet.swift"],
     "shotcheck": ["Constants.swift", "KeyMap.swift", "Colours.swift",
                   "Secrets.swift", "Overlay.swift", "Picture.swift",
                   "Camera.swift", "Screen.swift", "Permissions.swift",
@@ -89,7 +97,7 @@ SOURCES = {
                    "StreamOut.swift", "AirBus.swift", "MixerGroup.swift",
                    "AudioFile.swift", "DSP.swift", "Engine.swift",
                    "Mixer.swift", "AudioDevices.swift", "CueTone.swift",
-                   "M3U.swift", "Speech.swift", "InputUnit.swift",
+                   "M3U.swift", "Speech.swift", "InputUnit.swift", "CueFile.swift",
                    "MicInput.swift", "PlaylistPlayer.swift", "Recorder.swift",
                    "SoundButton.swift", "GlobalHotkeys.swift", "Feedback.swift",
                    "AppUpdate.swift", "StreamServers.swift", "Preflight.swift",
@@ -117,6 +125,17 @@ SOURCES = {
 #: the whole checking apparatus where the two copies are allowed to disagree,
 #: and a list that grows without reasons is how a port drifts.
 EXPECTED = {
+    "routing": [
+        ("so it will follow whatever Windows is using",
+         "so it will follow whatever macOS is using",
+         "the name of the operating system whose default output it would "
+         "follow. Naming Windows on a Mac would be simply false"),
+    ],
+    "cuesheet": [
+        ("Ctrl+Shift+P", "Command+Shift+P",
+         "the key that goes to the running order. KeyMap moved it: VoiceOver "
+         "owns Control+Option"),
+    ],
     "preflight": [
         ("Ctrl+M", "Command+M",
          "the microphone key. KeyMap moved it: VoiceOver owns Control+Option"),

@@ -62,6 +62,30 @@ final class PlaylistPlayer {
         return max(0, end - voice.positionSeconds)
     }
 
+    /// How long the track on air has been on air, in seconds.
+    ///
+    /// **From the voice's own position and never from a wall clock**, for the
+    /// same reason every other clock in this app is: it is the audio that has
+    /// really played. The cue sheet's ten second grace is measured against it.
+    var playedFor: Double {
+        guard isPlaying, let voice else { return 0 }
+        return max(0, voice.positionSeconds)
+    }
+
+    /// The next item that will really play, stepping over unticked ones and
+    /// ones whose file has gone, exactly as a handover does.
+    var nextTrack: Track? {
+        guard let at = playlist.nextPlaying(after: index) else { return nil }
+        return playlist.tracks.indices.contains(at) ? playlist.tracks[at] : nil
+    }
+
+    /// How long until the next one starts, which is not the same as how long is
+    /// left: a crossfade means the next one begins before this one ends.
+    var untilHandover: Double {
+        guard let left = remaining else { return 0 }
+        return max(0, left - playlist.handoverAt(index))
+    }
+
     private func nextDeck() -> Int {
         deck = 1 - deck
         return C.playlistDecks[deck]
