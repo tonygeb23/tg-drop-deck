@@ -1,5 +1,7 @@
 # Mac pickup: what Windows 3.10.0 changed, and the Mac reports since October
 
+**Mac status:** Items 1 to 5 done on the Mac in Mac 3.10.0, 16 November 2026; item 6 checked and needed nothing. Item 2 is only partly answered: one real cause (AAC named .mp3 is misread by macOS) is fixed, and Raymond's own files are still needed. Not released until Tony says so.
+
 Written on Windows, 16 November 2026. **Nothing under `mac/` was touched**
 (the platform rule in CLAUDE.md). This is the list for the next Mac session,
 done on the Mac. Windows details: CHANGELOG.md, 3.10.0 for Windows, and

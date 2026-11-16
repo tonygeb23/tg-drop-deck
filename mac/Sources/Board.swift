@@ -33,6 +33,12 @@ final class Board {
     }
     var dirty = false
 
+    /// What `findBeside` repaired by guessing. See `Guesses`.
+    var guessed = Guesses()
+    /// How many missing sounds opening this board found beside it, for the
+    /// Loaded line and the startup line.
+    var foundBeside = 0
+
     /// What the file at `path` looked like when this board last read or
     /// wrote it, or what was there when the path was claimed without reading
     /// it. See `changedOnDisk`. Nil means nothing is known, and nothing known
@@ -447,7 +453,17 @@ final class Board {
         if files.fileExists(atPath: dest) && !files.isWritableFile(atPath: dest) {
             throw BoardSaveError.readOnly
         }
-        let data = try JSONSerialization.data(withJSONObject: toDict(),
+        // **A sound in the board's own folder, or under it, is written
+        // relative to the board, with forward slashes** (Windows 3.9.0), so a
+        // board kept with its sounds in a cloud folder opens on every
+        // computer that folder reaches. Without it a Mac save turned a
+        // portable board back into a Mac only one. Anything elsewhere keeps
+        // its full path, and a guess from `findBeside` is never written.
+        let base = (dest as NSString).deletingLastPathComponent
+        let written = BoardPaths.mapSoundPaths(restoreGuesses(toDict())) {
+            BoardPaths.portable($0, base: base)
+        }
+        let data = try JSONSerialization.data(withJSONObject: written,
                                               options: [.prettyPrinted, .sortedKeys])
         // Write beside the target then swap, so a crash mid save cannot leave a
         // half written board where the real one used to be. Dropbox holds a
@@ -668,6 +684,15 @@ final class Board {
         let board = Board.from(dict: dict, relativeTo: (path as NSString).deletingLastPathComponent)
         board.path = path
         board.disk = .stamp(stamp)
+        // A board carried to another computer usually has its sounds right
+        // beside it. Looked for before anybody is asked to relink by hand,
+        // bounded, and never written down. Counted as what stopped being
+        // missing, so the drops, which are strings, are counted too.
+        let before = board.missingCount
+        if before > 0 {
+            board.findBeside()
+            board.foundBeside = before - board.missingCount
+        }
         return .success(board)
     }
 
@@ -919,9 +944,11 @@ final class Board {
                 slot.board = b
                 // A board may store paths relative to itself, which is how the
                 // shipped demo resolves wherever the app lands.
-                if let p = slot.filepath, !p.isEmpty, !(p as NSString).isAbsolutePath,
-                   let folder {
-                    slot.filepath = (folder as NSString).appendingPathComponent(p)
+                // **Relative on EITHER system** (3.10.0): a Windows drive or
+                // share is somebody's absolute path, not one to join onto the
+                // board's folder, which gave "<folder>/G:\My Drive\...".
+                if let p = slot.filepath, BoardPaths.isRelative(p), let folder {
+                    slot.filepath = BoardPaths.resolve(p, folder: folder)
                 }
                 b.slots[i] = slot
             }
@@ -1175,6 +1202,138 @@ final class Board {
     // ------------------------------------------------------------ describing ---
 
     var missingSlots: [Slot] { slots.filter { $0.isMissing } }
+
+    /// Every sound this board cannot find: pads, running order and drops.
+    /// "Loaded, 20 sounds" counted the pads alone, so a board whose whole
+    /// running order was missing opened without a word about it. That is
+    /// how Ali Moosa's playlist went missing in silence.
+    var missingCount: Int {
+        missingSlots.count + playlist.missing.count + drops.missing.count
+    }
+
+    // ------------------------------------------------------ relinking ---
+
+    /// Repair what is missing out of `index`. The number repaired.
+    ///
+    /// Pads match by file name and, with `filesForFolders`, by name without
+    /// its extension, as Windows has always done; a pad that held a folder is
+    /// repaired only with a folder. The running order and the drops match by
+    /// file name. Every name is taken after EITHER slash, which is the whole
+    /// of Siena's "16 sounds still missing".
+    @discardableResult
+    func relinkFrom(_ index: BoardPaths.Index, filesForFolders: Bool = true) -> Int {
+        var repaired = playlist.relink(using: index.files).count
+        repaired += drops.relink(using: index.files).count
+        for slot in missingSlots {
+            let base = BoardPaths.basename(slot.filepath)
+            let stem = (base as NSString).deletingPathExtension
+            let found: String?
+            if slot.folderCount != nil {
+                found = index.folders[base.lowercased()]
+            } else if filesForFolders {
+                found = index.files[base.lowercased()] ?? index.files[stem.lowercased()]
+            } else {
+                // Exact names only. A pad saved with no folder count may have
+                // been a folder, so a name with no extension is not matched to
+                // a file at all.
+                found = (base as NSString).pathExtension.isEmpty ? nil : index.files[base.lowercased()]
+            }
+            guard let found else { continue }
+            slot.filepath = found
+            if slot.folderCount != nil || slot.isFolder {
+                slot.scanFolder(force: true)
+            } else if slot.duration == nil {
+                slot.duration = AudioFile.probe(found)?.duration
+            }
+            repaired += 1
+        }
+        return repaired
+    }
+
+    /// A relink somebody asked for, out of a folder they chose. What it finds
+    /// is no longer a guess, so it is written down like any other path.
+    @discardableResult
+    func relink(using index: BoardPaths.Index) -> Int {
+        guessed.clear()
+        let repaired = relinkFrom(index)
+        if repaired > 0 { dirty = true }
+        return repaired
+    }
+
+    /// Repair what is missing out of the board's own folder, in memory.
+    ///
+    /// Windows' `find_beside`, and its three rules (Mark, 16 October 2026).
+    /// **It is a guess, so it is never written down**: `save` puts the
+    /// original path back and the board is not marked changed. **Exact file
+    /// names only**: no name without its extension, which turned a missing
+    /// applause.wav into a different applause.flac, and no file for a folder.
+    /// **Never longer than the bound**, whatever the disk does.
+    @discardableResult
+    func findBeside() -> Int {
+        guard let path, missingCount > 0 else { return 0 }
+        let folder = (path as NSString).deletingLastPathComponent
+        guard let index = BoardPaths.indexWithin(
+            C.besideSearchSeconds + 0.5, folder, depth: C.besideSearchDepth,
+            seconds: C.besideSearchSeconds, entries: C.besideSearchEntries) else { return 0 }
+        let wasDirty = dirty
+        var before: [ObjectIdentifier: String] = [:]
+        for slot in slots { if let p = slot.filepath { before[ObjectIdentifier(slot)] = p } }
+        for track in playlist.tracks { before[ObjectIdentifier(track)] = track.filepath }
+        let dropsBefore = drops.paths
+        let repaired = relinkFrom(index, filesForFolders: false)
+        for slot in slots {
+            let id = ObjectIdentifier(slot)
+            if let was = before[id], let now = slot.filepath, was != now {
+                guessed.items[id] = (now, was)
+            }
+        }
+        for track in playlist.tracks {
+            let id = ObjectIdentifier(track)
+            if let was = before[id], was != track.filepath {
+                guessed.items[id] = (track.filepath, was)
+            }
+        }
+        for (at, pair) in zip(dropsBefore, drops.paths).enumerated() where pair.0 != pair.1 {
+            guessed.drops[at] = (pair.1, pair.0)
+        }
+        dirty = wasDirty
+        return repaired
+    }
+
+    /// The board file's own paths put back over `findBeside`'s guesses, only
+    /// where the item still holds the guess: anything reassigned or relinked
+    /// since is somebody's decision and is written as it is.
+    func restoreGuesses(_ data: [String: Any]) -> [String: Any] {
+        guard !guessed.isEmpty else { return data }
+        var out = data
+        if var rows = data["slots"] as? [[String: Any]] {
+            for (at, slot) in slots.enumerated() where at < rows.count {
+                if let held = guessed.items[ObjectIdentifier(slot)],
+                   rows[at]["filepath"] as? String == held.guess {
+                    rows[at]["filepath"] = held.original
+                }
+            }
+            out["slots"] = rows
+        }
+        if var pl = data["playlist"] as? [String: Any], var rows = pl["tracks"] as? [[String: Any]] {
+            for (at, track) in playlist.tracks.enumerated() where at < rows.count {
+                if let held = guessed.items[ObjectIdentifier(track)],
+                   rows[at]["filepath"] as? String == held.guess {
+                    rows[at]["filepath"] = held.original
+                }
+            }
+            pl["tracks"] = rows
+            out["playlist"] = pl
+        }
+        if var dr = data["drops"] as? [String: Any], var paths = dr["paths"] as? [String] {
+            for (at, path) in paths.enumerated() {
+                if let held = guessed.drops[at], path == held.guess { paths[at] = held.original }
+            }
+            dr["paths"] = paths
+            out["drops"] = dr
+        }
+        return out
+    }
     var folderSlots: [Slot] { slots.filter { $0.isFolder } }
     var assignedTotal: Int { slots.filter { $0.isAssigned }.count }
 
@@ -1281,7 +1440,14 @@ final class Board {
         playlist.crossfade = other.playlist.crossfade
         drops.replace(with: other.drops)
         unknown = other.unknown
-        dirty = true
+        guessed = other.guessed
+        foundBeside = other.foundBeside
+        // **The arriving board's own state, never "changed".** This said
+        // `dirty = true` until 3.10.0, so every File, Open and every File,
+        // New wrote the board out two seconds later whether or not anybody
+        // had touched it, and with the old path still in place after New
+        // that save was Siena's lost board.
+        dirty = other.dirty
     }
 
     // ---------------------------------------------------- the stream key ---

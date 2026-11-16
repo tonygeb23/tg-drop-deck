@@ -797,7 +797,67 @@ every row. `TickBox` has the fixed label "Play" and a value of 1 or 0.
 **`DropDeckApplication` is the principal class** (for `errors.log`), declared
 `@objc(DropDeckApplication)` so the Info.plist name resolves.
 
+## Level with Windows 3.10.0, on 16 November 2026
+
+Mac 3.10.0 took Windows 3.9.0 and 3.10.0 together, from
+`docs/MAC-PICKUP-3.9.0.md` and `docs/MAC-PICKUP-3.10.0.md`. What is worth
+knowing before touching any of it:
+
+**A board that takes another's place never takes its FILE.** Siena and Rob,
+15 November 2026: boards saved with Command S came back empty. On a Mac the
+board OBJECT is reused (`replaceContents`), so `adopt(fresh, path: nil)` kept
+the old path, and `replaceContents` ended with `dirty = true`, so every board
+that arrived saved itself two seconds later: after File, New, over the board
+that had just left. The rules now live in `BoardKeeper` where the self test
+can drive them on real files: `putAway` saves a dirty board to its own file
+before anything replaces it, `giveNewHome` gives New, the demo and an import a
+file of their own that is claimed as nothing there and not written until
+something changes, `autosave` writes only a dirty board, and `saveForClose`
+skips a new board nobody touched. **`replaceContents` copies the arriving
+board's `dirty`, and `adopt` must never call `touch()` again.**
+
+**Work that comes back from a thread compares `boardGeneration`.** The board
+object cannot tell it has become another board, so a relink or a tail
+measurement that finished after File, New used to mark the untouched new board
+changed and write it out empty. `adopt` counts up; the relink says plainly
+that it finished too late, and `measureTails` drops its answer.
+
+**Paths are taken after EITHER slash** (`BoardPaths.basename`). macOS's
+`lastPathComponent` of a Windows path is the whole string, which is all of
+Siena's "16 sounds still missing". A drive or a share is never joined onto the
+board's folder (`BoardPaths.isRelative`). A save writes a sound under the
+board's folder relative, with forward slashes, and puts `findBeside`'s guesses
+back first: **a guess is never written down** (`Guesses`, per item).
+
+**AAC called .mp3 is not refused by macOS, it is MISREAD**: it opens as an MP3
+0.02 seconds long, so a pad plays nothing and every layer says it worked.
+Measured 16 November 2026. `AudioFile.open` sniffs the first sixteen bytes and,
+when contents and name disagree, opens through a correctly named symlink in
+the temporary folder FIRST. A fallback that waits for a refusal never runs.
+AVAssetReader is no help: it trusted the extension too. Everything else tried
+opened fine through AVAudioFile, including five megabytes of ID3 artwork, an
+M4A with a video track, and ALAC, FLAC and Opus inside MP4. Raymond's real
+Suno files have still not been seen.
+
+**Pausing is `PauseGate`, shared by both recorders.** The writer keeps reading
+the bus and throws it away, so the ring never fills; what was waiting at the
+press of Pause is written (it came before), and what is waiting at Resume is
+dropped (it came during). The real recorder check feeds 0.9 only while paused
+and fails on any sample of it in the file. The file's elapsed time is counted
+in samples written, so it stands still while paused and the picture's
+timeline, counted in sound, simply joins up.
+
+**Speech after a menu, a box or a file panel waits 0.4 seconds and queues**
+(`Speaker.interfaceClosed`), from Windows' NVDA numbers. **Not yet measured
+against VoiceOver**: Tony to confirm with VO+M on Start recording. A key
+equivalent does not track the menu, so keys are still answered at once.
+
 ## Still to do
+
+- **Measure the speech wait after a menu against VoiceOver.** 0.4 seconds is
+  Windows' number for NVDA, and the Mac copied it untested.
+- **Raymond's Suno files.** The misread AAC case is fixed; whatever his two
+  files really are has not been seen.
 
 - **A real broadcast to YouTube and Facebook.** The RTMP client is proved end
   to end against `tools/mock_rtmp.py`, which decodes what arrived frame by

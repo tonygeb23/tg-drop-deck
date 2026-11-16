@@ -765,7 +765,34 @@ extension MainWindow {
         recordBox.addArrangedSubview(field("Bit rate, for AAC", recordBitrate))
         let folderField = text(board.recordFolder ?? Recorder.defaultFolder(),
                                "Where recordings go")
-        recordBox.addArrangedSubview(field("Where recordings go", folderField))
+        // Ali Moosa, 17 October 2026: "there is a path to enter a location,
+        // but there isn't a browse button, where a location can be selected
+        // in Finder." The same button the picture has, choosing a folder.
+        let folderBrowse = NSButton(title: "Browse...", target: videoControls,
+                                    action: #selector(VideoControls.browseRecordings))
+        folderBrowse.bezelStyle = .rounded
+        folderBrowse.setAccessibilityLabel("Choose where recordings go")
+        let folderRow = NSStackView(views: [folderField, folderBrowse])
+        folderRow.orientation = .horizontal
+        folderRow.spacing = 8
+        recordBox.addArrangedSubview(field("Where recordings go", folderRow))
+        videoControls.onBrowseRecordings = { [weak self] in
+            let open = NSOpenPanel()
+            open.canChooseFiles = false
+            open.canChooseDirectories = true
+            open.canCreateDirectories = true
+            open.prompt = "Record here"
+            open.message = "Which folder should recordings go in?"
+            let already = folderField.stringValue.trimmingCharacters(in: .whitespaces)
+            if !already.isEmpty { open.directoryURL = URL(fileURLWithPath: already) }
+            let answer = open.runModal()
+            Speaker.interfaceClosed()
+            guard answer == .OK, let url = open.url else { return }
+            folderField.stringValue = url.path
+            // The folder's own name, never the path, which VoiceOver reads as
+            // one long run of slashes. Saved with OK, like everything here.
+            self?.speaker.announceState("Recordings will go in \(url.lastPathComponent)")
+        }
         recordBox.addArrangedSubview(note(VideoPrefs.recordingNote))
         add(tabs, "Recording", recordBox)
 
@@ -1139,6 +1166,7 @@ final class VideoControls: NSObject {
     var onCheckKey: (() -> Void)?
     var onHelp: (() -> Void)?
     var onBrowse: (() -> Void)?
+    var onBrowseRecordings: (() -> Void)?
     var onListModels: (() -> Void)?
     var onProviderChanged: (() -> Void)?
     var onPlatformChanged: (() -> Void)?
@@ -1146,6 +1174,7 @@ final class VideoControls: NSObject {
     @objc func checkKey() { onCheckKey?() }
     @objc func help() { onHelp?() }
     @objc func browse() { onBrowse?() }
+    @objc func browseRecordings() { onBrowseRecordings?() }
     @objc func listModels() { onListModels?() }
     @objc func providerChanged() { onProviderChanged?() }
     @objc func platformChanged() { onPlatformChanged?() }

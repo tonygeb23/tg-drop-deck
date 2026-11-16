@@ -134,8 +134,11 @@ final class Slot {
     var displayName: String {
         if let n = name, !n.isEmpty { return n }
         if let p = filepath, !p.isEmpty {
-            return (p as NSString).lastPathComponent.replacingOccurrences(
-                of: "." + (p as NSString).pathExtension, with: "")
+            // After EITHER slash, so a pad written on Windows is called by its
+            // file name and not read out as the whole Windows path.
+            let base = BoardPaths.basename(p)
+            let ext = (base as NSString).pathExtension
+            return ext.isEmpty ? base : base.replacingOccurrences(of: "." + ext, with: "")
         }
         return "Empty"
     }

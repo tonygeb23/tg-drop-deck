@@ -39,7 +39,13 @@ enum ModalAudit {
 
     @discardableResult
     static func run(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        guard let capture else { return alert.runModal() }
+        guard let capture else {
+            let answer = alert.runModal()
+            // What the box's command says next waits for VoiceOver to finish
+            // reading where focus landed. See `Speaker.interfaceClosed`.
+            Speaker.interfaceClosed()
+            return answer
+        }
         capture(alert)
         return escapeAnswer(alert)
     }

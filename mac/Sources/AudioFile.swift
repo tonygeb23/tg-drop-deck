@@ -13,6 +13,7 @@
 
 import Foundation
 import AVFoundation
+import CryptoKit
 import AudioToolbox
 
 enum AudioFile {
@@ -68,8 +69,109 @@ enum AudioFile {
         var frames: AVAudioFramePosition
     }
 
+    // ------------------------------------------- what a file really is ---
+    //
+    // Raymond, in-app feedback 46, 21 October 2026: songs from Suno, one MP3
+    // and one M4A, "won't play". Not reproduced: nobody here has his files.
+    // What WAS measured on this Mac, 16 November 2026: AVAudioFile opens an
+    // MP3 with five megabytes of cover art in its tag, an M4A with artwork,
+    // ALAC, FLAC and Opus inside MP4, and an M4A that also carries a video
+    // track. What it refuses is a file whose CONTENTS do not match its NAME:
+    // AAC in a file called .mp3, and (for AVAssetReader too) MP3 in a file
+    // called .m4a. Audio File Services takes its first guess from the
+    // extension, and a download that has been renamed, or a site that names
+    // its files carelessly, is exactly that. Opened through a link with the
+    // right name, every one of them plays. A WebM file is the one thing here
+    // macOS cannot decode at all, and that is now said in as many words.
+
+    /// What a file is from its first bytes, as the extension it should have,
+    /// or nil when it is not recognised.
+    static func sniff(_ path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 16), head.count >= 4 else { return nil }
+        let b = [UInt8](head)
+        func text(_ at: Int, _ n: Int) -> String {
+            guard b.count >= at + n else { return "" }
+            return String(bytes: b[at..<(at + n)], encoding: .isoLatin1) ?? ""
+        }
+        if text(4, 4) == "ftyp" { return "m4a" }
+        if text(0, 3) == "ID3" { return "mp3" }
+        if text(0, 4) == "RIFF" && text(8, 4) == "WAVE" { return "wav" }
+        if text(0, 4) == "RF64" { return "wav" }
+        if text(0, 4) == "fLaC" { return "flac" }
+        if text(0, 4) == "OggS" { return "ogg" }
+        if text(0, 4) == "FORM" && (text(8, 4) == "AIFF" || text(8, 4) == "AIFC") { return "aiff" }
+        if text(0, 4) == "caff" { return "caf" }
+        if text(0, 5) == "#!AMR" { return "amr" }
+        if b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3 { return "webm" }
+        if b[0] == 0x30 && b[1] == 0x26 && b[2] == 0xB2 && b[3] == 0x75 { return "wma" }
+        if b[0] == 0xFF && (b[1] & 0xF6) == 0xF0 { return "aac" }       // ADTS
+        if b[0] == 0xFF && (b[1] & 0xE0) == 0xE0 && (b[1] & 0x06) != 0 { return "mp3" }
+        return nil
+    }
+
+    /// The URL to open a file through: the file itself, or, when its name
+    /// says one thing and its contents another, a link to it in the temporary
+    /// folder with the name its contents deserve. Nothing is copied or moved.
+    static func namedRight(_ path: String) -> URL? {
+        guard let real = sniff(path), supportedExtensions.contains(real) else { return nil }
+        let ext = (path as NSString).pathExtension.lowercased()
+        // Already called what it is; a different name would change nothing.
+        if ext == real || (real == "m4a" && ["m4a", "m4b", "mp4", "aac", "alac"].contains(ext)) {
+            return nil
+        }
+        let folder = (NSTemporaryDirectory() as NSString).appendingPathComponent("dropdeck-named")
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let key = Insecure.SHA1.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+        let link = (folder as NSString).appendingPathComponent("\(key).\(real)")
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: link)) != path {
+            try? FileManager.default.removeItem(atPath: link)
+            do { try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: path) }
+            catch { return nil }
+        }
+        return URL(fileURLWithPath: link)
+    }
+
+    /// The one way a sound file is opened for reading.
+    ///
+    /// **By its contents FIRST when they disagree with its name**, and not
+    /// only when macOS refuses it. Measured on this Mac: AAC written by
+    /// AVAudioFile and then called .mp3 is not refused at all. It OPENS, as
+    /// an MP3, and is 0.02 seconds long, because the parser finds something
+    /// that looks like a frame header and plays that. A pad that "plays" a
+    /// fiftieth of a second of nothing is exactly "they won't play", and a
+    /// fallback that waits for a refusal never runs. The sniff is sixteen
+    /// bytes, which is nothing beside opening the file.
+    static func open(_ path: String) -> AVAudioFile? {
+        if let renamed = namedRight(path), let file = try? AVAudioFile(forReading: renamed) {
+            return file
+        }
+        return try? AVAudioFile(forReading: URL(fileURLWithPath: path))
+    }
+
+    /// Why a file will not open, as the end of a sentence: "Could not play
+    /// Intro, " and then this. "They won't play" is what somebody says when
+    /// the app gave them no reason, so there is always one.
+    static func refusal(_ path: String) -> String {
+        let files = FileManager.default
+        guard files.fileExists(atPath: path) else { return "the file is not there" }
+        let size = ((try? files.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.intValue ?? 0
+        if size == 0 { return "the file is empty" }
+        let ext = (path as NSString).pathExtension.lowercased()
+        let named: [String: String] = ["webm": "a WebM file", "wma": "a Windows Media file"]
+        if let real = sniff(path), !supportedExtensions.contains(real) {
+            let what = named[real] ?? "a \(real.uppercased()) file"
+            return "it is really \(what), and macOS cannot play those"
+        }
+        if !ext.isEmpty && !supportedExtensions.contains(ext) {
+            return "macOS cannot play \(ext.uppercased()) files"
+        }
+        return "macOS could not decode it, so it may be damaged or not what its name says"
+    }
+
     static func probe(_ path: String) -> Info? {
-        guard let f = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else {
+        guard let f = open(path) else {
             return nil
         }
         let rate = f.fileFormat.sampleRate
@@ -82,8 +184,7 @@ enum AudioFile {
     /// One place resamples, which is what keeps the two paths, memory and
     /// disk, sounding the same.
     static func readAll(_ path: String, targetRate: Double) -> [Float]? {
-        guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path))
-        else { return nil }
+        guard let file = open(path) else { return nil }
         let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                       sampleRate: targetRate,
                                       channels: channels,
@@ -154,7 +255,8 @@ enum AudioFile {
     static func tags(_ path: String) -> Tags {
         var out = Tags()
         var file: AudioFileID?
-        let url = URL(fileURLWithPath: path) as CFURL
+        // By its contents first when they disagree with its name, as `open`.
+        let url = (namedRight(path) ?? URL(fileURLWithPath: path)) as CFURL
         guard AudioFileOpenURL(url, .readPermission, 0, &file) == noErr,
               let file else { return out }
         defer { AudioFileClose(file) }
@@ -196,8 +298,7 @@ enum AudioFile {
     /// Returns 0 on any failure, which is the safe answer: it makes the cue
     /// behave exactly as it did before this existed.
     static func tailSilence(_ path: String, duration knownDuration: Double? = nil) -> Double {
-        guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path))
-        else { return 0.0 }
+        guard let file = open(path) else { return 0.0 }
         let rate = file.processingFormat.sampleRate
         guard rate > 0, file.length > 0 else { return 0.0 }
         let duration = knownDuration ?? Double(file.length) / file.fileFormat.sampleRate

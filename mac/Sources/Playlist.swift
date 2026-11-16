@@ -89,8 +89,7 @@ final class Track {
 
     var displayName: String {
         if let t = title, !t.isEmpty { return t }
-        let base = (filepath as NSString).lastPathComponent
-        return (base as NSString).deletingPathExtension
+        return BoardPaths.stem(filepath)
     }
 
     /// The track as a listener is told it: title and artist in the board's
@@ -270,8 +269,8 @@ final class Playlist {
         if let c = data["crossfade"] as? Double { crossfade = clean(c, fallback: C.defaultCrossfade) }
         tracks = (data["tracks"] as? [[String: Any]] ?? []).compactMap { row in
             guard let t = Track.fromDict(row) else { return nil }
-            if !(t.filepath as NSString).isAbsolutePath, let folder {
-                t.filepath = (folder as NSString).appendingPathComponent(t.filepath)
+            if BoardPaths.isRelative(t.filepath), let folder {
+                t.filepath = BoardPaths.resolve(t.filepath, folder: folder)
             }
             return t
         }
@@ -483,7 +482,9 @@ extension Playlist {
     func relink(using index: [String: String]) -> [Track] {
         var repaired: [Track] = []
         for track in tracks where track.isMissing {
-            let name = (track.filepath as NSString).lastPathComponent.lowercased()
+            // After EITHER slash: a track written on Windows is all one
+            // "last path component" to macOS (Siena, 12 October 2026).
+            let name = BoardPaths.basename(track.filepath).lowercased()
             guard let found = index[name] else { continue }
             track.filepath = found
             if track.duration == nil { track.duration = AudioFile.probe(found)?.duration }
@@ -577,7 +578,7 @@ final class DropLibrary {
         var repaired: [String] = []
         for (position, path) in paths.enumerated()
         where !FileManager.default.fileExists(atPath: path) {
-            let name = (path as NSString).lastPathComponent.lowercased()
+            let name = BoardPaths.basename(path).lowercased()
             guard let found = index[name] else { continue }
             paths[position] = found
             repaired.append(found)
@@ -601,8 +602,8 @@ final class DropLibrary {
         for item in raw {
             guard var path = item as? String, !path.trimmingCharacters(in: .whitespaces).isEmpty
             else { continue }
-            if !(path as NSString).isAbsolutePath, let folder, !folder.isEmpty {
-                path = ((folder as NSString).appendingPathComponent(path) as NSString).standardizingPath
+            if BoardPaths.isRelative(path), let folder, !folder.isEmpty {
+                path = BoardPaths.resolve(path, folder: folder)
             }
             paths.append(path)
         }

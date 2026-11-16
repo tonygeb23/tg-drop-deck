@@ -180,7 +180,14 @@ extension MainWindow {
             pictureFeed.release(PictureFeed.forRecording)
         }
         let said = videoRecorder.report()
-        if !quiet { speaker.announceState(said) }
+        if !quiet {
+            if said.hasPrefix("Recording saved as ") {
+                announceRecording("Recording stopped", "Picture and sound saved as "
+                                  + said.dropFirst("Recording saved as ".count))
+            } else {
+                speaker.announceState(said)
+            }
+        }
         updateStatusLine()
         updateAirMenu()
         return said

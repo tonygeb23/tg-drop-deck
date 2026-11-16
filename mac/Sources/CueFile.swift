@@ -175,6 +175,18 @@ final class CueFile {
         return write()
     }
 
+    /// What is on air when a paused recording carries on: whatever went out
+    /// during the pause starts here in the file. A track that was already
+    /// the last entry is not listed twice (Windows 3.9.0).
+    @discardableResult
+    func noteOnResume(title: String, performer: String = "", seconds: Double) -> Bool {
+        lock.lock()
+        let same = entries.last.map { $0.title == title && $0.performer == performer } ?? false
+        lock.unlock()
+        if same { return false }
+        return add(title: title, performer: performer, seconds: seconds)
+    }
+
     private func write() -> Bool {
         guard let path = path else { return false }
         let name = (audioPath as NSString).lastPathComponent

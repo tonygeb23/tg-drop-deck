@@ -95,6 +95,13 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
     private(set) lazy var programWatch: ProgramWatch = makeProgramWatch()
     var programObservers: [NSObjectProtocol] = []
     private var saveTimer: Timer?
+    /// Counted up every time another board takes the open one's place. Work
+    /// that went off to a thread compares it on the way back, because the
+    /// board OBJECT is reused and cannot tell it has become another board.
+    var boardGeneration = 0
+    /// An export is copying, and the flag that stops it when the app closes.
+    var exporting = false
+    let exportStop = StopFlag()
 
     /// Which banks have already had their hint read out. Once per bank per
     /// session: a screen reader already announces the tab, so saying twenty
@@ -418,6 +425,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         parts.append(MainWindow.airStatus(radio: streamer.state, video: videoStreamer.state))
         parts += MainWindow.recordingStatus(audio: recorder.isRecording,
                                             picture: videoRecorder.isRecording)
+        if recordingPaused { parts.append("RECORDING PAUSED") }
         // Muted and soloed sources are the two states you can hear the effect
         // of but not the cause of, so the line says them rather than leaving
         // somebody to wonder why a guest has gone quiet.
@@ -445,7 +453,8 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
             // order (W383-25). Anything wrong with the board is heard first.
             parts += BoardFiles.startupParts(
                 note: self.startupBoardNote, loadedDemo: self.loadedDemo,
-                assigned: assigned, boardName: BoardFiles.boardName(self.board.path))
+                assigned: assigned, boardName: BoardFiles.boardName(self.board.path),
+                tracks: self.board.playlist.tracks.count)
             // Our own global hotkeys on the app's own keys (W383-02), after
             // the name and count, in Windows' order (W383-25). The Mac cannot
             // ask which keys ANOTHER program holds the way Windows asks
@@ -453,7 +462,12 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
             // Help, Check the keyboard instead.
             let clashes = self.ownHotkeyClashes()
             parts += clashes
-            let missing = self.board.slots.filter { $0.isMissing }.count
+            // What opening the board found beside it, then everything still
+            // missing: pads, running order and drops (Windows 3.9.0).
+            if self.board.foundBeside > 0 {
+                parts.append(MainWindow.foundBesideSentence(self.board.foundBeside))
+            }
+            let missing = self.board.missingCount
             if missing > 0 {
                 parts.append("\(missing) file\(missing == 1 ? "" : "s") missing. Use File, relink missing sounds")
             }
@@ -552,7 +566,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
             if mixer.play(slotIndex: index, path: path, bus: C.busBed, loop: slot.loop,
                           trimDB: slot.trimDB, name: slot.displayName,
                           duration: slot.duration) == nil {
-                speaker.announce("Could not play \(slot.displayName)")
+                speaker.announce("Could not play \(slot.displayName), \(AudioFile.refusal(path))")
                 return
             }
             var line = "Playing bed, \(slot.displayName)"
@@ -579,7 +593,7 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         if mixer.play(slotIndex: index, path: path, bus: C.busSFX, loop: false,
                       trimDB: slot.trimDB, name: slot.displayName,
                       duration: slot.duration) == nil {
-            speaker.announce("Could not play \(slot.displayName)")
+            speaker.announce("Could not play \(slot.displayName), \(AudioFile.refusal(path))")
             return
         }
         remember(index)
@@ -905,20 +919,26 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// The autosave. Never over a board file changed outside the app: see
-    /// `BoardKeeper.save`.
-    func saveQuietly() {
+    func stopSaveTimer() {
         saveTimer?.invalidate(); saveTimer = nil
+    }
+
+    /// The autosave. Never over a board file changed outside the app: see
+    /// `BoardKeeper.save`. **Only a board with something to write**
+    /// (3.10.0): see `BoardKeeper.autosave`.
+    func saveQuietly() {
+        stopSaveTimer()
         board.bankScheme = KeyMap.scheme
-        speak(keeper.save(), quiet: true)
+        if let outcome = keeper.autosave() { speak(outcome, quiet: true) }
     }
 
     /// The save on the way out, from closing the window and from quitting.
-    /// Both happen on a quit, and the second is harmless (N12).
+    /// Both happen on a quit, and the second is harmless (N12). A new board
+    /// nobody touched is not written at all.
     func saveForClose() {
-        saveTimer?.invalidate(); saveTimer = nil
+        stopSaveTimer()
         board.bankScheme = KeyMap.scheme
-        speak(keeper.saveForClose(), quiet: true)
+        if let outcome = keeper.saveForClose() { speak(outcome, quiet: true) }
     }
 
     /// Say what a save did, on the channel it deserves. A failed autosave is
@@ -1005,13 +1025,18 @@ final class MainWindow: NSWindowController, NSWindowDelegate {
                 switch self.keeper.comingBack(look, busy: self.boardBusy) {
                 case .nothing: break
                 case .say(let line): self.speaker.announce(line)
-                case .load(let fresh): self.loadInto(path, keepPath: true, board: fresh)
+                case .load(let fresh):
+                    // Never through `putAway`: `comingBack` loads only a board
+                    // with nothing unsaved. And the view never moves.
+                    self.loadInto(path, keepPath: true, board: fresh)
                 }
             }
         }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // An export mid copy stops cleanly rather than leaving half a file.
+        exportStop.set()
         saveForClose()
         player.stop(fadeOut: 0.0, quiet: true)
         closeDownRecordingsAndPicture()

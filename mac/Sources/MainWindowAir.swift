@@ -148,7 +148,7 @@ extension MainWindow {
             // The recorder took its own bus off the taps; this puts the mixers
             // back to not building an air sum if nothing else wants one.
             group.syncTaps()
-            speaker.announceState(summary ?? "The recording stopped")
+            announceRecording("Recording stopped", summary ?? "")
             updateStatusLine()
             return
         }
@@ -162,10 +162,94 @@ extension MainWindow {
         }
         // The taps only feed the mixers once something is listening.
         group.syncTaps()
-        var line = "Recording to \((path as NSString).lastPathComponent)"
-        if mic.isOpen, let warning = micOffAirNote { line += ". \(warning)" }
-        speaker.announceState(line)
+        // Whatever is already on the air belongs at 0:00, or the first track
+        // of the show is missing from its own track list.
+        noteCurrentTrack()
+        var detail = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        if mic.isOpen, let warning = micOffAirNote { detail += ". \(warning)" }
+        announceRecording("Recording started", detail)
         updateStatusLine()
+    }
+
+    /// A recording starting, stopping, pausing or resuming.
+    ///
+    /// Siena, October 2026: starting or stopping a recording "doesn't
+    /// actually announce whether the recording has started or stopped". It
+    /// opened with "Recording to Drop Deck Stream 004.mp3", a file name, so
+    /// the one fact asked about was never said in as many words. It now
+    /// opens with `short`, and the detail follows. A file being written makes
+    /// no sound, so this is answered at every level; at "none" only `short`
+    /// is spoken, and the whole line is on the status line. Chosen from the
+    /// menu, the line waits for VoiceOver to read where focus landed (see
+    /// `Speaker.interfaceClosed`).
+    func announceRecording(_ short: String, _ detail: String = "") {
+        let full = detail.isEmpty ? short : "\(short). \(detail)"
+        if speaker.level == C.speechNone {
+            speaker.announceState(short)
+            speaker.note(full)
+        } else {
+            speaker.announceState(full)
+        }
+    }
+
+    /// Either recording is paused. ANY, because that is what the key does:
+    /// if either is paused it resumes both.
+    var recordingPaused: Bool { recorder.isPaused || videoRecorder.isPaused }
+
+    /// Option Shift R. Hold the recording and carry on into the same file.
+    /// One key for both recordings, because a show recorded as sound and as
+    /// picture is one show: pausing one and not the other is a pair of files
+    /// that no longer line up.
+    func togglePauseRecording() {
+        let running = recorder.isRecording || videoRecorder.isRecording
+        guard running else {
+            announceRecording("Nothing is recording", "Command R starts a recording")
+            return
+        }
+        if recordingPaused {
+            recorder.resume()
+            videoRecorder.resume()
+            noteCurrentTrack(resuming: true)
+            announceRecording("Recording resumed")
+        } else {
+            if recorder.isRecording { recorder.pause() }
+            if videoRecorder.isRecording { videoRecorder.pause() }
+            let elapsed = max(recorder.isRecording ? recorder.elapsed : 0,
+                              videoRecorder.isRecording ? videoRecorder.elapsed : 0)
+            announceRecording("Recording paused",
+                              "\(MainWindow.spokenDuration(elapsed)) so far. Option Shift R carries on")
+        }
+        updateStatusLine()
+    }
+
+    /// The running order track on the air, into every track list being
+    /// written. On resume, a track that is already the last entry is not
+    /// listed twice.
+    func noteCurrentTrack(resuming: Bool = false) {
+        guard player.isPlaying, let track = player.currentTrack else { return }
+        let title = track.displayName
+        let artist = track.artist ?? ""
+        for (on, cue, at) in [(recorder.isRecording, recorder.cue, recorder.elapsed),
+                              (videoRecorder.isRecording, videoRecorder.cue, videoRecorder.elapsed)]
+        where on {
+            if resuming { cue?.noteOnResume(title: title, performer: artist, seconds: at) }
+            else { _ = cue?.add(title: title, performer: artist, seconds: at) }
+        }
+        cueWindow?.refresh()
+    }
+
+    /// "2 seconds", "1 minute 5 seconds", "1 hour 3 minutes". No zeros.
+    /// Windows' `_duration`.
+    static func spokenDuration(_ seconds: Double) -> String {
+        let whole = max(0, Int(seconds))
+        let hours = whole / 3600, minutes = (whole % 3600) / 60, secs = whole % 60
+        if hours > 0 {
+            return count(hours, "hour") + (minutes > 0 ? " " + count(minutes, "minute") : "")
+        }
+        if minutes > 0 {
+            return count(minutes, "minute") + (secs > 0 ? " " + count(secs, "second") : "")
+        }
+        return count(secs, "second")
     }
 
     func openRecordingsFolder() {

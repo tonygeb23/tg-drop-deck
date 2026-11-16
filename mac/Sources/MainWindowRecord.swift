@@ -73,11 +73,13 @@ extension MainWindow {
         recordTap = tap
         group.syncTaps()
         syncRecordPicture()
-        var line = "Recording the picture and the sound to "
-            + "\((path as NSString).lastPathComponent)."
+        noteCurrentTrack()
+        var line = "The picture and the sound, to "
+            + "\(((path as NSString).lastPathComponent as NSString).deletingPathExtension)."
         if let note = whatIsReallyInTheFile() { line += " \(note)" }
         line += pictureInTheRecording() + warnings
-        speaker.announceState(line)
+        // "Recording started" first, then the detail (Siena, October 2026).
+        announceRecording("Recording started", line)
         updateStatusLine()
         // The menu item's words follow: this is later than the key press that
         // refreshed it, because the picture was opened first.
@@ -116,10 +118,12 @@ extension MainWindow {
     func trackWentOut(_ track: Track) {
         let title = track.displayName
         let artist = track.artist ?? ""
-        if recorder.isRecording {
+        // Not while paused: the track is noted when the recording carries on,
+        // at the moment it really starts in the file.
+        if recorder.isRecording && !recorder.isPaused {
             recorder.cue?.add(title: title, performer: artist, seconds: recorder.elapsed)
         }
-        if videoRecorder.isRecording {
+        if videoRecorder.isRecording && !videoRecorder.isPaused {
             videoRecorder.cue?.add(title: title, performer: artist,
                                    seconds: videoRecorder.elapsed)
         }

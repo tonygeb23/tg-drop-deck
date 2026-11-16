@@ -57,7 +57,9 @@ extension MainWindow {
         alert.informativeText = informative
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        let answer = alert.runModal()
+        Speaker.interfaceClosed()
+        return answer == .alertFirstButtonReturn
     }
 
     func say(_ title: String, _ body: String) {
@@ -127,7 +129,8 @@ extension MainWindow {
                              + "\(count) sound\(count == 1 ? "" : "s"), one at random each press")
         } else {
             guard let info = AudioFile.probe(url.path) else {
-                speaker.announce("That file could not be read")
+                speaker.announce("\(BoardPaths.stem(url.path)) could not be opened, "
+                                 + AudioFile.refusal(url.path))
                 return
             }
             slot.filepath = url.path
@@ -374,13 +377,22 @@ extension MainWindow {
 
     // ----------------------------------------------------------------- files ---
 
+    /// File, New board. **The board you had is put away first and keeps its
+    /// file; the new one gets a file of its own** (3.10.0). Siena and Rob,
+    /// 15 November 2026: a board saved with Command S came back empty,
+    /// because the new board kept the old one's path and the next save wrote
+    /// eighty empty slots over it. See `BoardKeeper.putAway`.
     func newBoard() {
-        let assigned = board.assignedTotal
-        if assigned > 0 {
-            guard confirm("Clear all \(assigned) sounds and start over?",
-                          informative: "Save the current board first if you want to keep it.",
-                          confirmTitle: "New board") else { return }
+        let had = BoardKeeper.boardSaid(board.path, configDir: keeper.configDir)
+        let kept = keeper.hasAFile
+        let wasDirty = board.dirty
+        // A board that is all running order is not an empty board.
+        let holds = board.assignedTotal > 0 || !board.playlist.isEmpty
+        if holds {
+            guard confirm("New board", informative: "Start a new, empty board?\n\n"
+                          + keeper.keptWords(), confirmTitle: "OK") else { return }
         }
+        guard putAway() else { return }
         let fresh = Board()
         // A new board is a new show on the same desk: the sound cards stay,
         // and so does the key scheme, which is about the Mac and not the show.
@@ -389,46 +401,83 @@ extension MainWindow {
         fresh.bankDevices = board.bankDevices
         fresh.bankScheme = board.bankScheme
         adopt(fresh, path: nil)
-        claimIfUnknown()
-        speaker.announceHelp("New board, eighty empty slots")
+        let home = keeper.giveNewHome()
+        // What became of the board you had comes BEFORE the description of
+        // the new one, because it is the half somebody is waiting to hear.
+        // Essential, not a pleasantry: it answers "is the board I had still
+        // there", and that question is why this was rewritten.
+        var said = BoardFiles.boardWords(home)
+        if holds && kept && !wasDirty {
+            said += ". \(had) is saved and untouched"
+        }
+        speaker.announce(said + ". Eighty empty slots. Command Shift S gives this one a name")
     }
 
-    /// A new board or the demo takes this board's path without reading it.
+    /// Before any board takes the open one's place: the timer stopped, and a
+    /// change not yet written written to the open board's OWN file now. True
+    /// when it is safe to go on.
     ///
-    /// Windows claims the path afresh here. On a Mac the board OBJECT stays
-    /// and so does its path, and what it already knows about that file, from
-    /// reading or writing it, is the better answer: claiming afresh would
-    /// take a board somebody copied in a minute ago as ours and save over it,
-    /// which is fb40 again by another door. So it claims only when nothing is
-    /// known yet.
-    func claimIfUnknown() {
-        if board.disk == nil { board.claimPath(board.path) }
+    /// If it cannot be written (a read only file, a drive that has gone) it
+    /// is the user's call, and keeping the changes is the default: refusing
+    /// outright would shut somebody out of New and Open for as long as that
+    /// lasts.
+    func putAway() -> Bool {
+        stopSaveTimer()
+        board.bankScheme = KeyMap.scheme
+        guard let outcome = keeper.putAway() else { return true }
+        if case .failed = outcome {} else {
+            if case .keptBeside = outcome { speak(outcome, quiet: true) }
+            return true
+        }
+        let alert = NSAlert()
+        alert.messageText = "Not saved"
+        alert.informativeText = "\(BoardKeeper.boardSaid(board.path, configDir: keeper.configDir)) "
+            + "could not be saved.\n\nTo keep what you changed in it, choose Keep my changes, "
+            + "then File, Save board as. Choose Go on to lose those changes."
+        alert.addButton(withTitle: "Keep my changes")
+        alert.addButton(withTitle: "Go on")
+        alert.alertStyle = .warning
+        return ModalAudit.run(alert) == .alertSecondButtonReturn
     }
 
     /// Command S. Through the same guard as every other save.
     func saveBoardNow() {
         board.bankScheme = KeyMap.scheme
-        speak(keeper.save(), quiet: false)
+        let outcome = keeper.save()
+        if case .saved = outcome { keeper.unstarted = false }
+        speak(outcome, quiet: false)
     }
 
     func saveBoardAs() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType.json]
-        panel.nameFieldStringValue = "board.json"
+        let words = BoardFiles.boardWords(board.path)
+        panel.nameFieldStringValue = (words == "The board" ? "board" : words) + ".json"
         panel.message = "Save this board to a file of its own."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let answer = panel.runModal()
+        Speaker.interfaceClosed()
+        guard answer == .OK, let url = panel.url else { return }
         // A place somebody chose. It is the board from now on, and the one
-        // that opens next time.
+        // that opens next time. The "New board" file it was kept in until it
+        // had a name goes, when it is ours to remove.
         board.bankScheme = KeyMap.scheme
-        speak(keeper.save(to: url.path), quiet: false)
+        stopSaveTimer()
+        speak(keeper.saveAs(url.path), quiet: false)
     }
 
     func openBoard() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType.json]
         panel.message = "Open a saved board. It becomes the board you are on and saves to its own file."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        loadInto(url.path, keepPath: true)
+        let answer = panel.runModal()
+        Speaker.interfaceClosed()
+        guard answer == .OK, let url = panel.url else { return }
+        // A change made in the last two seconds is written to the board it
+        // was made on, before the other one arrives.
+        guard putAway() else { return }
+        guard loadInto(url.path, keepPath: true) else { return }
+        keeper.forgetNewHome()
+        viewForBoard()
     }
 
     func loadDemoPack() {
@@ -436,49 +485,111 @@ extension MainWindow {
             speaker.announce("The demo pack is not beside the app")
             return
         }
-        if board.assignedTotal > 0 {
-            guard confirm("Replace the current board with the demo pack?",
-                          informative: "Save the current board first if you want to keep it.",
-                          confirmTitle: "Load demo pack") else { return }
+        if board.assignedTotal > 0 || !board.playlist.isEmpty {
+            guard confirm("Load demo pack", informative: "Open the demo pack?\n\n"
+                          + keeper.keptWords(), confirmTitle: "OK") else { return }
         }
-        loadInto(demo, keepPath: false)
-        claimIfUnknown()
+        guard putAway() else { return }
+        // A file of its own, "Demo board", not written until something
+        // changes. It used to land in whatever board was open.
+        guard loadInto(demo, keepPath: false, home: "Demo board") else { return }
     }
 
     /// An old soundboard bank, from the 1.2 app, or a board somebody exported.
-    /// It becomes the board you are on and saves to your own board file.
+    /// It becomes the board you are on, in a file of its own named after it.
     func importOldBank() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType.json]
         panel.message = "Import an old soundboard bank."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let answer = panel.runModal()
+        Speaker.interfaceClosed()
+        guard answer == .OK, let url = panel.url else { return }
         guard Board.describeSource(url.path) != nil else {
             speaker.announce("That file is not a soundboard bank")
             plainAlert("Cannot import", "That file is not a soundboard bank.")
             return
         }
-        loadInto(url.path, keepPath: false)
+        guard putAway() else { return }
+        let stem = (url.lastPathComponent as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespaces)
+        guard loadInto(url.path, keepPath: false,
+                       home: stem.isEmpty ? "Imported board" : stem) else { return }
+        // Unlike an empty board, this one holds something worth keeping.
+        touch()
     }
 
     /// `keepPath` means the file becomes the live board and is saved to from
-    /// here on, which is what File, Open means. The demo and an import are
-    /// copied into your own board file instead.
+    /// here on, which is what File, Open means. Otherwise the board is given
+    /// a file of its own called `home`, which is never the open board's.
     ///
     /// `board` is one already read, from coming back to the window, which
     /// must never show a box: see `BoardKeeper.comingBack`.
-    func loadInto(_ path: String, keepPath: Bool, board already: Board? = nil) {
+    @discardableResult
+    func loadInto(_ path: String, keepPath: Bool, board already: Board? = nil,
+                  home: String = "New board") -> Bool {
         guard let loaded = already ?? Board.load(path) else {
             speaker.announce("That board could not be read")
             plainAlert("Open failed", "That board could not be opened.")
-            return
+            return false
         }
         adopt(loaded, path: keepPath ? path : nil)
-        // So the next start opens this board, not board.json. fb40.
-        if keepPath { keeper.opened(path) }
-        let missing = board.missingSlots.count
-        var line = "Loaded \((path as NSString).lastPathComponent), \(board.assignedTotal) sounds"
-        if missing > 0 { line += ", \(missing) file\(missing == 1 ? "" : "s") missing" }
-        speaker.announce(line)
+        if keepPath {
+            // So the next start opens this board, not board.json. fb40.
+            keeper.opened(path)
+            keeper.forgetNewHome()
+        } else {
+            keeper.giveNewHome(home)
+        }
+        speaker.announce(MainWindow.loadedLine(name: BoardFiles.boardWords(path), board: board))
+        return true
+    }
+
+    /// What the Loaded line says: the board's name WITHOUT ".json", which is
+    /// read aloud as "dot json", then what it holds, then what opening it
+    /// found and what is still missing. Every kind of sound counts.
+    static func loadedLine(name: String, board: Board) -> String {
+        var line = "Loaded \(name), \(loadedWords(board))"
+        if board.foundBeside > 0 { line += ". " + foundBesideSentence(board.foundBeside) }
+        let missing = board.missingCount
+        if missing > 0 {
+            line += ". \(count(missing, "sound")) still missing: File, Relink missing sounds"
+        }
+        return line
+    }
+
+    /// What a board holds: pads, running order, or both. Windows'
+    /// `_loaded_words`. The pads alone used to be counted, so a board that
+    /// was all playlist opened as "0 sounds" in front of eighty empty pads.
+    static func loadedWords(_ board: Board) -> String {
+        let tracks = board.playlist.tracks.count
+        if allPlaylist(board) { return "\(count(tracks, "playlist track")), now in the playlist" }
+        var said = count(board.assignedTotal, "sound")
+        if tracks > 0 { said += ", \(count(tracks, "playlist track"))" }
+        return said
+    }
+
+    /// No pads at all, and a running order.
+    static func allPlaylist(_ board: Board) -> Bool {
+        board.assignedTotal == 0 && !board.playlist.tracks.isEmpty
+    }
+
+    static func foundBesideSentence(_ found: Int) -> String {
+        "\(count(found, "sound")) found beside the board"
+    }
+
+    /// "1 sound", "2 sounds". Never "1 files".
+    static func count(_ number: Int, _ noun: String) -> String {
+        "\(number) \(noun)\(number == 1 ? "" : "s")"
+    }
+
+    /// A board that is all running order opens ON the running order (Ali
+    /// Moosa, 16 October 2026: eighty empty pads were in front of a board
+    /// whose whole content was one view away). Moved without a word, because
+    /// the Loaded line has just said where this is. Only when somebody opens
+    /// a board: a file changing on disk must never move focus.
+    func viewForBoard() {
+        guard MainWindow.allPlaylist(board) else { return }
+        showView(.playlist, quiet: true)
     }
 
     /// Make `loaded` the live board: every setting, the running order and the
@@ -488,7 +599,16 @@ extension MainWindow {
     ///
     /// The sound cards are NOT reopened for the loaded board's device, the same
     /// as the Windows copy: that is a Preferences change, made deliberately.
+    ///
+    /// **It does not mark the board changed** (3.10.0). It used to, so every
+    /// board that arrived was written out two seconds later, and after File,
+    /// New it was written over the board that had just left. A save timer
+    /// still running was for the board that is leaving, and whoever sent it
+    /// away has dealt with that (`putAway`); left running, it fired on the
+    /// board arriving.
     func adopt(_ loaded: Board, path newPath: String?) {
+        stopSaveTimer()
+        boardGeneration += 1
         group.stopAll(fadeOut: 0.0)
         player.forget()
         if mic.isOpen { mic.close() }
@@ -524,15 +644,126 @@ extension MainWindow {
         playlistView.refresh()
         updateAirMenu()
         updateStatusLine()
-        touch()
         measureTails()
+    }
+
+    // --------------------------------------------------------------- export ---
+
+    /// File, Export board with its sounds. One folder holding the board and
+    /// a copy of every sound it plays, written so it opens as it is on any
+    /// computer (Ali Moosa, 14 October 2026). It asks what to call it first
+    /// (in-app feedback 45, 17 October 2026): a board never given a name went
+    /// out as "Drop Deck board", which says nothing in a folder of five.
+    func exportBoard() {
+        guard !exporting else {
+            speaker.announce("An export is already going")
+            return
+        }
+        let paths = BoardExport.soundPaths(board)
+        guard !paths.isEmpty else {
+            speaker.announce("This board has no sounds to export")
+            return
+        }
+        let suggested = BoardExport.defaultName(board.path)
+        guard let typed = ask(title: "Export board with its sounds",
+                              message: "What should the exported board be called? The folder "
+                                     + "and the board inside it both take this name.",
+                              value: suggested, fieldLabel: "Name of the exported board") else {
+            return
+        }
+        let name = BoardKeeper.fileWords(typed).isEmpty ? suggested : BoardKeeper.fileWords(typed)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Export here"
+        panel.message = "Where should the board and its sounds go? A folder called \(name) is made there."
+        let answer = panel.runModal()
+        Speaker.interfaceClosed()
+        guard answer == .OK, let chosen = panel.url else { return }
+        runExport(to: BoardExport.target(in: chosen.path, name: name), name: name)
+    }
+
+    private func runExport(to target: String, name: String) {
+        exporting = true
+        exportStop.reset()
+        let stop = exportStop
+        // The board as it is NOW, read here on the main thread. What a save
+        // would write, so a guess from opening it is not exported as a path.
+        board.bankScheme = KeyMap.scheme
+        let data = board.restoreGuesses(board.toDict())
+        let paths = BoardExport.soundPaths(board)
+        speaker.announce("Exporting \(name)")
+        final class Clock: @unchecked Sendable {
+            var next = Date().addingTimeInterval(C.exportFirstProgressSeconds)
+        }
+        let clock = Clock()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let outcome: Result<ExportResult, Error>
+            do {
+                let result = try BoardExport.export(data: data, paths: paths, to: target,
+                                                    name: name) { done, total in
+                    if stop.isSet { throw ExportStopped() }
+                    // Spoken by the CLOCK, not by the byte: nothing in the first
+                    // few seconds, then no more often than every few. A gauge
+                    // nobody looks at is silence, and silence is a hang.
+                    let now = Date()
+                    if total > 0, done < total, now >= clock.next {
+                        clock.next = now.addingTimeInterval(C.exportProgressEverySeconds)
+                        let percent = Int(done * 100 / total)
+                        DispatchQueue.main.async {
+                            self?.speaker.announce("Export \(percent) percent", interrupt: false)
+                        }
+                    }
+                }
+                outcome = .success(result)
+            } catch {
+                outcome = .failure(error)
+            }
+            DispatchQueue.main.async { self?.exportFinished(outcome, target: target) }
+        }
+    }
+
+    private func exportFinished(_ outcome: Result<ExportResult, Error>, target: String) {
+        exporting = false
+        switch outcome {
+        case .failure(let error):
+            // The reason, never a path: a path read aloud is a long run of
+            // slashes.
+            let reason = error is ExportStopped ? "The app is closing"
+                : MainWindow.reasonWithoutPath(error)
+            speaker.announce("The export stopped. \(reason). Nothing in your board was changed")
+        case .success(let result):
+            let size = ByteCountFormatter.string(fromByteCount: result.bytes, countStyle: .file)
+            var said = "Export finished: \(MainWindow.count(result.copied, "sound")), \(size), in "
+                + "\((target as NSString).lastPathComponent). It opens on any computer"
+            let missing = result.missing.count
+            if missing > 0 {
+                said += ". \(MainWindow.count(missing, "sound")) could not be found and "
+                    + (missing == 1 ? "was" : "were") + " left out"
+            }
+            speaker.announce(said)
+        }
+    }
+
+    /// An error's own words with any path taken out of them.
+    static func reasonWithoutPath(_ error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == "DropDeck" { return ns.localizedDescription }
+        switch ns.code {
+        case NSFileWriteOutOfSpaceError: return "The disk is full"
+        case NSFileWriteNoPermissionError, NSFileReadNoPermissionError:
+            return "Drop Deck is not allowed to write there"
+        case NSFileWriteVolumeReadOnlyError: return "That disk cannot be written to"
+        default: return "The files could not be copied"
+        }
     }
 
     /// One walk of a folder repairs the pads, the running order and the drops
     /// library together, so a board whose pads are fine but whose running order
     /// is not still has something to relink.
     func relinkMissing() {
-        let asked = board.missingSlots.count + board.playlist.missing.count + board.drops.missing.count
+        let asked = board.missingCount
         guard asked > 0 else {
             speaker.announceHelp("Nothing is missing. Every sound on this board is where it should be")
             return
@@ -543,36 +774,36 @@ extension MainWindow {
         panel.message = "Where should I look for the \(asked) missing sound\(asked == 1 ? "" : "s")? "
                       + "Every one found in that folder, or under it, is repointed."
         panel.prompt = "Search this folder"
-        guard panel.runModal() == .OK, let root = panel.url else { return }
+        let answer = panel.runModal()
+        Speaker.interfaceClosed()
+        guard answer == .OK, let root = panel.url else { return }
         speaker.announceHelp("Looking through \(root.lastPathComponent). This may take a moment.")
+        let generation = boardGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var index: [String: String] = [:]
-            if let walker = FileManager.default.enumerator(at: root,
-                                                           includingPropertiesForKeys: [.isRegularFileKey]) {
-                for case let url as URL in walker {
-                    let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
-                    guard values?.isRegularFile == true else { continue }
-                    index[url.lastPathComponent.lowercased()] = url.path
-                }
+            let index = BoardPaths.index(root.path)
+            DispatchQueue.main.async {
+                self?.relinkFinished(index: index, asked: asked, generation: generation)
             }
-            DispatchQueue.main.async { self?.relinkFinished(index: index, asked: asked) }
         }
     }
 
-    private func relinkFinished(index: [String: String], asked: Int) {
-        var repaired = 0
-        for slot in board.missingSlots {
-            guard let old = slot.filepath,
-                  let found = index[(old as NSString).lastPathComponent.lowercased()] else { continue }
-            slot.filepath = found
-            if slot.duration == nil { slot.duration = AudioFile.probe(found)?.duration }
-            repaired += 1
+    private func relinkFinished(index: BoardPaths.Index, asked: Int, generation: Int) {
+        // **The board it was asked for may have gone.** On a Mac the board
+        // OBJECT is reused when another takes its place, so a relink that
+        // finished after File, New used to repair nothing and then mark the
+        // untouched new board as changed, which wrote an empty file that
+        // opened next time (Windows found the same through Mark's repros).
+        // The board that left was saved by `putAway`, so nothing is lost by
+        // saying so plainly instead.
+        guard generation == boardGeneration else {
+            speaker.announce("The relink finished after that board was put away, so nothing "
+                             + "was changed. Open it and relink again")
+            return
         }
-        repaired += board.playlist.relink(using: index).count
-        repaired += board.drops.relink(using: index).count
+        let repaired = board.relink(using: index)
         refreshAllPads()
         playlistView.refresh(rowsChanged: false)
-        let still = board.missingSlots.count + board.playlist.missing.count + board.drops.missing.count
+        let still = board.missingCount
         speaker.announce(still > 0 ? "Relinked \(repaired) of \(asked). \(still) still missing"
                                    : "Relinked all \(repaired)")
         if repaired > 0 {

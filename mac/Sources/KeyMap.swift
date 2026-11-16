@@ -118,6 +118,8 @@ enum Command: String, CaseIterable {
     // platform. Windows 3.8.2: one key per destination.
     case streamToggleRadio
     case record, recordVideo, recordFolder, sources, sourceControl, muteSources, soloMic
+    // Pausing both recordings, 3.10.0. Siena, October 2026.
+    case pauseRecording
     // Giving another program on this machine the show, 3.7.1.
     case sendSetup, sendMonitor, sendStatus, routing, virtualDevice
     // What is coming up next, 3.7.1.
@@ -346,6 +348,9 @@ enum KeyMap {
         // Windows records the picture on Ctrl+Shift+R, which pairs with
         // Ctrl+R. Command+Shift+R here for the same reason.
         .recordVideo:   [Binding("r", [.command, .shift])],
+        // Windows pauses both recordings on Alt+Shift+R (3.9.0), and Option
+        // is what Alt is called here. Neither VoiceOver nor macOS binds it.
+        .pauseRecording: [Binding("r", [.option, .shift])],
         // Windows puts the send itself on Alt+Shift+O, alongside the other
         // Alt+Shift windows, and its three reports on Ctrl+Shift. The Mac
         // keeps that shape: Option+Shift opens something, Command+Shift asks

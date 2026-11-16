@@ -62,6 +62,15 @@ final class Recorder {
 
     var elapsed: Double { rate > 0 ? Double(framesWritten) / rate : 0 }
 
+    /// Option Shift R. See `PauseGate`. The elapsed time is what is in the
+    /// file, so it stands still while paused.
+    let gate = PauseGate()
+    var isPaused: Bool { isRecording && gate.isPaused }
+    @discardableResult
+    func pause() -> Bool { isRecording && gate.pause(waiting: bus?.available() ?? 0) }
+    @discardableResult
+    func resume() -> Bool { gate.resume(waiting: bus?.available() ?? 0) }
+
     static let stem = "Drop Deck Stream "
 
     /// Documents, asked of the system rather than assumed. A machine where
@@ -200,6 +209,7 @@ final class Recorder {
         droppedAtStart = bus.dropped
         cue = CueFile(audioPath: destination)
         stopping = false
+        gate.reset()
         isRecording = true
 
         let t = Thread { [weak self] in self?.run() }
@@ -219,12 +229,33 @@ final class Recorder {
         else { return }
         var interleaved = [Float](repeating: 0, count: chunk * 2)
 
-        while true {
+        loop: while true {
             lock.lock(); let finishing = stopping, broken = failed; lock.unlock()
             // A file that refused takes nothing more: what is left on the bus
             // has nowhere to go.
             if broken { break }
             let ready = bus.available()
+            switch gate.step(ready: ready, chunk: chunk) {
+            case .normal:
+                break
+            case .write(let n):
+                if n > 0 { write(n, bus, buffer, &interleaved) }
+                else if finishing { break loop }
+                else { Thread.sleep(forTimeInterval: C.streamPollSeconds) }
+                continue loop
+            case .discard(let n):
+                // Stopped while paused: what is waiting came after the pause.
+                if finishing { break loop }
+                if n > 0 {
+                    if interleaved.count < n * 2 { interleaved = [Float](repeating: 0, count: n * 2) }
+                    interleaved.withUnsafeMutableBufferPointer { raw in
+                        bus.read(frames: n, into: raw.baseAddress!)
+                    }
+                } else {
+                    Thread.sleep(forTimeInterval: C.streamPollSeconds)
+                }
+                continue loop
+            }
             if ready < chunk {
                 // Stopping a recording should not cost the last quarter second
                 // of it, so the remaining ring is drained before the file is
@@ -403,8 +434,11 @@ final class Recorder {
         let attributes = try? FileManager.default.attributesOfItem(atPath: finished)
         let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
         let megabytes = Double(size) / (1024 * 1024)
-        let name = (finished as NSString).lastPathComponent
-        var said = [String(format: "Recording saved as %@, %@, %.1f megabytes",
+        // The name without its extension, which is read aloud as "dot wav".
+        // Said after "Recording stopped", which the window puts first: Siena
+        // never heard the recording say it had stopped (Windows 3.9.0).
+        let name = ((finished as NSString).lastPathComponent as NSString).deletingPathExtension
+        var said = [String(format: "Saved as %@, %@, %.1f megabytes",
                            name, formatDuration(seconds), megabytes)]
         if lost > 0 {
             said.append("It lost audio \(lost) times, so there are gaps in it")
@@ -414,5 +448,85 @@ final class Recorder {
         path = nil
         return said.joined(separator: ". ") + "."
 
+    }
+}
+
+
+// ------------------------------------------------------------- pausing ---
+
+/// Holding a recording and carrying on into the same file.
+///
+/// Siena, October 2026: "it would be helpful to have the option to pause and
+/// resume a recording without having to stop it and make a new recording."
+/// Both recorders keep reading the air bus while paused and throw what they
+/// read away, so the ring never fills and nothing is lost to an overflow when
+/// the recording carries on. The cut falls at the sample waiting at the press:
+/// what was already in the ring when Pause was pressed happened BEFORE the
+/// press and is written; what is in it when Resume is pressed happened during
+/// the pause and is not. Windows 3.9.0 measured the first version leaking a
+/// quarter second across the press, which is what the two counts are for.
+///
+/// Kept apart from the writers so the arithmetic can be checked without a
+/// file, a bus or a thread.
+final class PauseGate {
+    private let lock = NSLock()
+    private var paused = false
+    /// Frames that were waiting at the press of Pause: still to be written.
+    private var drain = 0
+    /// Frames that were waiting at the press of Resume: still to be dropped.
+    private var discard = 0
+
+    enum Step: Equatable {
+        /// Not paused and nothing left over: the writer carries on as usual.
+        case normal
+        /// Write this many (nought means wait for more).
+        case write(Int)
+        /// Read and throw away this many (nought means wait for more).
+        case discard(Int)
+    }
+
+    var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
+
+    /// `waiting` is what the bus holds at the press. False when already paused.
+    @discardableResult
+    func pause(waiting: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !paused else { return false }
+        paused = true
+        drain = max(0, waiting)
+        return true
+    }
+
+    /// `waiting` is what the bus holds at the press. False when not paused.
+    @discardableResult
+    func resume(waiting: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard paused else { return false }
+        paused = false
+        // Anything from before the pause not yet written is written first; the
+        // rest of what is waiting arrived during the pause.
+        discard = max(0, waiting - drain)
+        return true
+    }
+
+    /// What the writer should do with `ready` frames, at most `chunk`.
+    func step(ready: Int, chunk: Int) -> Step {
+        lock.lock(); defer { lock.unlock() }
+        if drain > 0 {
+            let n = min(drain, ready, chunk)
+            drain -= n
+            return .write(n)
+        }
+        if discard > 0 {
+            let n = min(discard, ready, chunk)
+            discard -= n
+            return .discard(n)
+        }
+        if paused { return .discard(min(ready, chunk)) }
+        return .normal
+    }
+
+    func reset() {
+        lock.lock(); paused = false; drain = 0; discard = 0; lock.unlock()
     }
 }

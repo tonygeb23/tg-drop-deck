@@ -12,7 +12,10 @@ extension MainWindow: PlaylistViewDelegate {
 
     // ------------------------------------------------------------ the views ---
 
-    func showView(_ view: View) {
+    /// `quiet` moves without a word, for a board that opens on its running
+    /// order: the Loaded line has just said where it is, and a second
+    /// sentence would cut it off.
+    func showView(_ view: View, quiet: Bool = false) {
         setCurrentView(view)
         let onBoard = view == .board
         bankTabs.isHidden = !onBoard
@@ -29,6 +32,7 @@ extension MainWindow: PlaylistViewDelegate {
         }
         // It announces even when you were already there. "Already here" would
         // be wrong, and appearing to do nothing would be worse.
+        if quiet { return }
         if onBoard {
             speaker.announce("Soundboard. \(board.bankName(currentBank)), "
                              + "\(board.assignedCount(currentBank)) sounds")
@@ -308,7 +312,7 @@ extension MainWindow: PlaylistViewDelegate {
         let selected = playlistView.selectedRow
         let at: Int? = selected >= 0 ? selected : nil
         guard let track = board.playlist.insertDrop(path, at: at) else {
-            speaker.announce("That drop could not be read")
+            speaker.announce("That drop could not be opened, \(AudioFile.refusal(path))")
             return
         }
         let landed = at ?? (board.playlist.count - 1)
@@ -643,6 +647,7 @@ extension MainWindow: PlaylistViewDelegate {
             !$0.isMissing && ($0.tailSilence == nil || $0.duration == nil)
         }
         guard !pending.isEmpty else { return }
+        let generation = boardGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
             for track in pending {
                 let path = track.filepath
@@ -661,8 +666,17 @@ extension MainWindow: PlaylistViewDelegate {
                 }
             }
             DispatchQueue.main.async {
-                self?.playlistView.refresh(rowsChanged: false)
-                self?.touch()
+                guard let self else { return }
+                // **Only for the board it was measured on** (3.10.0). The
+                // board OBJECT is reused when another takes its place, so a
+                // pass finishing after File, New marked the untouched new
+                // board changed, and it was written out as an empty file that
+                // then opened next time. Nor does a measurement alone give a
+                // fresh board a file: it is a cache, measured again next time.
+                guard generation == self.boardGeneration else { return }
+                self.playlistView.refresh(rowsChanged: false)
+                if self.keeper.unstarted && !self.board.dirty { return }
+                self.touch()
             }
         }
     }

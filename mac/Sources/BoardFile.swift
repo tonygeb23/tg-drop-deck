@@ -247,15 +247,19 @@ enum BoardFiles {
     /// is said when it is not the usual one, because the board that opens is
     /// now whichever was open last, and somebody with two boards should hear
     /// which this is.
+    ///
+    /// The running order is counted too (Windows 3.10.0, `_playlist_tail`),
+    /// so a board that is all playlist does not open as "0 sounds loaded".
     static func startupParts(note: String, loadedDemo: Bool, assigned: Int,
-                             boardName: String) -> [String] {
+                             boardName: String, tracks: Int = 0) -> [String] {
         var parts: [String] = []
         if !note.isEmpty { parts.append(note) }
+        let tail = tracks > 0 ? ", \(tracks) playlist track\(tracks == 1 ? "" : "s")" : ""
         if loadedDemo {
-            parts.append("demo pack loaded, \(assigned) sounds and beds"
+            parts.append("demo pack loaded, \(assigned) sounds and beds" + tail
                          + (note.isEmpty ? ". File, new board starts you from scratch" : ""))
         } else {
-            parts.append((boardName.isEmpty ? "" : boardName + ", ") + "\(assigned) sounds loaded")
+            parts.append((boardName.isEmpty ? "" : boardName + ", ") + "\(assigned) sounds loaded" + tail)
         }
         return parts
     }
@@ -403,8 +407,179 @@ final class BoardKeeper {
     /// pointed at the copy it just wrote and is no longer dirty, so the second
     /// pass writes that copy again with the same contents and never makes a
     /// second one.
-    func saveForClose() -> Outcome {
-        save()
+    ///
+    /// **A new board nobody has put anything in is not written at all**
+    /// (3.10.0). Writing it would leave an empty "New board" file behind and
+    /// make it the board that opens, empty, at the next start.
+    func saveForClose() -> Outcome? {
+        if unstarted && !board.dirty { return nil }
+        return save()
+    }
+
+    /// The two second timer. **It writes only a board that has something to
+    /// write.** A timer still running when one board took another's place
+    /// used to save the newcomer, which is how an untouched new board got a
+    /// file, and how File, New wrote eighty empty slots over a saved board.
+    func autosave() -> Outcome? {
+        board.dirty ? save() : nil
+    }
+
+    // ------------------------------------------ one board for another ---
+    //
+    // Siena Trigiani and Rob Castrogiovanni, 15 November 2026: boards saved
+    // with Command S came back empty. File, New kept the old board's PATH,
+    // because on a Mac the board object stays and `adopt` with no path kept
+    // the one it had; the next save then wrote the new, empty board over the
+    // saved one. Load demo and Import did the same, and File, Open dropped
+    // whatever had changed in the last two seconds. Windows 3.10.0 fixed the
+    // same fault the same way, and these are its rules:
+    //
+    //   1. Before any board takes the open one's place, the open one is put
+    //      away: a change not yet written is written to ITS OWN file now.
+    //   2. A board that takes another's place never takes its FILE. New, the
+    //      demo and an import each get a file of their own in the settings
+    //      folder, which is not written until something changes.
+
+    /// The file this session gave a board that has no name yet, while it is
+    /// still that board's. See `leftoverHome`.
+    var freshHome: String?
+    /// The board is a new one, given a file of its own by `giveNewHome`,
+    /// which nobody has changed yet. Such a board is not saved on closing.
+    var unstarted = false
+
+    /// The open board is about to be replaced: keep everything in it.
+    ///
+    /// Nil when there was nothing to write. Otherwise what the save did; a
+    /// `.failed` is the window's cue to ask before going on, because a read
+    /// only file or a drive that has gone would otherwise shut somebody out
+    /// of New and Open for as long as it lasts.
+    func putAway() -> Outcome? {
+        guard board.dirty else { return nil }
+        return save()
+    }
+
+    /// What the app keeps in its settings folder under names of its own,
+    /// less the .json. A board is never given one of these: an old bank
+    /// called last_board, imported, would be written over by the note of
+    /// which board opens next.
+    static let settingsOwn: Set<String> = [
+        "board", "last_board", "donate", "install", "feedback_queue",
+        "last_app_check", "settings", "errors",
+    ]
+
+    /// Something typed, made safe to be a file and a folder name. May be "".
+    ///
+    /// The same rule as Windows, so a board named on one machine has the
+    /// same name on the other: no characters Windows refuses, no control
+    /// characters, nothing ending in a dot or a space, and a name typed with
+    /// ".json" on the end means the name without it.
+    static func fileWords(_ text: String) -> String {
+        let refused = Set("<>:\"/\\|?*")
+        let mapped = String(text.map { ch -> Character in
+            if refused.contains(ch) { return " " }
+            if let scalar = ch.unicodeScalars.first, scalar.value < 32 { return " " }
+            return ch
+        })
+        var words = mapped.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .joined(separator: " ")
+        if words.lowercased().hasSuffix(".json") { words = String(words.dropLast(5)) }
+        let trim = CharacterSet(charactersIn: " .")
+        words = words.trimmingCharacters(in: trim)
+        return String(words.prefix(80)).trimmingCharacters(in: trim)
+    }
+
+    /// A board file of its own for a board that has no name yet: "New
+    /// board", "New board 2" and so on, in the settings folder, never a file
+    /// that is already there. Nothing is written by asking.
+    static func newHome(_ name: String = "New board", configDir: String) -> String {
+        var stem = fileWords(name)
+        if stem.isEmpty { stem = "New board" }
+        if settingsOwn.contains(stem.lowercased()) { stem = "Imported " + stem }
+        let folder = configDir as NSString
+        var candidate = folder.appendingPathComponent(stem + ".json")
+        var count = 2
+        while FileManager.default.fileExists(atPath: candidate) {
+            candidate = folder.appendingPathComponent("\(stem) \(count).json")
+            count += 1
+        }
+        return candidate
+    }
+
+    /// Point the board at a file of its own, claimed as nothing there. It is
+    /// written the first time something changes, and not before.
+    @discardableResult
+    func giveNewHome(_ name: String = "New board") -> String {
+        let home = BoardKeeper.newHome(name, configDir: configDir)
+        board.claimPath(home)
+        board.dirty = false
+        freshHome = home
+        unstarted = true
+        // A board pinned earlier in the session is not this one.
+        pinned = nil
+        return home
+    }
+
+    /// A board somebody opened from a file, or that came back changed: it
+    /// has a name, so nothing about a fresh home applies to it.
+    func forgetNewHome() {
+        freshHome = nil
+        unstarted = false
+    }
+
+    /// The file a not yet named board is in, when it is ours to remove.
+    ///
+    /// Only the file this session gave this very board, that the board
+    /// itself wrote, and that nothing has changed since. Anything else at
+    /// that path is somebody's own and is left alone.
+    func leftoverHome() -> String? {
+        guard let home = freshHome, Board.samePath(home, board.path),
+              case .stamp? = board.disk,
+              FileManager.default.fileExists(atPath: home),
+              !board.changedOnDisk() else { return nil }
+        return home
+    }
+
+    /// Save board as, for the window: the save, and then the "New board"
+    /// file the board was kept in until it had a name, which holds nothing
+    /// the named one does not. Left behind, every board ever named would
+    /// leave a twin.
+    func saveAs(_ target: String) -> Outcome {
+        let leftover = leftoverHome()
+        let outcome = save(to: target)
+        guard case .saved(let saved) = outcome else { return outcome }
+        forgetNewHome()
+        if let leftover, !Board.samePath(leftover, saved),
+           Board.samePath(BoardFiles.rememberedBoardPath(configDir: configDir), saved) {
+            try? FileManager.default.removeItem(atPath: leftover)
+        }
+        return outcome
+    }
+
+    /// Is there, or will there be, a file holding this board. False only
+    /// for a board as it arrived with no file of its own: the demo as it
+    /// shipped, or a new board, neither changed since.
+    var hasAFile: Bool {
+        if board.dirty { return true }
+        if unstarted { return false }
+        return board.disk != .nothingThere
+    }
+
+    /// A board's name for a sentence. The usual one is "Your board".
+    static func boardSaid(_ path: String?, configDir: String) -> String {
+        guard let path, !path.isEmpty,
+              !Board.samePath(path, BoardFiles.defaultBoardPath(configDir: configDir))
+        else { return "Your board" }
+        return BoardFiles.boardWords(path)
+    }
+
+    /// What happens to the open board when another takes its place, for the
+    /// box that asks. It has to be TRUE, so it is worked out: the demo as it
+    /// shipped has no file and is not given one for being looked at, so
+    /// saying it "is saved" would be a promise nothing keeps.
+    func keptWords() -> String {
+        guard hasAFile else { return "The demo pack comes back with File, Load demo pack." }
+        return "\(BoardKeeper.boardSaid(board.path, configDir: configDir)) is saved first "
+             + "and stays exactly as it is. File, Open board brings it back."
     }
 
     /// The board's own file was changed outside the app. Keep both.

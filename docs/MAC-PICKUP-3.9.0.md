@@ -1,5 +1,7 @@
 # Mac pickup: what Windows 3.9.0 changed, and Siena's Mac report
 
+**Mac status:** Items 1 to 4 done on the Mac in Mac 3.10.0, 16 November 2026 (item 5 needed nothing). The pause key is Option+Shift+R. Ali's record-every-source request is still not started anywhere.
+
 Written on Windows, 16 October 2026. **Nothing under `mac/` was touched** (the
 platform rule in CLAUDE.md). This is the list for the next Mac session, done
 on the Mac. Windows details: CHANGELOG.md, 3.9.0 for Windows, and

@@ -132,8 +132,38 @@ final class Speaker {
     /// `status` and `spoken`, and nothing is posted to VoiceOver.
     static var muted = false
 
+    // ------------------------------------------- after a menu or a box ---
+    //
+    // Siena chooses Start recording with VO+M, and the line it speaks was
+    // never heard (October 2026). When a menu or a box closes, VoiceOver
+    // reads wherever focus lands, at exactly the moment the command answers,
+    // and whichever speaks second cuts the other off. Windows found the same
+    // with NVDA and waits 400 ms after a menu closes, then queues the line
+    // behind the screen reader rather than interrupting it (3.9.0,
+    // `AFTER_MENU_*`). The Mac starts from Windows' numbers. **They have not
+    // been measured against VoiceOver yet**; change them only after doing so.
+    // A key equivalent does not track the menu, so a key pressed in the
+    // middle of a show is still answered at once.
+
+    /// When a menu, a box or a file panel last closed.
+    private(set) static var interfaceClosedAt = Date.distantPast
+    /// A line within this long of that waits.
+    static let afterInterfaceSeconds = 0.5
+    /// And waits this long, then queues rather than interrupts.
+    static let afterInterfaceDelay = 0.4
+
+    /// Called when a menu stops tracking, and after every box and panel.
+    static func interfaceClosed(at when: Date = Date()) { interfaceClosedAt = when }
+
+    /// How long a line spoken now should wait, or zero.
+    static func waitAfterInterface(now: Date = Date()) -> Double {
+        now.timeIntervalSince(interfaceClosedAt) < afterInterfaceSeconds ? afterInterfaceDelay : 0
+    }
+
     private func say(_ text: String, interrupt: Bool = true) {
         guard !text.isEmpty else { return }
+        let wait = Thread.isMainThread ? Speaker.waitAfterInterface() : 0
+        let interrupt = wait > 0 ? false : interrupt
         spoken?(text, interrupt)
         guard !Speaker.muted else { return }
         let post = { [weak self] in
@@ -150,6 +180,12 @@ final class Speaker {
                     .priority: Speaker.priority(interrupt: interrupt).rawValue,
                 ])
         }
-        if Thread.isMainThread { post() } else { DispatchQueue.main.async(execute: post) }
+        if wait > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: post)
+        } else if Thread.isMainThread {
+            post()
+        } else {
+            DispatchQueue.main.async(execute: post)
+        }
     }
 }

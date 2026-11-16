@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var main: MainWindow!
     private var monitor: Any?
+    private var menuObserver: NSObjectProtocol?
 
     // The items that say what state they are in. Relabelled rather than
     // duplicated, so each go live key also comes off air from its own place.
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var micItem: NSMenuItem!
     private var recordItem: NSMenuItem!
     private var recordVideoItem: NSMenuItem!
+    private var pauseRecordingItem: NSMenuItem!
     private var sendItem: NSMenuItem!
     private var sendMonitorItem: NSMenuItem!
     private var virtualDeviceItem: NSMenuItem!
@@ -96,12 +98,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         trace("window shown")
         installKeyMonitor()
+        // Speech straight after a menu closes waits for VoiceOver to read
+        // where focus landed (Siena, VO+M). See `Speaker.interfaceClosed`.
+        menuObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { _ in
+            Speaker.interfaceClosed()
+        }
 
         // Out of the launch event before anything touches CoreAudio.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.main.startAudio()
             self.trace("audio started")
+            // A board that is all running order opens on the running order,
+            // at startup as on File, Open (Ali Moosa, 16 October 2026).
+            self.main.viewForBoard()
             self.main.announceStartup()
             self.warnAboutFunctionKeys()
             self.main.startupHousekeeping()
@@ -154,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
+        main?.exportStop.set()
         main?.saveForClose()
         // Quitting finishes both recordings too, not only closing the window
         // (N2). Once only: whichever comes first does it.
@@ -389,6 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(plain("Import an old soundboard bank...", #selector(importBank)))
         file.addItem(plain("Load the demo pack", #selector(loadDemo)))
         file.addItem(.separator())
+        file.addItem(plain("Export board with its sounds...", #selector(exportBoard)))
         file.addItem(plain("Relink missing sounds...", #selector(relink)))
         fileItem.submenu = file
         bar.addItem(fileItem)
@@ -504,6 +517,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordVideoItem = item("Record the picture and the sound", .recordVideo,
                                #selector(toggleVideoRecording))
         air.addItem(recordVideoItem)
+        pauseRecordingItem = item("Pause recording", .pauseRecording,
+                                  #selector(togglePauseRecording))
+        air.addItem(pauseRecordingItem)
         air.addItem(plain("Open the recordings folder", #selector(openRecordings)))
         air.addItem(.separator())
         // The send. Four items, because the answer to "where is my audio
@@ -659,6 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordItem?.title = main.recorder.isRecording ? "Stop recording" : "Start recording"
         recordVideoItem?.title = main.videoRecorder.isRecording
             ? "Stop recording the picture" : "Record the picture and the sound"
+        pauseRecordingItem?.title = main.recordingPaused ? "Resume recording" : "Pause recording"
         // The On air menu says whether you are sending AND whether you are
         // hearing it, because those are two states you cannot see and the
         // second one explains an echo in your own headphones.
@@ -790,6 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func micSettings() { main.showPreferences(tab: "Microphone") }
     @objc func toggleRecording() { main.toggleRecording(); refreshAirMenu() }
     @objc func toggleVideoRecording() { main.toggleVideoRecording(); refreshAirMenu() }
+    @objc func togglePauseRecording() { main.togglePauseRecording(); refreshAirMenu() }
     @objc func sendSetup() { main.toggleSend(); refreshAirMenu() }
     @objc func sendMonitor() { main.toggleSendMonitor(); refreshAirMenu() }
     @objc func sendStatus() { main.saySendStatus() }
@@ -824,6 +842,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openBoard() { main.openBoard() }
     @objc func loadDemo() { main.loadDemoPack() }
     @objc func relink() { main.relinkMissing() }
+    @objc func exportBoard() { main.exportBoard() }
 
     @objc func assignFile() { main.assignToFocused(folder: false) }
     @objc func assignFolder() { main.assignToFocused(folder: true) }

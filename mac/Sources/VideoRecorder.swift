@@ -175,6 +175,16 @@ final class VideoRecorder {
 
     var onState: ((String) -> Void)?
 
+    /// Option Shift R, with the sound recorder. See `PauseGate`. While paused
+    /// the sound read is thrown away and so are the pictures waiting, so the
+    /// file's timeline, which is counted in sound, simply joins up.
+    let gate = PauseGate()
+    var isPaused: Bool { isRecording && gate.isPaused }
+    @discardableResult
+    func pause() -> Bool { isRecording && gate.pause(waiting: bus?.available() ?? 0) }
+    @discardableResult
+    func resume() -> Bool { gate.resume(waiting: bus?.available() ?? 0) }
+
     private var width = C.rtmpWidth
     private var height = C.rtmpHeight
     private var fps = C.rtmpFPS
@@ -286,6 +296,7 @@ final class VideoRecorder {
         lastFrame = nil
         saidLosing = 0
         stopping = false
+        gate.reset()
         isRecording = true
         cue = CueFile(audioPath: file)
 
@@ -408,7 +419,7 @@ final class VideoRecorder {
         defer { scratch.deallocate() }
 
         var lastSize = ProcessInfo.processInfo.systemUptime
-        while true {
+        loop: while true {
             lock.lock(); let finishing = stopping; lock.unlock()
             guard let bus else { break }
             // **A writer that has failed says so, once, and stops.** A full disk
@@ -433,6 +444,35 @@ final class VideoRecorder {
                 }
             }
             let ready = bus.available()
+            switch gate.step(ready: ready, chunk: chunk) {
+            case .normal:
+                break
+            case .write(let n):
+                // What was waiting at the press of Pause, which happened
+                // before it.
+                if n > 0 {
+                    bus.read(frames: n, into: scratch)
+                    feedAudio(scratch, frames: n, rate: rate)
+                    pumpVideo()
+                    continue
+                }
+                if !finishing {
+                    Thread.sleep(forTimeInterval: C.streamPollSeconds)
+                    continue
+                }
+            case .discard(let n):
+                // Stopped while paused: what is waiting came after the pause.
+                if finishing { break loop }
+                if n > 0 {
+                    bus.read(frames: n, into: scratch)
+                    // The pictures that arrived meanwhile go too, or the first
+                    // frames after Resume would be pictures of the pause.
+                    tap?.clear()
+                } else {
+                    Thread.sleep(forTimeInterval: C.streamPollSeconds)
+                }
+                continue
+            }
             if ready < chunk {
                 if finishing {
                     if ready > 0 {

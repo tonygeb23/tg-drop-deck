@@ -40,6 +40,7 @@ extension SelfTest {
         testStartupWords()
         testStreamKeyRules()
         testCameraPlaceholder()
+        runBoardTravelChecks(scratch)
     }
 
     // ------------------------------------------------------ the channel ---

@@ -14,7 +14,7 @@ import Foundation
 
 enum C {
     static let appName = "TG Drop Deck"
-    static let appVersion = "3.8.4"
+    static let appVersion = "3.10.0"
     static let vendor = "TG Studios"
     static let tagline = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -58,6 +58,23 @@ enum C {
     /// for "Sirens and Alarms", short enough that a strip of four still shows
     /// which one you are on.
     static let maxBankName = 32
+
+    /// Opening a board looks for its missing sounds in the board's own
+    /// folder, because that is where they are when a board has been carried
+    /// to another computer in a cloud folder (Ali Moosa, 14 October 2026).
+    /// Bounded three ways, because a board at the top of somebody's Drive has
+    /// the whole Drive under it. Windows' `BESIDE_SEARCH_*`.
+    static let besideSearchSeconds = 2.0
+    static let besideSearchDepth = 3
+    static let besideSearchEntries = 20000
+
+    /// The folder an exported board keeps its sounds in, beside the board.
+    static let exportSoundsFolder = "Sounds"
+    /// A long export says how far along it is: not in its first few seconds,
+    /// then no more often than this. By the clock, because on a fast disk ten
+    /// per cent steps were nine interrupting lines in a fifth of a second.
+    static let exportFirstProgressSeconds = 3.0
+    static let exportProgressEverySeconds = 5.0
 
     // ------------------------------------------------------------- audio ---
 

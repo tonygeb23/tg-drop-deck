@@ -104,7 +104,7 @@ final class PlaylistPlayer {
             // no argument rides down over exactly the right time.
             fadeOut: playlist.handoverAt(at))
         guard let started else {
-            lastError = "\(track.displayName) would not open"
+            lastError = "\(track.displayName) would not open, \(AudioFile.refusal(track.filepath))"
             return nil
         }
         ddTrace("start row \(at) \(track.displayName) duration=\(track.duration ?? -1) "

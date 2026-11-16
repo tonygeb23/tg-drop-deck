@@ -1,5 +1,102 @@
 # Changelog
 
+## 3.10.0 for Mac, 16 November 2026
+
+**A new board never takes another board's file. If you use File, New board,
+install this one.** It also brings everything Windows gained in 3.9.0: boards
+that travel between computers, recordings that say they started and stopped,
+and a pause key.
+
+### Saved boards were coming back empty
+
+Siena Trigiani and Rob Castrogiovanni, 15 November 2026: save a board under a
+name, add sounds, save again, press Command+N and build the next board, and
+the first board was empty the next time it was opened. The Mac had the same
+fault as Windows, by a slightly different road: the new board kept the old
+board's file, and the save two seconds later wrote eighty empty slots over it.
+Load the demo pack and Import an old soundboard bank did the same, and File,
+Open could lose whatever had changed in the last two seconds.
+
+Now anything not yet saved in the open board is saved to its own file before
+another board takes its place, and the box that asks says so: "Siena show is
+saved first and stays exactly as it is. File, Open board brings it back." A
+new board, the demo pack and an imported bank each get a file of their own in
+the settings folder (New board, Demo board, or the bank's own name), which is
+not written until you put something in it, and an empty new board nobody
+touched leaves nothing behind when you quit. Afterwards the app says what
+happened to the board you had before it describes the new one. Command+Shift+S
+names the new board wherever you like, and the New board file it was kept in
+is tidied away.
+
+A relink or a running order measurement that finished after the board had
+been put away used to land on the new board and make it save itself; neither
+can now.
+
+A board already written over cannot be brought back by an update. The sound
+files themselves were never touched; only the board has to be rebuilt.
+
+### A board made on Windows relinks on the Mac
+
+Siena again, 12 October: a board made on Windows and kept in Google Drive
+relinked on another Windows laptop, and on the Mac said "16 sounds still
+missing" with every one of them in the folder she chose. A Mac does not treat
+a backslash as part of a path, so a Windows path was one long name that
+matched nothing. File names are now taken after either kind of slash, a pad is
+also matched by its name without the extension, a Windows drive or network
+path is never joined onto the board's folder, and a pad from Windows is called
+by its file name rather than read out as the whole path.
+
+### Boards that travel
+
+Ali Moosa, 14 October: a board saved to Google Drive opened elsewhere with its
+whole playlist missing.
+
+- **A board looks beside itself when it opens.** Anything missing is looked
+  for in the board's own folder, three folders down, for at most two seconds.
+  What it finds plays straight away and is counted ("2 sounds found beside the
+  board"), and the board file is not changed by it.
+- **A sound in the board's folder is saved relative to the board**, with
+  forward slashes, so the board opens on every computer the folder reaches,
+  Windows included.
+- **File, Export board with its sounds** asks what to call it, then where,
+  and writes one folder holding the board and a copy of every sound it plays.
+  It opens as it is on any computer. A long export says how far along it is
+  every few seconds.
+- **Everything missing is counted** when a board opens: pads, running order
+  and drops, not just pads.
+
+### Recording started, recording stopped
+
+Siena: starting or stopping a recording "doesn't actually announce". It said
+"Recording to Drop Deck Stream 004.mp3", which never says the one thing
+asked. It now says **Recording started** or **Recording stopped** first, then
+the file's name without ".mp3", at every speech level. And when you choose it
+from the On air menu with VO+M, what the app says now waits a moment for
+VoiceOver to read where focus landed, instead of being cut off by it. The same
+goes for what is said after a box or a file window closes.
+
+### Pause a recording, Option+Shift+R
+
+Also **On air, Pause recording**. It pauses the sound and the picture
+recordings together and carries on into the same file; if either is paused,
+the key resumes both. It says how much is in the file so far, and the status
+line says RECORDING PAUSED. The cut falls exactly at the key press: nothing
+from the pause reaches the file, and the track list notes whatever is playing
+when you carry on.
+
+### Smaller things
+
+- **Songs whose name and contents disagree now play.** Raymond's Suno files
+  (feedback 46) are not yet in hand, but one cause was found on this Mac: AAC
+  saved with ".mp3" on the end is not refused by macOS, it is misread as an
+  MP3 a fiftieth of a second long, so a pad seems to play nothing. Drop Deck
+  now reads what a file really is from its first bytes. A file that still will
+  not play says why: missing, empty, a WebM file macOS cannot play, or damaged.
+- **Preferences, Recording has a Browse button** for the folder (Ali Moosa).
+- **A board that is all running order opens on the running order**, at
+  startup and from File, Open, and the Loaded line counts the tracks and no
+  longer reads ".json" aloud (Ali Moosa).
+
 ## 3.10.0 for Windows, 16 November 2026
 
 **A new board never takes another board's file. If you use File, New board,
