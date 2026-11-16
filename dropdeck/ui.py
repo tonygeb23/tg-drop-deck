@@ -6245,6 +6245,9 @@ class DropDeckFrame(wx.Frame):
             if partner:
                 lines.append("In the other program, choose %s as its input "
                              "device." % partner)
+            said = endpoints.muted_for(name, found)
+            if said:
+                lines.append(said)
             said = endpoints.mismatch_for(name, found)
             if said:
                 lines.append(said)

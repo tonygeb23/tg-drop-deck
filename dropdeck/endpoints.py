@@ -71,13 +71,16 @@ _ACTIVE = 1
 class Endpoint:
     """One Windows sound endpoint and the format it is set to."""
 
-    def __init__(self, side, name="", device="", rate=0, bits=0, channels=0):
+    def __init__(self, side, name="", device="", rate=0, bits=0, channels=0,
+                 guid=""):
         self.side = side
         self.name = name
         self.device = device
         self.rate = int(rate or 0)
         self.bits = int(bits or 0)
         self.channels = int(channels or 0)
+        #: The endpoint's key in the registry, which is half of its id.
+        self.guid = guid
 
     @property
     def known(self):
@@ -195,7 +198,7 @@ def _read_side(side):
             rate, bits, channels = _read_format(values[_FORMAT])
             out.append(Endpoint(side, str(values[_NAME] or ""),
                                 str(values[_DEVICE] or ""),
-                                rate, bits, channels))
+                                rate, bits, channels, guid))
     finally:
         try:
             root.Close()
@@ -274,6 +277,100 @@ def mismatch_for(playback_name, found=None):
             % (render.name or "the playback end",
                capture.name or "the recording end",
                render.said(), capture.said()))
+    return ""
+
+
+def _windows_mute(point):
+    """Is this endpoint muted in Windows: True, False, or None for unknown.
+
+    **Read only, and through bare ctypes.** Mute lives on a COM interface and
+    comtypes is not a dependency of this app, so a vtable call is what keeps
+    it working in the frozen build. A slot number below is the method's place
+    in the interface, IUnknown's three included. Assumes the calling thread
+    has COM, which the UI thread does through wx and `cabletest` brings.
+    """
+    if winreg is None or not point.guid:
+        return None
+    import ctypes
+    from ctypes import POINTER, WINFUNCTYPE, byref, c_int, c_ulong, c_void_p
+    from ctypes import c_wchar_p
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("data", ctypes.c_ubyte * 16)]
+
+    def guid(text):
+        out = GUID()
+        ctypes.oledll.ole32.CLSIDFromString(c_wchar_p(text), byref(out))
+        return out
+
+    def method(this, slot, *argtypes):
+        table = ctypes.cast(this, POINTER(POINTER(c_void_p))).contents
+        return WINFUNCTYPE(c_int, c_void_p, *argtypes)(table[slot])
+
+    def release(this):
+        if this:
+            method(this, 2)(this)
+
+    enumerator = c_void_p()
+    device = c_void_p()
+    volume = c_void_p()
+    # eRender and eCapture are the 0 and the 1 in the id.
+    flow = 0 if point.side == RENDER else 1
+    wanted = "{0.0.%d.00000000}.%s" % (flow, point.guid)
+    try:
+        ctypes.oledll.ole32.CoCreateInstance(
+            byref(guid("{BCDE0395-E52F-467C-8E3D-C4579291692E}")), None,
+            1, byref(guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")),
+            byref(enumerator))
+        if method(enumerator, 5, c_wchar_p, POINTER(c_void_p))(
+                enumerator, wanted, byref(device)) != 0:
+            return None
+        if method(device, 3, POINTER(GUID), c_ulong, c_void_p,
+                  POINTER(c_void_p))(
+                device, byref(guid("{5CDF2C82-841E-4546-9722-0CF74078229A}")),
+                1, None, byref(volume)) != 0:
+            return None
+        muted = c_int(0)
+        if method(volume, 15, POINTER(c_int))(volume, byref(muted)) != 0:
+            return None
+        return bool(muted.value)
+    except OSError:
+        return None
+    finally:
+        release(volume)
+        release(device)
+        release(enumerator)
+
+
+def muted_for(playback_name, found=None, reader=_windows_mute):
+    """Is either end of what we send into muted. A sentence, or "".
+
+    **A muted cable looks perfect from here.** The stream opens, callbacks
+    run, the send reports itself clean, and the other program hears digital
+    zero. Measured on Tony's machine twice, 18 and 30 October 2026, with
+    CABLE Input muted and nothing on the machine saying so.
+
+    Both ends, because muting the recording end does the same thing from the
+    other side. ``reader`` is there so this can be tested with no sound card.
+    Not knowing is not muted: a None says nothing rather than something wrong.
+    """
+    found = endpoints() if found is None else found
+    ours = _render_for(playback_name, found)
+    if ours is None:
+        return ""
+    ends = [ours]
+    for _device, render, capture in two_sided(found):
+        if render is ours:
+            ends.append(capture)
+    for point in ends:
+        if reader(point) is True:
+            tab = "Playback" if point.side == RENDER else "Recording"
+            return (
+                "%s is muted in Windows, so nothing you send can reach the "
+                "other program. To turn it off, press Windows and R, type "
+                "mmsys.cpl and press Enter. On the %s tab choose %s, press "
+                "Properties, then on the Levels tab press the mute button."
+                % (point.name, tab, point.name))
     return ""
 
 

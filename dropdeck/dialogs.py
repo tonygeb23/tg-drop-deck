@@ -6450,6 +6450,9 @@ class SendDialog(wx.Dialog):
                 if partner:
                     lines.append("In the other program, choose %s as its "
                                  "input device." % partner)
+                said = endpoints.muted_for(chosen, found)
+                if said:
+                    lines.append(said)
                 said = endpoints.mismatch_for(chosen, found)
                 if said:
                     lines.append(said)

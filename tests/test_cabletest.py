@@ -235,5 +235,90 @@ check("it refuses rather than raising", isinstance(result, cabletest.Result)
 check("and explains that a cable has two ends and this has one",
       "two ends" in result.said, result.said)
 
+print("\nA muted cable, which opens and plays and passes nothing")
+CABLE = "CABLE Input (VB-Audio Virtual Cable)"
+PAIR = [EP.Endpoint(EP.RENDER, "CABLE Input", "VB-Audio Virtual Cable",
+                    48000, 24, 2, "{render}"),
+        EP.Endpoint(EP.CAPTURE, "CABLE Output", "VB-Audio Virtual Cable",
+                    44100, 24, 2, "{capture}")]
+
+
+def only(*muted):
+    """A mute reader where the named endpoints are muted."""
+    return lambda point: point.name in muted
+
+
+said = EP.muted_for(CABLE, PAIR, only("CABLE Input"))
+check("a muted playback end is named", "CABLE Input is muted" in said, said)
+check("and it sends you to the right tab", "Playback tab" in said, said)
+said = EP.muted_for(CABLE, PAIR, only("CABLE Output"))
+check("a muted recording end is named too",
+      "CABLE Output is muted" in said and "Recording tab" in said, said)
+check("nothing muted says nothing", EP.muted_for(CABLE, PAIR, only()) == "")
+check("not knowing is not muted",
+      EP.muted_for(CABLE, PAIR, lambda point: None) == "")
+check("a device that is not ours is nobody's business",
+      EP.muted_for("Nothing By That Name", PAIR, only("CABLE Input")) == "")
+check("a hand made endpoint with no id cannot be asked",
+      EP._windows_mute(EP.Endpoint(EP.RENDER, "CABLE Input")) is None)
+
+
+print("\nEach end at its own rate")
+
+
+def recorded_run(rates, muted=""):
+    """`_run` with the sound card stood in, saying what each stream was asked.
+
+    A stand in rather than the real cable because the fault is two ends set
+    differently, which is not something a test may do to Windows.
+    """
+    import sounddevice as sd
+
+    asked = {}
+
+    class Stream:
+        def __init__(self, device=None, samplerate=None, callback=None, **kw):
+            asked[device] = samplerate
+            self.callback = callback
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class Input(Stream):
+        def __enter__(self):
+            block = clean(1.0)[:, None]
+            self.callback(block, len(block), None, None)
+            return self
+
+    kept = (sd.InputStream, sd.OutputStream, sd.sleep,
+            cabletest.capture_for, cabletest._index_for, cabletest._rate_of,
+            EP.muted_for)
+    sd.InputStream, sd.OutputStream = Input, Stream
+    sd.sleep = lambda _ms: None
+    cabletest.capture_for = lambda _name: "CABLE Output"
+    cabletest._index_for = lambda _name, want_input: 1 if want_input else 2
+    cabletest._rate_of = lambda index: rates[index]
+    EP.muted_for = lambda _name: muted
+    try:
+        return cabletest._run(CABLE, 0.1), asked
+    finally:
+        (sd.InputStream, sd.OutputStream, sd.sleep,
+         cabletest.capture_for, cabletest._index_for, cabletest._rate_of,
+         EP.muted_for) = kept
+
+
+result, asked = recorded_run({1: 44100, 2: 48000})
+check("the recording end is opened at ITS rate", asked.get(1) == 44100, asked)
+check("and the playback end at its own", asked.get(2) == 48000, asked)
+check("and the verdict is at the rate it listened at", result.rate == 44100,
+      result.rate)
+result, asked = recorded_run({1: 48000, 2: 48000}, muted="It is muted.")
+check("a muted cable is said without playing a tone", not asked, asked)
+check("and that sentence is the verdict",
+      result.said == "It is muted." and not result.ok, result.said)
+
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)

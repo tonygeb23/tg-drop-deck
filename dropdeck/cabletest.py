@@ -228,6 +228,16 @@ def _index_for(name, want_input):
     return None
 
 
+def _rate_of(index):
+    """The rate Windows has a device set to, which WASAPI insists on."""
+    import sounddevice as sd
+
+    try:
+        return int(sd.query_devices(index)["default_samplerate"])
+    except Exception:
+        return int(C.DEFAULT_SAMPLERATE)
+
+
 class _Apartment:
     """COM, initialised on whatever thread this runs on. Windows only.
 
@@ -319,13 +329,25 @@ def _run(playback_name, seconds):
                              "cannot open it. Try unplugging and replugging "
                              "it, or restarting Drop Deck." % missing)
 
-    rate = int(C.DEFAULT_SAMPLERATE)
+    # Muted is a setting, not a measurement: the driver takes the tone and
+    # passes digital zero, so asking saves playing it and names the real fix.
+    said = endpoints.muted_for(playback_name)
+    if said:
+        return Result(False, said, heard=listen_name)
+
+    # Each end at its OWN rate. WASAPI refuses anything but the rate Windows
+    # has that end set to, and the two ends of a cable drift apart: a fixed
+    # 48000 failed with Invalid sample rate on a cable every other program
+    # could open, and blamed exclusive use. Measured 30 October 2026, playback
+    # end 48000, recording end 44100.
+    out_rate = _rate_of(out_index)
+    rate = _rate_of(in_index)
     heard = []
     phase = 0.0
 
     def playing(outdata, frames, _time, _status):
         nonlocal phase
-        block, phase = tone(frames, rate, phase)
+        block, phase = tone(frames, out_rate, phase)
         outdata[:] = block
 
     def listening(indata, _frames, _time, _status):
@@ -339,7 +361,7 @@ def _run(playback_name, seconds):
                             channels=1, dtype="float32",
                             blocksize=C.OUTPUT_BLOCKSIZE,
                             callback=listening):
-            with sd.OutputStream(device=out_index, samplerate=rate,
+            with sd.OutputStream(device=out_index, samplerate=out_rate,
                                  channels=CHANNELS, dtype="float32",
                                  blocksize=C.OUTPUT_BLOCKSIZE,
                                  callback=playing):
