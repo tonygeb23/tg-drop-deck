@@ -450,6 +450,55 @@ def _board_words(path):
     return os.path.splitext(os.path.basename(path or ""))[0] or "The board"
 
 
+#: What the app keeps in its settings folder under names of its own, less
+#: the .json. A board is never given one of these.
+_SETTINGS_OWN = {"board", "last_board", "donate", "install", "feedback_queue",
+                 "last_app_check", "settings", "errors"}
+
+#: What Windows will not have in a file name.
+_NOT_IN_A_NAME = '<>:"/\\|?*'
+
+
+def _file_words(text):
+    """Something typed, made safe to be a file and a folder name. May be "".
+
+    Windows refuses nine characters and anything ending in a dot or a space,
+    and a name typed with ".json" on the end means the name without it.
+    """
+    text = "".join(" " if (ch in _NOT_IN_A_NAME or ord(ch) < 32) else ch
+                   for ch in str(text or ""))
+    text = " ".join(text.split())
+    if text.lower().endswith(".json"):
+        text = text[:-5]
+    return text.strip(" .")[:80].strip(" .")
+
+
+def _all_playlist(board):
+    """No pads at all, and a running order."""
+    return not board.assigned_count and bool(board.playlist.tracks)
+
+
+def _playlist_tail(board):
+    """", 12 playlist tracks" for the startup line, or nothing."""
+    tracks = len(board.playlist.tracks)
+    return ", %s" % _count(tracks, "playlist track") if tracks else ""
+
+
+def _loaded_words(board):
+    """What a board holds, for the Loaded line: pads, running order, or both.
+
+    The pads alone used to be counted, so a board that was all playlist
+    opened as "0 sounds" in front of eighty empty pads.
+    """
+    tracks = len(board.playlist.tracks)
+    if _all_playlist(board):
+        return "%s, now in the playlist" % _count(tracks, "playlist track")
+    said = _count(board.assigned_count, "sound")
+    if tracks:
+        said += ", %s" % _count(tracks, "playlist track")
+    return said
+
+
 def _folder_words(path):
     """The folder a file is in, by its own name only."""
     folder = os.path.basename(os.path.dirname(os.path.abspath(path or "")))
@@ -932,7 +981,7 @@ class DropDeckFrame(wx.Frame):
         self._refresh_timer.Start(250)
 
         self._save_timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, lambda _e: self._save(quiet=True), self._save_timer)
+        self.Bind(wx.EVT_TIMER, lambda _e: self._autosave(), self._save_timer)
 
         # System-wide hotkeys. Off until the user turns them on, because while
         # they are on this app owns those combinations across the whole machine.
@@ -956,6 +1005,8 @@ class DropDeckFrame(wx.Frame):
         # important lines - files missing, audio did not start - were the ones
         # that got cut.
         wx.CallLater(500, self._announce_startup)
+        # Once the window is up, and silently: see _view_for_board.
+        wx.CallAfter(self._view_for_board_safely)
         # The folder the last update was unpacked into. The copy that did the
         # replacing was running from inside it and could not delete the ground
         # it was standing on; this one can.
@@ -1037,7 +1088,8 @@ class DropDeckFrame(wx.Frame):
             # One pass at a time. Whatever arrived while it was working is
             # picked up when it finishes; see _playlist_metadata_ready.
             return None
-        pending = self.board.playlist.needs_metadata()
+        board = self.board
+        pending = board.playlist.needs_metadata()
         if not pending:
             return None
 
@@ -1051,7 +1103,7 @@ class DropDeckFrame(wx.Frame):
                 except Exception:
                     pass          # a broken file is the trigger path's problem
             if changed and not self._closing.is_set():
-                wx.CallAfter(self._playlist_metadata_ready)
+                wx.CallAfter(self._playlist_metadata_ready, board)
 
         thread = threading.Thread(target=work, daemon=True,
                                   name="dropdeck-playlist-tags")
@@ -1059,16 +1111,42 @@ class DropDeckFrame(wx.Frame):
         thread.start()
         return thread
 
-    def _playlist_metadata_ready(self):
+    def _still_open(self, board):
+        """Is `board` still the live one. If not, what was done to it is kept.
+
+        Work that runs on a thread (a relink, the playlist's tag pass) comes
+        back to the window some time later, and by then File, New or File,
+        Open may have put another board in its place. Mark, 16 November 2026,
+        with repros: the work was then credited to whichever board was live,
+        so a relink finishing after File, New lost its repair AND marked the
+        untouched new board as changed, which wrote an empty file and made it
+        the board that opened next time. What the thread did belongs to the
+        board it did it to, and is saved there.
+        """
+        if board is None or board is self.board:
+            return True
+        try:
+            if board.path and not board.changed_on_disk():
+                board.save()
+        except Exception:
+            errorlog.record_current()
+        return False
+
+    def _playlist_metadata_ready(self, board=None):
         """The background pass found something. Show it, quietly."""
         if self._closing.is_set():
+            return
+        self._metadata_thread = None
+        if not self._still_open(board):
+            # That pass was for a board that has since been put away. This
+            # one gets a pass of its own.
+            self.scan_playlist_metadata()
             return
         try:
             self.playlist_panel.refresh(keep=self.playlist_panel.selection())
             self._touch()
         except Exception:
             pass
-        self._metadata_thread = None
         # Anything pasted while that pass was running.
         self.scan_playlist_metadata()
 
@@ -1250,7 +1328,8 @@ class DropDeckFrame(wx.Frame):
             name = self._board_name()
             bits.append("%s%d sounds loaded"
                         % (name + ", " if name else "",
-                           self.board.assigned_count))
+                           self.board.assigned_count)
+                        + _playlist_tail(self.board))
         # Keys another program has taken for the whole machine. Windows gives
         # them to that program and never says so to this one, so a key that
         # simply does nothing is the only symptom. Mashal, 19 September 2026.
@@ -1584,9 +1663,12 @@ class DropDeckFrame(wx.Frame):
         pl = wx.Menu()
         pl.Append(ID_VIEW_PLAYLIST, "Go to the &playlist\tCtrl+Shift+P")
         pl.Append(ID_VIEW_BOARD, "Go to the &soundboard\tCtrl+Shift+S")
-        pl.Append(ID_VIEW_NEXT, "S&wap between the two\tCtrl+Alt+Tab",
-                  "Windows may take this key for its own task switcher; the "
-                  "two above always work")
+        # Alt+Shift+W since 3.10.0. The label said Ctrl+Alt+Tab, which is
+        # Windows' own task switcher and never arrived: Siena Trigiani, 25
+        # October 2026, "currently behaves as Alt+Tab, i.e. leaves Drop Deck".
+        # A key on a menu that does nothing is the worst shape a key can have.
+        pl.Append(ID_VIEW_NEXT, "S&wap between the two\tAlt+Shift+W",
+                  "From the soundboard to the playlist, or back")
         pl.AppendSeparator()
         pl.Append(ID_PL_PASTE, "Paste son&gs from the clipboard\tCtrl+V",
                   "Copy files in File Explorer, then paste them in here")
@@ -1976,6 +2058,13 @@ class DropDeckFrame(wx.Frame):
             # application sees it, which is why the menu says so and why the
             # two keys above exist.
             wx.AcceleratorEntry(wx.ACCEL_CTRL | wx.ACCEL_ALT, wx.WXK_TAB,
+                                ID_VIEW_NEXT),
+            # The swap key that does arrive, and the one the menu names. One
+            # key for both directions, in the Alt+Shift family, for anybody
+            # whose screen reader add-on has taken Ctrl+Shift+S or
+            # Ctrl+Shift+P for itself (Clipboard Announcer's default is
+            # Ctrl+Shift+S), which this app cannot see happening.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("W"),
                                 ID_VIEW_NEXT),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("V"), ID_PL_PASTE),
             # Ctrl+M opens and closes the microphone, Ctrl+Shift+M sets it up.
@@ -2547,6 +2636,17 @@ class DropDeckFrame(wx.Frame):
         text = short if self._speech_level() == C.SPEECH_NONE else full
         self._say(text)
         self.note(full)
+
+    def _window_came_back(self):
+        """A box or a file window of ours has just closed.
+
+        The screen reader now reads the window coming back and where focus
+        landed, exactly as it does after a menu, and cuts off anything said
+        at that moment. Jessica, 16 November 2026: the sentence saying the
+        board you had is safe was the one most likely to be lost. Stamped the
+        way a menu closing is, so `_say` waits and then queues behind it.
+        """
+        self._menu_closed_at = time.monotonic()
 
     def _on_menu_close(self, event):
         """Remember when a menu last closed. See `announce_recording`."""
@@ -4376,6 +4476,17 @@ class DropDeckFrame(wx.Frame):
         self.board.dirty = True
         self._save_timer.Start(2000, oneShot=True)
 
+    def _autosave(self):
+        """The save timer. Writes only a board that has something to write.
+
+        A timer still running when one board takes another's place used to
+        save the newcomer, which is how an untouched new board got a file,
+        and how that file became the board that opened next time.
+        """
+        if self.board.dirty:
+            return self._save(quiet=True)
+        return None
+
     def _save(self, quiet=False, path=None):
         """Write the board. The path written, or None if nothing was.
 
@@ -4454,6 +4565,11 @@ class DropDeckFrame(wx.Frame):
         a board copied into place while the app was open was written over by
         the very act of closing it to pick the copy up.
         """
+        if (self.board is getattr(self, "_unstarted", None)
+                and not self.board.dirty):
+            # A new board nobody has put anything in. Writing it would leave
+            # an empty file behind and open it, empty, at the next start.
+            return None
         if self.board.changed_on_disk():
             # Somebody else's copy is on disk now. It is kept, and anything
             # changed here goes beside it. See _changed_elsewhere.
@@ -4565,24 +4681,169 @@ class DropDeckFrame(wx.Frame):
                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return
-            self._save(path=dialog.GetPath())
+            chosen = dialog.GetPath()
+        leftover = self._leftover_home()
+        saved = self._save(path=chosen)
+        if saved:
+            self._fresh_home = None
+            self._unstarted = None
+            if (leftover and not same_path(leftover, saved)
+                    and same_path(remembered_board_path(), saved)):
+                # The file this board was kept in until it had a name. It
+                # holds nothing the named one does not, so it goes, or every
+                # board ever named leaves a "New board" twin behind.
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+
+    def _leftover_home(self):
+        """The file a not yet named board is in, when it is ours to remove.
+
+        Only a file this session gave this very board, that the board itself
+        wrote, and that nothing has changed since. Anything else at that path
+        is somebody's own and is left alone.
+        """
+        home = getattr(self, "_fresh_home", None)
+        board = self.board
+        if not home or not same_path(home, board.path):
+            return None
+        stamp = getattr(board, "_disk", None)
+        if not isinstance(stamp, tuple) or not os.path.exists(home):
+            return None                      # never written, or not by us
+        if board.changed_on_disk():
+            return None
+        return home
+
+    def _put_away(self):
+        """The open board is about to be replaced: keep everything in it.
+
+        True when it is safe to go on. Siena Trigiani and Rob Castrogiovanni,
+        15 November 2026: boards saved with Ctrl+S came back empty. Nothing
+        that replaced the open board saved it first, and the save timer then
+        fired on whichever board had taken its place. So every replacement
+        comes through here: the timer is stopped, and anything not yet
+        written is written to the board's OWN file now.
+        """
+        self._save_timer.Stop()
+        board = self.board
+        if not board.dirty:
+            return True
+        if self._save(quiet=True) or not board.dirty:
+            return True
+        # It could not be written: a read only file, a drive that has gone.
+        # Refusing outright would shut somebody out of New and Open for as
+        # long as that lasts, so it is their call, and No is the safe one.
+        answer = wx.MessageBox(
+            "%s could not be saved.\n\nTo keep what you changed in it, choose "
+            "No, then File, Save board as. Choose Yes to go on and lose those "
+            "changes." % self._board_said(board.path),
+            "Not saved", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING, self)
+        self._window_came_back()
+        return answer == wx.YES
+
+    @staticmethod
+    def _new_home(name="New board"):
+        """A board file of its own for a board that has no name yet.
+
+        In the settings folder, and never a file that is already there: New
+        board, New board 2 and so on. Nothing is written by asking.
+        """
+        folder = board_module.config_dir()
+        name = _file_words(name) or "New board"
+        if name.lower() in _SETTINGS_OWN:
+            # An old bank that happens to be called what the app calls one
+            # of its own files there. Imported as last_board, it was then
+            # written over by the note of which board opens next.
+            name = "Imported " + name
+        candidate = os.path.join(folder, name + ".json")
+        count = 2
+        while os.path.exists(candidate):
+            candidate = os.path.join(folder, "%s %d.json" % (name, count))
+            count += 1
+        return candidate
+
+    def _give_new_home(self, board, name="New board"):
+        """Point `board` at a file of its own. It is written on first change.
+
+        A board that takes the place of another must never take its FILE.
+        File New, Load demo pack and Import all used to, each in its own way,
+        and the next save put the newcomer over a board somebody had saved.
+        """
+        home = self._new_home(name)
+        board.claim_path(home)
+        board.dirty = False
+        self._fresh_home = home
+        self._unstarted = board
+        # A board pinned earlier in the session is not this one.
+        self._pinned_board = None
+        return home
+
+    def _kept_words(self):
+        """What happens to the open board when another takes its place.
+
+        A sentence for the box that asks, and it has to be TRUE, which is
+        why it is worked out rather than written once. The demo pack as it
+        shipped has no file of its own and is not given one for being looked
+        at, so saying it "is saved" would be a promise nothing keeps.
+        """
+        if not self._has_a_file(self.board):
+            return "The demo pack comes back with File, Load demo pack."
+        board = self.board
+        return ("%s is saved first and stays exactly as it is. File, Open "
+                "board brings it back." % self._board_said(board.path))
+
+    def _has_a_file(self, board):
+        """Is there, or will there be, a file holding this board.
+
+        False only for the demo pack as it shipped: opened at first run or
+        from File, Load demo pack, and not changed since. Asked that way
+        round because a board that was READ from a file always has one,
+        whatever is or is not known about that file's state.
+        """
+        if board.dirty:
+            return True
+        if board is getattr(self, "_unstarted", None):
+            return False
+        return getattr(board, "_disk", None) is not board_module.NOTHING_THERE
+
+    @staticmethod
+    def _board_said(path):
+        """A board's name for a sentence. The usual one is "Your board"."""
+        if not path or same_path(path, default_board_path()):
+            return "Your board"
+        return _board_words(path)
 
     def _on_new(self, _event):
-        if self.board.assigned_count and wx.MessageBox(
-                f"Clear all {self.board.assigned_count} sounds and start over?\n\n"
-                "Save the current board first if you want to keep it.",
-                "New board", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+        before = self.board
+        had = self._board_said(before.path)
+        kept = self._has_a_file(before)
+        # A board that is all running order is not an empty board.
+        holds = bool(before.assigned_count or before.playlist.tracks)
+        if holds:
+            answer = wx.MessageBox(
+                "Start a new, empty board?\n\n%s" % self._kept_words(),
+                "New board", wx.OK | wx.CANCEL | wx.ICON_QUESTION, self)
+            self._window_came_back()
+            if answer != wx.OK:
+                return
+        if not self._put_away():
             return
         self.mixer.stop_all(fade_out=0.05)
         fresh = Board()
-        # Takes the path without reading it, so what is there now is
-        # written down: see Board.claim_path.
-        fresh.claim_path(self.board.path)
-        fresh.device_name = self.board.device_name
-        fresh.device_hostapi = self.board.device_hostapi
+        fresh.device_name = before.device_name
+        fresh.device_hostapi = before.device_hostapi
+        home = self._give_new_home(fresh)
         self._adopt(fresh)
-        self.announce_help("New board, eighty empty slots")
-        self._touch()
+        # What became of the board you had comes BEFORE the description of
+        # the new one, because it is the half somebody is waiting to hear.
+        said = _board_words(home)
+        if holds and kept and not before.dirty:
+            said += ". %s is saved and untouched" % had
+        # Essential, not a pleasantry: it is the answer to "is the board I
+        # had still there", and that question is why this was rewritten.
+        self.announce(said + ". Eighty empty slots. Ctrl+F12 gives this one "
+                      "a name")
 
     def _on_load_demo(self, _event):
         demo = demo_board_path()
@@ -4590,15 +4851,17 @@ class DropDeckFrame(wx.Frame):
             wx.MessageBox("The demo pack is not installed alongside the app.",
                           "No demo pack", wx.OK | wx.ICON_INFORMATION, self)
             return
-        if self.board.assigned_count and wx.MessageBox(
-                "Replace the current board with the demo pack?\n\n"
-                "Save the current board first if you want to keep it.",
-                "Load demo pack", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+        if self.board.assigned_count or self.board.playlist.tracks:
+            answer = wx.MessageBox(
+                "Open the demo pack?\n\n%s" % self._kept_words(),
+                "Load demo pack", wx.OK | wx.CANCEL | wx.ICON_QUESTION, self)
+            self._window_came_back()
+            if answer != wx.OK:
+                return
+        if not self._put_away():
             return
-        keep = self.board.path
-        self._load_into(demo, keep_path=False)
-        self.board.claim_path(keep)
-        self._touch()
+        if self._load_into(demo, keep_path=False):
+            self._give_new_home(self.board, "Demo board")
 
     def _on_open(self, _event):
         with wx.FileDialog(self, "Open board", wildcard="Boards (*.json)|*.json",
@@ -4606,7 +4869,19 @@ class DropDeckFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             path = dialog.GetPath()
-        self._load_into(path)
+        self._window_came_back()
+        self._open_board(path)
+
+    def _open_board(self, path):
+        """File, Open board, once a file has been chosen."""
+        if not self._put_away():
+            return False
+        if not self._load_into(path):
+            return False
+        self._fresh_home = None
+        self._unstarted = None
+        self._view_for_board()
+        return True
 
     def _on_import(self, _event):
         with wx.FileDialog(self, "Import an old soundboard bank",
@@ -4615,12 +4890,27 @@ class DropDeckFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             path = dialog.GetPath()
+        self._window_came_back()
+        self._import_board(path)
+
+    def _import_board(self, path):
+        """File, Import, once a file has been chosen."""
         kind = Board.describe_source(path)
         if kind is None:
             wx.MessageBox("That file is not a soundboard bank.", "Cannot import",
                           wx.OK | wx.ICON_ERROR, self)
-            return
-        self._load_into(path, keep_path=False)
+            return False
+        if not self._put_away():
+            return False
+        if not self._load_into(path, keep_path=False):
+            return False
+        # Under the bank's own name, in a file of its own. It used to have
+        # no file at all, which meant board.json, whatever was in it.
+        stem = os.path.splitext(os.path.basename(path))[0].strip()
+        self._give_new_home(self.board, stem or "Imported board")
+        # Unlike an empty board, this one holds something worth keeping.
+        self._touch()
+        return True
 
     def _export_name(self):
         """What an exported board and its folder are called."""
@@ -4647,7 +4937,17 @@ class DropDeckFrame(wx.Frame):
         if not paths:
             self.announce("This board has no sounds to export")
             return
-        name = self._export_name()
+        # In-app feedback, 17 October 2026: "add an option to rename your
+        # board when exporting". The folder and the board inside it were
+        # named after the file, and a board never given a name went out as
+        # "Drop Deck board", which says nothing in a folder of five of them.
+        with ask_text(
+                self, "What should the exported board be called? The folder "
+                "and the board inside it both take this name.",
+                "Export board with its sounds", self._export_name()) as asked:
+            if asked.ShowModal() != wx.ID_OK:
+                return
+            name = _file_words(asked.GetValue()) or self._export_name()
         with wx.DirDialog(self, "Where should the board and its sounds go? "
                           "A folder called %s is made there." % name,
                           style=wx.DD_DEFAULT_STYLE) as dialog:
@@ -4659,6 +4959,7 @@ class DropDeckFrame(wx.Frame):
         while not _empty_or_absent(target):
             target = os.path.join(chosen, "%s (%d)" % (name, count))
             count += 1
+        self._window_came_back()
         self._run_export(target, name)
 
     def _run_export(self, target, name):
@@ -4727,6 +5028,12 @@ class DropDeckFrame(wx.Frame):
 
     def _adopt(self, board):
         """Make ``board`` the live one: rewire every button and every hotkey."""
+        # A save still waiting was for the board that is leaving, and whoever
+        # sent it away has dealt with that (`_put_away`). Left running, it
+        # fires on the board arriving.
+        timer = getattr(self, "_save_timer", None)
+        if timer is not None:
+            timer.Stop()
         self.board = board
         self.mixer.set_sfx_gain(board.sfx_volume)
         self.mixer.set_bed_gain(board.bed_volume)
@@ -4960,18 +5267,26 @@ class DropDeckFrame(wx.Frame):
                            % (os.path.basename(path), exc))
 
     def _load_into(self, path, keep_path=True, board=None):
-        """Make the board at `path` the live one. `board` if already read."""
+        """Make the board at `path` the live one. `board` if already read.
+
+        True if it is now the live one.
+        """
         if board is None:
             try:
                 board = Board.load(path)
             except Exception as exc:
                 wx.MessageBox(f"That board could not be opened.\n\n{exc}",
                               "Open failed", wx.OK | wx.ICON_ERROR, self)
-                return
+                return False
         self.mixer.stop_all(fade_out=0.05)
         if not keep_path:
             board.path = None
         self._adopt(board)
+        # Whatever was known about a not yet named board was about the one
+        # that just left. A board copied in over "New board" and reloaded
+        # from disk used to be taken for ours, and Save board as removed it.
+        self._fresh_home = None
+        self._unstarted = None
         if keep_path:
             # So the next start opens this board, not board.json. fb40. A
             # board somebody opened is their choice, so nothing pinned
@@ -4993,7 +5308,30 @@ class DropDeckFrame(wx.Frame):
         # The name without ".json", which is read aloud as "dot json".
         self.announce("Loaded %s, %s%s"
                       % (os.path.splitext(os.path.basename(path))[0],
-                         _count(board.assigned_count, "sound"), tail))
+                         _loaded_words(board), tail))
+        return True
+
+    def _view_for_board_safely(self):
+        """`_view_for_board` from a callback, where a raise would vanish."""
+        try:
+            self._view_for_board()
+        except Exception:
+            errorlog.record_current()
+
+    def _view_for_board(self):
+        """A board that is all running order opens ON the running order.
+
+        Ali Moosa, 16 October 2026: "It lands me on the Soundboard tab ...
+        When I import the playlist board, I don't see it until I move to the
+        Playlists Tab." Eighty empty pads were in front of a board whose whole
+        content was one view away. Moved without a word, because the Loaded
+        line has just said where this is and a second sentence would cut it
+        off. Only when somebody opens a board: a file changing on disk must
+        never move focus.
+        """
+        if _all_playlist(self.board):
+            self.show_view_playlist()
+            self.playlist_panel.focus_list()
 
     def _on_relink(self, _event):
         # The playlist counts too: one walk of the folder repairs both, so a
@@ -5016,10 +5354,11 @@ class DropDeckFrame(wx.Frame):
         wx.BeginBusyCursor()
 
         result = {}
+        board = self.board
 
         def work():
             try:
-                result["repaired"] = self.board.relink(folder)
+                result["repaired"] = board.relink(folder)
             except Exception as exc:
                 result["error"] = exc
             wx.CallAfter(done)
@@ -5028,6 +5367,15 @@ class DropDeckFrame(wx.Frame):
             wx.EndBusyCursor()
             if "error" in result:
                 self.announce("Could not search that folder. %s" % result["error"])
+                return
+            if not self._still_open(board):
+                # Another board was opened while this was looking. The
+                # repair is saved where it belongs, and said, briefly.
+                found = len(result.get("repaired") or [])
+                if found:
+                    self.announce("Relinked %s in %s, and saved it there"
+                                  % (_count(found, "sound"),
+                                     self._board_said(board.path)))
                 return
             self._relink_finished(result.get("repaired") or [], asked)
 

@@ -1,5 +1,82 @@
 # Changelog
 
+## 3.10.0 for Windows, 16 November 2026
+
+**A new board never takes another board's file. If you use File, New board,
+install this one.**
+
+### Saved boards were coming back empty
+
+Two listeners saved a board with Ctrl+F12 and Ctrl+S, started the next one
+with Ctrl+N, and later opened the first to find it blank. They had done
+nothing wrong. The new, empty board kept the old board's file, and two
+seconds later the autosave wrote eighty empty slots over the board they had
+just saved. Whether it happened depended on how quickly you pressed Ctrl+F12
+afterwards, which is why it came and went.
+
+A board that was overwritten this way cannot be brought back by the update.
+If your sounds are still on the computer, the board can be rebuilt, and from
+here on it cannot happen again:
+
+- **File, New board saves the board you are on first, and the new one gets a
+  file of its own**, called New board, in your Drop Deck settings folder. The
+  board you had is not touched. The question it asks says so by name, and it
+  now has OK and Cancel, so Escape answers it.
+- **Nothing is written for a new board until you put something in it.** Start
+  one, change your mind, and no empty file is left behind.
+- **Ctrl+F12 gives the new board a name**, and the New board file it was kept
+  in until then is tidied away.
+- **Load demo pack did the same thing** and is fixed the same way: the demo
+  opens as Demo board and the board you had stays exactly as it was.
+- **Import an old soundboard bank** used to save over the settings folder's
+  own board. An imported bank now becomes a board of its own, under its own
+  name.
+- **File, Open board keeps your last change.** A change made in the two
+  seconds before opening another board was never written. It is saved first.
+- **If the board you are leaving cannot be saved**, say because its drive has
+  gone, you are asked before anything is lost, and No is the safe answer.
+
+### A board that is all running order opens on the running order
+
+A listener opened a board holding only a playlist and landed on eighty empty
+pads, with nothing saying his playlist was one view away.
+
+- Open a board with a running order and no pads, and you are put straight in
+  the playlist. It says so: "Loaded My show, 12 playlist tracks, now in the
+  playlist."
+- Every board says its playlist tracks as well as its sounds when it opens,
+  and the line at startup counts them too.
+
+### One key to swap between the soundboard and the playlist: Alt+Shift+W
+
+The Playlist menu offered Ctrl+Alt+Tab for this, which is Windows' own task
+switcher, so it took you out of Drop Deck instead. And a listener's screen
+reader add-on had Ctrl+Shift+S for itself (it is the default key of the
+Clipboard Announcer add-on for NVDA), so the key for the soundboard never
+reached Drop Deck at all, which Drop Deck cannot see happening.
+
+- **Alt+Shift+W swaps between the two**, in both directions, and it is what
+  the menu and the F1 help now say.
+- Ctrl+Shift+S and Ctrl+Shift+P work as they always did. If an add-on has
+  taken one of them, either use Alt+Shift+W, or free the key in NVDA: NVDA
+  menu, Preferences, Input gestures, type the key into the filter, and remove
+  it from the add-on's command.
+
+### Name a board when you export it
+
+File, Export board with its sounds asks what to call it first, offering the
+board's own name. The folder and the board inside it both take the name you
+give. Asked for through Help, Submit feedback.
+
+### A muted virtual cable says so
+
+- **Send this show to another program** now notices when the cable it sends
+  into is muted in Windows, at either end, and says how to unmute it. A muted
+  cable opens, plays and passes nothing, with no error anywhere.
+- **The cable test opens each end at its own sample rate.** With the two ends
+  of a cable set differently in Windows, the test failed and blamed another
+  program for holding the cable.
+
 ## 3.9.0 for Windows, 16 October 2026
 
 **A board you can take to another computer, a recording that says it started

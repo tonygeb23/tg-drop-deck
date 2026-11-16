@@ -96,7 +96,9 @@ check("the shipped version accepts it",
 # 3.9.0 is built, 16 October 2026: installer 86.0 MB and zip 115.8 MB, and
 # the FROZEN build's selftest reports 3.9.0 with the update channel live.
 # (3.8.4 shipped without this line being raised, so it had been failing.)
-newest_build = "3.9.0"
+# 3.10.0 is built, 16 November 2026: installer 86.0 MB and zip 115.8 MB, and
+# the FROZEN build's selftest reports 3.10.0 with the update channel live.
+newest_build = "3.10.0"
 
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)

@@ -8,7 +8,7 @@ They are muscle memory and they are not up for redesign.
 from . import audiofile as _audiofile
 
 APP_NAME = "TG Drop Deck"
-APP_VERSION = "3.9.0"
+APP_VERSION = "3.10.0"
 VENDOR = "TG Studios"
 TAGLINE = "An accessible soundboard for podcasts, radio and live shows."
 
@@ -519,10 +519,10 @@ THE TWO VIEWS - soundboard and playlist
   Ctrl+Shift+S              Go to the soundboard
                             (Save the board to a new file is Ctrl+F12)
   Ctrl+Shift+P              Go to the playlist
-  Ctrl+Alt+Tab              Swap between them
-                            Windows uses Ctrl+Alt+Tab for its own task
-                            switcher and may take it first. The two keys
-                            above always work.
+  Alt+Shift+W               Swap between them
+                            If a screen reader add-on has taken one of the
+                            two keys above, this one still works, and so
+                            does the Playlist menu.
 
 THE PLAYLIST - a running order that cues itself
   Ctrl+V                    Paste songs copied in File Explorer

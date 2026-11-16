@@ -146,6 +146,11 @@ KEYS = {
     # switch keyboard layout, so it is pressed rather than assumed.
     "pause": ("Alt+Shift+R", "pausing the recording", "toggle_record_pause",
               (wx.WXK_ALT, wx.WXK_SHIFT), "R"),
+    # 3.10.0. The swap between the soundboard and the playlist. The key the
+    # menu named before this one, Ctrl+Alt+Tab, never arrived at all, which
+    # is the whole reason this one is pressed and not assumed.
+    "swap": ("Alt+Shift+W", "swapping between the two views", "show_view",
+             (wx.WXK_ALT, wx.WXK_SHIFT), "W"),
 }
 
 

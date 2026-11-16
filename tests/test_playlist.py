@@ -559,7 +559,9 @@ check("Ctrl+Shift+P is the playlist",
       found.get((wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("P"))) == ID_VIEW_PLAYLIST)
 check("Ctrl+Shift+S is the soundboard",
       found.get((wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"))) == ID_VIEW_BOARD)
-check("Ctrl+Alt+Tab swaps them",
+check("Alt+Shift+W swaps them",
+      found.get((wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("W"))) == ID_VIEW_NEXT)
+check("Ctrl+Alt+Tab is still bound for anybody Windows lets it reach",
       found.get((wx.ACCEL_CTRL | wx.ACCEL_ALT, wx.WXK_TAB)) == ID_VIEW_NEXT)
 check("Ctrl+V pastes", found.get((wx.ACCEL_CTRL, ord("V"))) == ID_PL_PASTE)
 check("F7 and F8 are the playlist fader",
@@ -575,8 +577,9 @@ check("F2 still renames and F3 to F6 are still the other two faders",
 
 check("F1 help explains the two views",
       "Ctrl+Shift+P" in C.KEYBOARD_HELP and "Ctrl+Shift+S" in C.KEYBOARD_HELP)
-check("and warns that Windows may take Ctrl+Alt+Tab",
-      "task" in C.KEYBOARD_HELP.lower() and "Ctrl+Alt+Tab" in C.KEYBOARD_HELP)
+check("and names the swap key that arrives, not the one Windows keeps",
+      "Alt+Shift+W" in C.KEYBOARD_HELP
+      and "Ctrl+Alt+Tab" not in C.KEYBOARD_HELP)
 
 # ---------------------------------------------------------------------------
 print("Pasting several at once, and Enter")

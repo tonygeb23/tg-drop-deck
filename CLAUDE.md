@@ -822,6 +822,23 @@ And specific to this one:
   `C.BOARD_REACH_SECONDS` and stays remembered for next time
   (`_pinned_board`). All of this came from Mark's audit, with repros.
 
+- **A board that takes another's place never takes its FILE, and every
+  replacement goes through `_put_away`.** Siena Trigiani and Rob
+  Castrogiovanni, 15 November 2026: boards saved with Ctrl+S came back empty.
+  File, New kept the old board's path (it "claimed" it, which only protects
+  against somebody ELSE's change), so the two second autosave wrote eighty
+  empty slots over the saved board. Load demo did the same, Import had no
+  path at all and so wrote board.json, and Open dropped the last two seconds
+  of changes. Since 3.10.0: `_put_away` stops the timer and saves a dirty
+  board to its own file first; New, Load demo and Import get a file of their
+  own from `_give_new_home` that is not written until something changes; the
+  timer writes only a dirty board; and close skips a new board nobody
+  touched. **Work coming back from a thread must ask `_still_open(board)`**:
+  a relink or tag pass that finished after File, New was credited to the new
+  board, which lost the repair and wrote an empty file that then opened next
+  time (Mark, with repros). `tests/test_3_10_0.py` hashes the outgoing file
+  after the timer AND after close, for every one of those paths.
+
 - **A menu item's label must never be empty.** wx reads an empty label as a
   request for a stock label, has none for our ids, and asserts. The saved
   setups submenu built one from a station with no name, while the window was
