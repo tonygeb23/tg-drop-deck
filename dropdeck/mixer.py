@@ -869,6 +869,11 @@ class MixerGroup:
         #: monitoring belongs in the presenter's headphones and the show does
         #: not. None means whatever bank 1 is using.
         self.monitor_device = monitor_device
+        #: A monitor card that would not open, so what you hear went to the
+        #: Windows default instead. It has to be remembered apart from
+        #: monitor_device, because None there means "the same card as the
+        #: soundboard" and the fallback must NOT mean that: see _build.
+        self._monitor_fell_back = False
         self._monitor_source = None
         #: Whether the monitor card carries EVERY card's show or only its own.
         #: On by default, because the alternative is a presenter who cannot
@@ -894,7 +899,17 @@ class MixerGroup:
         wanted = {self.bank_devices.get(bank) for bank in range(1, C.BANK_COUNT + 1)}
         # The monitor output is opened alongside the banks' outputs, so a
         # microphone can be monitored on a card nothing else is using.
-        wanted.add(self.monitor_device)
+        #
+        # ONLY when there is one. None here means "Same as the soundboard",
+        # and it used to be added regardless, where None also means the
+        # Windows default output. So a main output moved to another card left
+        # a second stream open on the default, `monitor_mixer` found it under
+        # None, and the full programme monitor fed it every card's show: the
+        # sound went to the new card and carried on coming out of the old
+        # one. Martin Sutton, 20 November 2026: "I change my output to another
+        # soundcard but it doesn't change."
+        if self.monitor_device is not None or self._monitor_fell_back:
+            wanted.add(self.monitor_device)
         for device in sorted(wanted, key=lambda d: (d is not None, d)):
             mixer = Mixer(device=device, open_stream=self.open_stream,
                           duck_bus=self.duck_bus, key=_key_for(device))
@@ -926,6 +941,9 @@ class MixerGroup:
                         self.bank_devices[bank] = None
                 if was_monitor:
                     self.monitor_device = None
+                    # To the DEFAULT, as the sentence below says, and never
+                    # to bank 1's card, which may be a cable.
+                    self._monitor_fell_back = True
                 where = describe_device(device)
                 if was_monitor and was_bank:
                     self.problems.append(
@@ -973,6 +991,12 @@ class MixerGroup:
             mixer.monitor_feed = None
         self._monitor_bus = None
         if not self.monitor_everything:
+            return
+        if self.monitor_device is None and not self._monitor_fell_back:
+            # No separate monitor card, so there is nowhere to gather the
+            # show: each card plays its own sounds and nothing else. Without
+            # this, bank 1's card would be handed every other bank as well,
+            # and a bank sent to its own channel of a desk would be on two.
             return
         monitor = self.monitor_mixer
         others = [m for m in self._mixers.values() if m is not monitor]
@@ -1122,7 +1146,15 @@ class MixerGroup:
 
     @property
     def monitor_mixer(self):
-        """The output a monitored microphone plays out of."""
+        """The output a monitored microphone plays out of.
+
+        With no monitor card chosen that is bank 1's output, whatever card
+        that is. `_mixers.get(None)` must not be asked in that case: None is
+        also the key of the Windows default, so it answered with the default
+        whenever anything had opened it.
+        """
+        if self.monitor_device is None and not self._monitor_fell_back:
+            return self.primary
         return self._mixers.get(self.monitor_device) or self.primary
 
     @property
@@ -1165,9 +1197,12 @@ class MixerGroup:
 
     def set_monitor_device(self, device):
         """Move monitoring to another output, opening it if need be."""
-        if device == self.monitor_device:
+        if device == self.monitor_device and not self._monitor_fell_back:
             return False
         self.monitor_device = device
+        # A choice made by hand replaces a fallback, including the choice of
+        # "Same as the soundboard" after a card would not open.
+        self._monitor_fell_back = False
         source = self._monitor_source
         self.set_bank_devices(self.bank_devices)
         self.monitor_source = source

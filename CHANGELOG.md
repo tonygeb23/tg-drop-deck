@@ -1,5 +1,40 @@
 # Changelog
 
+## 3.10.1 for Windows, 20 November 2026
+
+**Changing the output device now moves the sound. If your sounds play
+through anything other than the Windows default device, install this one.**
+
+### The output device did not seem to change
+
+Martin Sutton, 20 November 2026: "I change my output to another soundcard but
+it doesn't change." He was right. With another card chosen in Preferences,
+Output, the sounds did go to that card, and they also kept coming out of the
+Windows default device, so from the chair nothing had moved.
+
+The cause was one word meaning two things. "Hear yourself through", left on
+"Same as the soundboard", was stored as no device at all, and no device at
+all is also how the app writes "the Windows default". So the app kept a
+second output open on the default device for you to listen on, and since
+3.7.0 that output has carried the whole show.
+
+- **Your sounds play where you send them and nowhere else.** One output
+  device means one output, whichever card it is.
+- **"Same as the soundboard" now means exactly that.** Your microphone
+  monitoring and the beep before a track ends come out of the main output
+  unless you choose another card for them.
+- **A bank sent to its own output stays on its own.** It is no longer mixed
+  into a second card behind your back.
+- **If you liked hearing the show on a second card**, for example sounds
+  going to a mixer or a cable while you listen on your speakers, that is
+  still there and is now a choice: Preferences, Microphone, Hear yourself
+  through, and pick the card you listen on.
+- A card chosen for listening that will not open still falls back to the
+  Windows default and says so, never to wherever bank 1 is going.
+
+The note under the output device in Preferences had also lost half a
+sentence. It now says what the setting does.
+
 ## 3.10.0 for Mac, 16 November 2026
 
 **A new board never takes another board's file. If you use File, New board,

@@ -839,6 +839,21 @@ And specific to this one:
   time (Mark, with repros). `tests/test_3_10_0.py` hashes the outgoing file
   after the timer AND after close, for every one of those paths.
 
+- **None is not allowed to mean two things about a sound card.** Martin
+  Sutton, 20 November 2026: "I change my output to another soundcard but it
+  doesn't change." `MixerGroup.monitor_device` of None means "Same as the
+  soundboard", and as a key of `_mixers` None means the Windows default.
+  `_build` added the monitor's None to the cards to open, so a main output on
+  any other card left a second stream on the default, `monitor_mixer` found
+  it with `_mixers.get(None)`, and the full programme monitor (3.7.0) fed it
+  the whole show: the sound moved AND stayed. Since 3.10.1 a monitor of None
+  opens nothing, wires no bus and resolves to `primary`. The one time None
+  really is the default is a monitor card that would not open, and that is
+  `_monitor_fell_back`, kept apart on purpose so the microphone cannot land
+  on bank 1's cable (Jackson's fault of 10 September). A bank on its own card
+  is never fed to another card unless a monitor card was chosen.
+  `tests/test_3_10_1.py`.
+
 - **A menu item's label must never be empty.** wx reads an empty label as a
   request for a stock label, has none for our ids, and asserts. The saved
   setups submenu built one from a station with no name, while the window was

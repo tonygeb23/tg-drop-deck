@@ -760,8 +760,10 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.device, 0, wx.EXPAND | wx.ALL, 10)
 
         self._note(panel, sizer,
-                   "Everything plays here unless a bank below is pointed\n"
-                   "while you keep listening on your own speakers.")
+                   "Everything plays here, and only here, unless a bank below\n"
+                   "is sent to an output of its own. To hear the show on a\n"
+                   "second card as well, choose it on the Microphone tab,\n"
+                   "under Hear yourself through.")
 
         # Per-bank outputs.
         #
