@@ -30,6 +30,11 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
+# These make their own noise to capture: a helper process plays a tone on the
+# Windows default output, which is the speakers of whoever is at the machine.
+# A private desktop does not make it quiet. Skipped unless --with-sound.
+PLAYS_SOUND = {"test_proccapture.py", "test_sourcelist.py"}
+
 STUB = '''"""Stand-in for accessible_output2 in tests: says nothing, anywhere."""
 '''
 STUB_AUTO = '''class Auto:
@@ -171,18 +176,27 @@ def main(argv):
     timeout = 300.0
     files = []
     quiet = False
+    with_sound = False
     it = iter(argv)
     for arg in it:
         if arg == "--timeout":
             timeout = float(next(it))
         elif arg == "--quiet":
             quiet = True
+        elif arg == "--with-sound":
+            with_sound = True
         else:
             files.append(arg)
     if not files:
         tests = os.path.join(ROOT, "tests")
         files = sorted(os.path.join(tests, n) for n in os.listdir(tests)
                        if n.startswith("test_") and n.endswith(".py"))
+    if not with_sound:
+        loud = [f for f in files if os.path.basename(f) in PLAYS_SOUND]
+        for path in loud:
+            print("==== %s: skipped, it plays a tone on the speakers "
+                  "(--with-sound to run it)" % os.path.basename(path))
+        files = [f for f in files if f not in loud]
     name = "dropdeck_tests_%d" % os.getpid()
     desk = win32service.CreateDesktop(name, 0, win32con.GENERIC_ALL, None)
     stub, wrapper = _stub_dir()

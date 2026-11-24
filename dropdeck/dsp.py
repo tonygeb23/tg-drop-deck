@@ -269,6 +269,23 @@ class MicChain:
         self._ceiling = Ceiling(self.samplerate)
         self.rebuild()
 
+    def set_samplerate(self, rate):
+        """Run at another rate. True if it changed.
+
+        pedalboard designs every filter for the rate it is TOLD, not the one
+        the audio is really at, so a chain told 48000 and fed 96000 has
+        every corner an octave high. Rebuilt rather than retuned, for the
+        reason the class gives.
+        """
+        rate = int(rate or 0)
+        if rate <= 0 or rate == self.samplerate:
+            return False
+        with self._lock:
+            self.samplerate = rate
+            self._ceiling.samplerate = float(rate)
+        self.rebuild()
+        return True
+
     # ------------------------------------------------------------ settings --
     def update(self, settings, rebuild=True):
         for key, value in (settings or {}).items():

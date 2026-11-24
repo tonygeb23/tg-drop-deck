@@ -37,6 +37,7 @@ from . import proccapture
 from . import micinput
 from .micinput import (CHANNELS, MicInput, describe_input,
                        input_devices, resolve_input)
+from .mixer import RateAdapter
 
 #: What `Source.last_error` holds for a sound card source with no input
 #: chosen. Its own value, so the frame can say THAT rather than "would not
@@ -80,6 +81,8 @@ class Source:
                                   gain_db=gain_db, monitor=bool(monitor))
             self.input.channel = (channel if channel in ("mix", "left", "right")
                                   else "mix")
+            # A plain average, always. See MicInput.pick_louder.
+            self.input.pick_louder = False
         self.last_error = None
         #: For a program source: not before this moment is the program looked
         #: for again, and whether it was capturing when last looked at. See
@@ -172,6 +175,11 @@ class Source:
     @property
     def is_program(self):
         return self.kind == self.PROGRAM
+
+    @property
+    def output_rate(self):
+        """The rate this source's audio arrives at. See SourceGroup.read_at."""
+        return getattr(self.input, "output_rate", None)
 
     @property
     def is_open(self):
@@ -449,6 +457,9 @@ class SourceGroup:
         self.mic = mic
         self.sources = list(sources or [])
         self.extras = list(extras or [])
+        #: One rate converter per member that is not at the monitor card's
+        #: rate, by id with the member kept beside it. See read_at.
+        self._adapters = {}
 
     def __len__(self):
         return len(self.sources) + (1 if self.mic is not None else 0)
@@ -499,6 +510,50 @@ class SourceGroup:
         if block is None:
             return np.zeros((frames, CHANNELS), dtype=np.float32)
         return block
+
+    def read_at(self, frames, rate):
+        """What the presenter hears, at the rate of the card they hear it on.
+
+        The microphone and the sources run at the main output's rate and the
+        confidence feed at the send's, and a monitor card can be at another
+        rate from both. Read as though they matched, a 48 kHz microphone on
+        44.1 kHz headphones came back 1.5 semitones flat and spliced 37
+        times a second. So any member at another rate is read at its OWN
+        rate, for exactly this block's length of time, and converted
+        (mixer.RateAdapter). A member at the card's rate is read exactly as
+        `read` reads it, so the ordinary case is unchanged.
+        """
+        block = None
+        alive = set()
+        for source in self._members():
+            try:
+                piece = self._at_rate(source, frames, int(rate), alive)
+            except Exception:
+                continue      # one bad input must never take the show down
+            if piece is None or not len(piece):
+                continue
+            if block is None:
+                block = piece.copy()
+            else:
+                block += piece
+        for key in [k for k in self._adapters if k not in alive]:
+            del self._adapters[key]
+        if block is None:
+            return np.zeros((frames, CHANNELS), dtype=np.float32)
+        return block
+
+    def _at_rate(self, source, frames, rate, alive):
+        own = int(getattr(source, "output_rate", 0) or 0)
+        if not own or not rate or own == rate:
+            return source.read(frames)
+        key = id(source)
+        alive.add(key)
+        held = self._adapters.get(key)
+        if (held is None or held[0] is not source
+                or held[1].source_rate != own or held[1].rate != rate):
+            held = (source, RateAdapter(own, rate))
+            self._adapters[key] = held
+        return held[1].read(source.read, frames)
 
     def read_air(self, frames):
         """What the listener hears."""

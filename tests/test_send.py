@@ -161,7 +161,10 @@ check("no tap, no send, no air block built", mix.air_tap is None)
 print("\nThe confidence feed is heard and is never on the air")
 conf = Confidence(int(RATE * 0.5))
 conf.start()
-conf.offer(np.full((FRAMES, CHANNELS), 0.3, dtype=np.float32))
+# Three blocks: its ring holds a read, a write and a margin before it hands
+# anything over, which is what stops it ticking (micinput._Ring).
+for _ in range(3):
+    conf.offer(np.full((FRAMES, CHANNELS), 0.3, dtype=np.float32))
 heard = conf.read(FRAMES)
 check("what the send put out is what the presenter hears",
       abs(peak(heard) - 0.3) < 1e-6, peak(heard))
@@ -174,7 +177,8 @@ check("switched off it holds nothing", peak(conf.read(FRAMES)) == 0.0)
 conf = Confidence(int(RATE * 0.5))
 conf.start()
 group = SourceGroup(mic=FakeInput(air=0.2, monitor=0.2), extras=[conf])
-conf.offer(np.full((FRAMES, CHANNELS), 0.5, dtype=np.float32))
+for _ in range(3):
+    conf.offer(np.full((FRAMES, CHANNELS), 0.5, dtype=np.float32))
 check("an extra is summed into what you hear",
       abs(peak(group.read(FRAMES)) - 0.7) < 1e-6, peak(group.read(FRAMES)))
 conf.offer(np.full((FRAMES, CHANNELS), 0.5, dtype=np.float32))

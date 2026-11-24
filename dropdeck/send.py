@@ -54,6 +54,7 @@ import sounddevice as sd
 from . import constants as C
 from .audiofile import CHANNELS
 from .engine import db_to_gain
+from .micinput import _Ring as _FillRing
 from .mixer import describe_device
 from .streamout import AirBus
 
@@ -61,57 +62,32 @@ from .streamout import AirBus
 class _Ring:
     """One block written by the send's callback, drained by the monitor's.
 
-    The same shape as micinput._Ring and for the same reason: two audio
-    callbacks on two different cards, so a short read is silence and never a
-    wait. Its own lock, because unlike the microphone's pair there is only one
-    ring here and nothing has to see two of them agree.
+    The microphone's ring, fill target and all (micinput._Ring), behind a
+    lock of its own: unlike the microphone's pair there is only one ring here
+    and nothing has to see two of them agree. It used to be a plain ring
+    with no target, and the send writes C.SEND_BLOCKSIZE frames at a time
+    where the monitor reads about 480, on two clocks: simulated, 84 reads in
+    ten minutes came up short with the clocks 100 ppm apart, each one a gap
+    in what you were checking.
     """
 
-    def __init__(self, frames):
-        self._buf = np.zeros((int(frames), CHANNELS), dtype=np.float32)
-        self._write_at = 0
-        self._available = 0
+    def __init__(self, frames, rate=None):
+        self._ring = _FillRing(int(frames), rate=rate)
         self._lock = threading.Lock()
 
     def clear(self):
         with self._lock:
-            self._buf[:] = 0.0
-            self._write_at = 0
-            self._available = 0
+            self._ring.clear()
 
     def write(self, block):
-        room = len(self._buf)
-        count = min(len(block), room)
-        if count <= 0:
+        if not len(block):
             return
         with self._lock:
-            end = self._write_at + count
-            if end <= room:
-                self._buf[self._write_at:end] = block[:count]
-            else:
-                first = room - self._write_at
-                self._buf[self._write_at:] = block[:first]
-                self._buf[:end - room] = block[first:count]
-            self._write_at = end % room
-            self._available = min(room, self._available + count)
+            self._ring.write(block)
 
     def read(self, frames):
-        out = np.zeros((frames, CHANNELS), dtype=np.float32)
         with self._lock:
-            count = min(frames, self._available)
-            if count <= 0:
-                return out
-            room = len(self._buf)
-            start = (self._write_at - self._available) % room
-            end = start + count
-            if end <= room:
-                out[:count] = self._buf[start:end]
-            else:
-                first = room - start
-                out[:first] = self._buf[start:]
-                out[first:count] = self._buf[:end - room]
-            self._available -= count
-        return out
+            return self._ring.read(frames)
 
 
 class Confidence:
@@ -128,10 +104,13 @@ class Confidence:
     boolean per block.
     """
 
-    def __init__(self, frames):
+    def __init__(self, frames, rate=None):
         self.on = False
         self.peak = 0.0
-        self._ring = _Ring(frames)
+        #: The send's rate, which is not necessarily the monitor card's.
+        #: SourceGroup.read_at converts it on the way in.
+        self.output_rate = int(rate or C.DEFAULT_SAMPLERATE)
+        self._ring = _Ring(frames, self.output_rate)
 
     def offer(self, block):
         """Called from the send's callback. Never blocks, never raises."""
@@ -187,7 +166,7 @@ class Send:
 
         self.bus = AirBus(self.samplerate, seconds=C.SEND_RING_SECONDS)
         self.confidence = Confidence(
-            int(self.samplerate * C.SEND_MONITOR_SECONDS))
+            int(self.samplerate * C.SEND_MONITOR_SECONDS), self.samplerate)
 
         #: How full the ring has to be before a single sample goes out, and
         #: again after it has ever run dry. Two sound cards are never quite

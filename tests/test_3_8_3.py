@@ -344,14 +344,18 @@ try:
 finally:
     micinput.input_devices = real_devices
 
-# The system default that would not open is said, not hidden.
+# The system default that would not open is said, not hidden. Both of its own
+# ways in refuse: WASAPI's default, which is tried first since the major
+# release after 3.10.1, and MME's, which is PortAudio's None.
 FakeStream.made = []
-FakeStream.refuse = {None}
+FakeStream.refuse = {None, 7}
 micinput.sd.InputStream = FakeStream
 real_alternatives = micinput.alternatives
 micinput.alternatives = lambda device: [9] if device is None else []
 real_default = micinput._default_input_index
 micinput._default_input_index = lambda: 8
+real_wasapi = getattr(micinput, "wasapi_default", None)
+micinput.wasapi_default = lambda kind="output": 7
 try:
     mic = MicInput(duck_bus=DuckBus(), samplerate=48000)
     mic.device = None
@@ -364,6 +368,8 @@ finally:
     micinput.sd.InputStream = real_stream
     micinput.alternatives = real_alternatives
     micinput._default_input_index = real_default
+    if real_wasapi is not None:
+        micinput.wasapi_default = real_wasapi
 
 # A device source that came in another way is not closed and reopened.
 dev_source = sources.Source(name="Mixer", device_name="Line In",

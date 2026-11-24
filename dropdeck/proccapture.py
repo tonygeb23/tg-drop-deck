@@ -185,8 +185,10 @@ class ProcessCapture:
         self.overruns = 0
         self.last_error = None
         self._lock = threading.Lock()
-        self._monitor = _Ring()
-        self._air = _Ring()
+        # Read at the output's rate, which is what their fill targets are
+        # measured in. See micinput._Ring.
+        self._monitor = _Ring(rate=self.output_rate)
+        self._air = _Ring(rate=self.output_rate)
         self._stop = threading.Event()
         self._thread = None
         self._running = False
@@ -206,6 +208,8 @@ class ProcessCapture:
         if rate == self.output_rate:
             return False
         self.output_rate = rate
+        with self._lock:
+            self._monitor.rate = self._air.rate = rate
         if self._running:
             self.stop()
             self.start()

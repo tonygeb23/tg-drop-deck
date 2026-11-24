@@ -15,6 +15,7 @@ from collections import OrderedDict
 
 import numpy as np
 import sounddevice as sd
+import soxr
 
 from . import constants as C
 from .engine import (CHANNELS, MemoryVoice, StreamVoice, cue_tone, db_to_gain,
@@ -69,6 +70,30 @@ def host_api_names():
         return [h["name"] for h in sd.query_hostapis()]
     except Exception:
         return []
+
+
+#: The way "System default" is opened. See wasapi_default.
+WASAPI = "Windows WASAPI"
+
+
+def wasapi_default(kind="output"):
+    """The Windows default device under WASAPI, as an index, or None.
+
+    PortAudio's own default is MME's, and MME is about two hundred
+    milliseconds however it is asked: measured, the system default output
+    reported 180 ms where the same card under WASAPI reported 22. So "System
+    default" is opened as WASAPI's default, in SHARED mode. Never exclusive:
+    exclusive takes the card away from every other program, the screen
+    reader included. ``kind`` is "output" or "input". Never raises.
+    """
+    try:
+        for api in sd.query_hostapis():
+            if api.get("name") == WASAPI:
+                index = api.get("default_%s_device" % kind, -1)
+                return int(index) if int(index) >= 0 else None
+    except Exception:
+        return None
+    return None
 
 
 def output_devices():
@@ -150,20 +175,87 @@ class DuckBus:
 
     def __init__(self):
         self._loud = {}
+        #: Who is talking right now, as opposed to merely open. Only the
+        #: microphone ever publishes here, and only when the board has duck
+        #: while talking on. See Mixer._talk_ramp.
+        self._talk = {}
         self._lock = threading.Lock()
 
     def publish(self, key, loud):
         with self._lock:
             self._loud[key] = bool(loud)
 
+    def publish_talk(self, key, talking):
+        with self._lock:
+            self._talk[key] = bool(talking)
+
     def forget(self, key):
         with self._lock:
             self._loud.pop(key, None)
+            self._talk.pop(key, None)
 
     @property
     def loud(self):
         with self._lock:
             return any(self._loud.values())
+
+    @property
+    def talking(self):
+        with self._lock:
+            return any(self._talk.values())
+
+
+class RateAdapter:
+    """Audio read at one rate and handed out at another. Never raises.
+
+    For the monitor card. The microphone, the sources and the confidence feed
+    are all at the MAIN output's rate (the send's, for the confidence feed),
+    and a monitor card at 44.1 kHz drained them as though they were its own:
+    measured, a 1000 Hz voice came back at 943 Hz with 37 splices a second
+    as the ring overflowed. So each is read at its own rate, exactly as much
+    as the time asks for, and converted here.
+
+    The input taken per block is fixed by the two rates, so the source's own
+    ring sees a steady reader and keeps its fill target. What the resampler
+    holds back varies with how its blocks fall, so ``_held`` starts with
+    C.MONITOR_RESAMPLE_PAD_SECONDS of silence, the most it holds back, and
+    never runs short after that.
+    """
+
+    def __init__(self, source_rate, rate):
+        self.source_rate = int(source_rate)
+        self.rate = int(rate)
+        self._resampler = soxr.ResampleStream(
+            self.source_rate, self.rate, CHANNELS, dtype="float32",
+            quality=C.MONITOR_RESAMPLE_QUALITY)
+        self._owed = 0.0
+        self._held = np.zeros(
+            (int(C.MONITOR_RESAMPLE_PAD_SECONDS * self.rate), CHANNELS),
+            dtype=np.float32)
+        #: Blocks the conversion could not fill. Only ever a monitoring
+        #: fault, and expected to stay at nought.
+        self.short = 0
+
+    def read(self, fetch, frames):
+        exact = frames * self.source_rate / float(self.rate) + self._owed
+        take = int(exact)
+        self._owed = exact - take
+        try:
+            if take > 0:
+                got = self._resampler.resample_chunk(
+                    np.ascontiguousarray(fetch(take), dtype=np.float32))
+                if len(got):
+                    self._held = np.concatenate([self._held, got])
+        except Exception:
+            pass
+        if len(self._held) >= frames:
+            out, self._held = self._held[:frames], self._held[frames:]
+            return out
+        out = np.zeros((frames, CHANNELS), dtype=np.float32)
+        out[:len(self._held)] = self._held
+        self._held = self._held[:0]
+        self.short += 1
+        return out
 
 
 class Mixer:
@@ -186,6 +278,9 @@ class Mixer:
                           else int(blocksize))
         self.stream = None
         self.last_error = None
+        #: "System default" that WASAPI would not open, so it is on MME, the
+        #: slow way. Said once, by the group. See wasapi_default.
+        self.default_by_mme = False
 
         # With no bus supplied a mixer gets a private one, so a lone Mixer
         # behaves exactly as it always did and every existing test still
@@ -198,6 +293,14 @@ class Mixer:
         self.playlist_gain = C.DEFAULT_PLAYLIST_VOLUME
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
+        #: Duck while talking: a second stage under the open microphone's
+        #: floor, off by default, and in decibels FURTHER down. See
+        #: C.DEFAULT_TALK_DUCK_DB.
+        self.talk_duck = False
+        self.talk_duck_db = C.DEFAULT_TALK_DUCK_DB
+        self._talk = 1.0
+        self._talk_aim = 1.0
+        self._talk_from = 1.0
 
         #: Bed fades, in seconds, both settable - see board.bed_fade_in. Zero
         #: in means the bed starts at full level on its first sample, which is
@@ -291,7 +394,12 @@ class Mixer:
     def _device_rate(device):
         try:
             if device is None:
-                info = sd.query_devices(kind="output")
+                # The rate of the card as WASAPI has it, which is the only
+                # rate shared mode will open at. MME takes any rate, so the
+                # fall back opens at it too.
+                fast = wasapi_default("output")
+                info = (sd.query_devices(fast) if fast is not None
+                        else sd.query_devices(kind="output"))
             else:
                 info = sd.query_devices(device)
             return int(info["default_samplerate"])
@@ -299,28 +407,51 @@ class Mixer:
             return 48000
 
     def start(self):
-        """Open the output stream. Returns True if audio is actually running."""
+        """Open the output stream. Returns True if audio is actually running.
+
+        "System default" is Windows' default card through WASAPI shared
+        mode, and MME only if that will not open (`default_by_mme`). See
+        wasapi_default for the two hundred milliseconds that is about.
+        """
         self.stop_stream()
         self._last_callback = None
         self.late_blocks = 0
         self.blocks = 0
         self.worst_gap = 0.0
-        try:
-            self.stream = sd.OutputStream(
-                device=self.device,
-                samplerate=self.samplerate,
-                channels=CHANNELS,
-                dtype="float32",
-                blocksize=self.blocksize,
-                callback=self._callback,
-            )
-            self.stream.start()
+        self.default_by_mme = False
+        tries = [self.device]
+        if self.device is None:
+            fast = wasapi_default("output")
+            if fast is not None:
+                tries = [fast, None]
+        error = "no sound card"
+        for index in tries:
+            stream = None
+            try:
+                stream = sd.OutputStream(
+                    device=index,
+                    samplerate=self.samplerate,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    blocksize=self.blocksize,
+                    callback=self._callback,
+                )
+                stream.start()
+            except Exception as exc:  # no card, in use, wrong rate or shape
+                error = str(exc)
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                continue
+            self.stream = stream
             self.last_error = None
+            self.default_by_mme = len(tries) > 1 and index is None
             return True
-        except Exception as exc:  # no sound card, device in use, wrong rate
-            self.stream = None
-            self.last_error = str(exc)
-            return False
+        self.stream = None
+        self.last_error = error
+        return False
 
     @property
     def is_running(self):
@@ -338,14 +469,14 @@ class Mixer:
 
     def set_device(self, device):
         """Move to another output. Anything playing is stopped first."""
-        self.stop_all(fade_out=0.0)
+        self.stop_all(at_once=True)
         self.device = device
         self.samplerate = self._device_rate(device)
         self._clear_cache()          # cached audio was resampled for the old rate
         return self.start()
 
     def close(self):
-        self.stop_all(fade_out=0.0)
+        self.stop_all(at_once=True)
         self.stop_stream()
         self.duck_bus.forget(self.key)
 
@@ -480,14 +611,28 @@ class Mixer:
                 voice.release(fade_out)
         return stopped
 
-    def stop_all(self, fade_out=None):
+    def stop_all(self, fade_out=None, at_once=False):
+        """Stop every voice. Returns how many were playing.
+
+        ``fade_out`` nought is the abrupt stop a board can ask for, and it is
+        still C.ABRUPT_STOP_SECONDS long. It used to take every voice out on
+        the spot, so the next sample was zero whatever the last one had been:
+        measured, a tone at -3 dBFS stepped to nothing in one sample, a
+        click on every Stop everything with the stop fade off. A single pad's
+        abrupt stop always ramped, and now this one does too.
+
+        ``at_once`` is for taking a stream down or rebuilding it, where there
+        is no next block to ramp in and the voices must close now.
+        """
         if fade_out is None:
             fade_out = C.FADE_OUT_PANIC
+        if not at_once:
+            fade_out = max(float(fade_out), C.ABRUPT_STOP_SECONDS)
         with self._lock:
             count = sum(1 for v in self._voices if not v.releasing)
             for voice in self._voices:
-                voice.release(fade_out)
-        if fade_out <= 0.0:
+                voice.release(0.0 if at_once else fade_out)
+        if at_once:
             self._reap(force=True)
         return count
 
@@ -566,6 +711,22 @@ class Mixer:
             except Exception:
                 pass
 
+    def _duck_target(self):
+        """Where the music should sit, as a gain: the floor."""
+        if self.ducking and self.duck_bus.loud:
+            return db_to_gain(self.duck_db)
+        return 1.0
+
+    def _talk_target(self):
+        """The second stage: further down only while the voice is going.
+
+        Nothing at all unless ducking is on AND the board asked for it, and
+        only ever under the open microphone's floor, which is already down.
+        """
+        if self.ducking and self.talk_duck and self.duck_bus.talking:
+            return db_to_gain(-abs(float(self.talk_duck_db)))
+        return 1.0
+
     def _duck_ramp(self, frames, voices):
         """Where the beds should sit this block, given what else is playing."""
         # Published every block whether or not THIS mixer is ducking, because
@@ -575,9 +736,14 @@ class Mixer:
             any(v.is_loud and (not v.finished) and (not v.releasing)
                 for v in voices))
 
-        target = 1.0
-        if self.ducking and self.duck_bus.loud:
-            target = db_to_gain(self.duck_db)
+        floor = self._floor_ramp(frames)
+        talk = self._talk_ramp(frames)
+        if not isinstance(talk, np.ndarray) and talk == 1.0:
+            return floor
+        return floor * talk
+
+    def _floor_ramp(self, frames):
+        target = self._duck_target()
         if abs(self._duck - target) < 1e-6:
             self._duck = target
             return target
@@ -588,6 +754,27 @@ class Mixer:
         new = self._duck + move
         ramp = np.linspace(self._duck, new, frames, dtype=np.float32)
         self._duck = new
+        return ramp[:, None]
+
+    def _talk_ramp(self, frames):
+        """The second stage's gain this block. Its times are the WHOLE move,
+        whatever the depth, so the 30 ms attack is 30 ms at any setting."""
+        target = self._talk_target()
+        if target != self._talk_aim:
+            self._talk_aim = target
+            self._talk_from = self._talk
+        if abs(self._talk - target) < 1e-6:
+            self._talk = target
+            return target
+        span = (C.TALK_DUCK_ATTACK if target < self._talk
+                else C.TALK_DUCK_RELEASE)
+        distance = abs(target - self._talk_from) or abs(target - self._talk)
+        step = distance * frames / float(max(1, int(span * self.samplerate)))
+        delta = target - self._talk
+        move = min(abs(delta), step) * (1.0 if delta > 0 else -1.0)
+        new = self._talk + move
+        ramp = np.linspace(self._talk, new, frames, dtype=np.float32)
+        self._talk = new
         return ramp[:, None]
 
     def _playlist_ramp(self, frames):
@@ -651,8 +838,14 @@ class Mixer:
                     if air is not None and voice.bus not in C.OFF_AIR_BUSES:
                         air += block
         else:
-            self._duck = 1.0
             self.duck_bus.publish(self.key, False)
+            # Where the duck SHOULD be, not back to full. With nothing playing
+            # nothing can be heard to move, and a bed started under an open
+            # microphone used to come in at full level and take 80 ms to come
+            # down: measured, 8.3 dB loud for its first 10 ms.
+            self._duck = self._duck_target()
+            self._talk = self._talk_from = self._talk_aim = \
+                self._talk_target()
 
         # What this card is playing, offered to a monitor on another card.
         # Taken HERE, after the voices and before anything that belongs only
@@ -682,7 +875,7 @@ class Mixer:
         source = self.monitor_source
         if source is not None:
             try:
-                mix += source.read(frames)
+                mix += self._monitored(source, frames)
             except Exception:
                 pass          # a monitor must never take the music down
 
@@ -697,6 +890,17 @@ class Mixer:
         if any(v.finished for v in voices):
             self._reap()
         return mix
+
+    def _monitored(self, source, frames):
+        """What the presenter hears of the inputs, at THIS card's rate.
+
+        A source group converts each input that is at another rate; see
+        sources.SourceGroup.read_at. Anything else is taken as it comes.
+        """
+        read_at = getattr(source, "read_at", None)
+        if read_at is not None:
+            return read_at(frames, self.samplerate)
+        return source.read(frames)
 
     def _from_monitor(self, frames, feed):
         """One block of the other cards' show. Never blocks, never raises.
@@ -887,6 +1091,10 @@ class MixerGroup:
         self.duck_bus = DuckBus()
         self._mixers = {}
         self.problems = []
+        #: Things worth saying ONCE a session, unlike `problems`, which is
+        #: about the build that has just happened. See take_notices.
+        self._notices = []
+        self._said_mme = False
         self._build()
 
     # ------------------------------------------------------------- plumbing --
@@ -971,7 +1179,20 @@ class MixerGroup:
             self._mixers[None] = Mixer(device=None, open_stream=self.open_stream,
                                        duck_bus=self.duck_bus,
                                        key=_key_for(None))
+        if (not self._said_mme
+                and any(m.default_by_mme for m in self._mixers.values())):
+            self._said_mme = True
+            self._notices.append(
+                "Windows would not open your default sound card the quick "
+                "way, so it is going the older, slower way, which puts about "
+                "a fifth of a second between a key and its sound. Choosing "
+                "the card by name in Preferences, Output may avoid that")
         self._wire_monitor()
+
+    def take_notices(self):
+        """What is worth saying once, handed over once. Sentences, or none."""
+        said, self._notices = self._notices, []
+        return said
 
     def _wire_monitor(self):
         """Give the card the presenter listens on every other card's show.
@@ -1041,7 +1262,8 @@ class MixerGroup:
     def set_bank_devices(self, bank_devices):
         """Re-route. Everything playing stops, because a voice belongs to a stream."""
         previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db,
-                    self.bed_fade_in, self.bed_fade_out, self.playlist_gain)
+                    self.bed_fade_in, self.bed_fade_out, self.playlist_gain,
+                    self.talk_duck, self.talk_duck_db)
         monitor = self.monitor_source
         # The stream, and the microphone feeding it. Rebuilding replaces every
         # mixer, and a new mixer has no tap, so changing an output device while
@@ -1058,7 +1280,7 @@ class MixerGroup:
         send_tap = self.send_tap
         send_minus = self.send_minus
         monitor_only = self.playlist_monitor_only
-        self.stop_all(fade_out=0.0)
+        self.stop_all(at_once=True)
         self.bank_devices = dict(bank_devices or {})
         self._build()
         self.set_sfx_gain(previous[0])
@@ -1068,6 +1290,8 @@ class MixerGroup:
         self.bed_fade_in = previous[4]
         self.bed_fade_out = previous[5]
         self.set_playlist_gain(previous[6])
+        self.talk_duck = previous[7]
+        self.talk_duck_db = previous[8]
         # Rebuilding replaced every mixer, so the monitor has to be re-attached
         # or it would go on writing into an output nothing is draining.
         self.monitor_source = monitor
@@ -1112,8 +1336,9 @@ class MixerGroup:
         return self.for_slot(slot_index).stop_slot(
             slot_index, fade_out=fade_out, also_releasing=also_releasing)
 
-    def stop_all(self, fade_out=None):
-        return sum(m.stop_all(fade_out=fade_out) for m in self._mixers.values())
+    def stop_all(self, fade_out=None, at_once=False):
+        return sum(m.stop_all(fade_out=fade_out, at_once=at_once)
+                   for m in self._mixers.values())
 
     def is_playing(self, slot_index):
         return self.for_slot(slot_index).is_playing(slot_index)
@@ -1175,12 +1400,19 @@ class MixerGroup:
         self.monitor_mixer.monitor_source = source
 
     def play_preview(self, path, trim_db=0.0):
-        """Auditioning goes to the ordinary output, not the monitor one.
+        """Auditioning goes where the presenter listens: the monitor card.
 
-        A preview is the sound you are about to put on a pad, so you want to
-        hear it the way it will be heard.
+        A preview is you choosing a sound, so it is for your ears and nobody
+        else's. It used to go to bank 1's card, on the reasoning that you want
+        to hear it the way it will be heard, and that is still true of the
+        LEVEL, which is the sound fader. But bank 1's card is very often a
+        virtual cable or a channel of a desk, so a listener heard every sound
+        you auditioned. With no monitor card chosen, `monitor_mixer` is bank
+        1's card, as it always was, because then that is where you listen.
+        The preview bus is off air either way, so it never reaches the
+        stream, a recording or the send.
         """
-        return self.primary.play_preview(path, trim_db=trim_db)
+        return self.monitor_mixer.play_preview(path, trim_db=trim_db)
 
     def stop_preview(self):
         return sum(m.stop_preview() for m in self._mixers.values())
@@ -1291,6 +1523,24 @@ class MixerGroup:
     def duck_db(self, value):
         for mixer in self._mixers.values():
             mixer.duck_db = value
+
+    @property
+    def talk_duck(self):
+        return self.primary.talk_duck
+
+    @talk_duck.setter
+    def talk_duck(self, value):
+        for mixer in self._mixers.values():
+            mixer.talk_duck = bool(value)
+
+    @property
+    def talk_duck_db(self):
+        return self.primary.talk_duck_db
+
+    @talk_duck_db.setter
+    def talk_duck_db(self, value):
+        for mixer in self._mixers.values():
+            mixer.talk_duck_db = float(value)
 
     @property
     def bed_fade_in(self):

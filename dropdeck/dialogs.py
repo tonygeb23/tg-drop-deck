@@ -877,12 +877,44 @@ class SettingsDialog(wx.Dialog):
         self.duck_db.SetName("Duck depth in decibels")
         sizer.Add(self.duck_db, 0, wx.EXPAND | wx.ALL, 10)
 
+        # Duck while talking, feedback 44. A second dip under the open
+        # microphone's, never instead of it, so it sits right under the depth
+        # it adds to. A spin box rather than a slider, because a wx slider
+        # reads its value out as a percentage.
+        self.talk_duck = wx.CheckBox(
+            panel, label="Duck &further while I am talking")
+        self.talk_duck.SetValue(bool(getattr(self.board, "talk_duck", False)))
+        self.talk_duck.SetToolTip(
+            "While your microphone is on the music is already ducked. With "
+            "this on it goes further down while your voice is coming through, "
+            "and back up to the ducked level a moment after you stop.")
+        sizer.Add(self.talk_duck, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        talk_row = wx.BoxSizer(wx.HORIZONTAL)
+        talk_row.Add(wx.StaticText(panel, label="By &how much, in decibels"),
+                     0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.talk_duck_db = wx.SpinCtrl(
+            panel, min=int(C.MIN_TALK_DUCK_DB), max=int(C.MAX_TALK_DUCK_DB),
+            initial=int(round(getattr(self.board, "talk_duck_db",
+                                      C.DEFAULT_TALK_DUCK_DB))))
+        name_field(self.talk_duck_db,
+                   "By how much further, while you talk, in decibels")
+        talk_row.Add(self.talk_duck_db, 0)
+        sizer.Add(talk_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         # The slider was fully draggable while ducking was switched off: a
-        # control that looks alive and does nothing.
-        self.duck_db.Enable(self.duck_on.GetValue())
+        # control that looks alive and does nothing. The same goes for the
+        # second dip, which does nothing at all without the first.
+        def ducking_follows(_event=None):
+            on = self.duck_on.GetValue()
+            self.duck_db.Enable(on)
+            self.talk_duck.Enable(on)
+            self.talk_duck_db.Enable(on and self.talk_duck.GetValue())
+
+        ducking_follows()
         self.duck_on.Bind(
-            wx.EVT_CHECKBOX,
-            lambda e: (self.duck_db.Enable(e.IsChecked()), e.Skip()))
+            wx.EVT_CHECKBOX, lambda e: (ducking_follows(), e.Skip()))
+        self.talk_duck.Bind(
+            wx.EVT_CHECKBOX, lambda e: (ducking_follows(), e.Skip()))
 
         # How a bed enters and leaves.
         #

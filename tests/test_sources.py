@@ -142,8 +142,13 @@ check("so does the air mix", float(np.abs(air).max()) > 0.1,
 for inp in (mic, call.input, browser.input):
     inp._reset_ring()
 group.read(C.BLOCKSIZE * 8)
-feed(call.input, 600.0, blocks=1)
+# Three blocks, because a ring hands nothing over until it holds a read, a
+# write and a margin (micinput._Ring); the two it is still holding after the
+# first read are taken before the second is looked at.
+feed(call.input, 600.0, blocks=3)
 first = float(np.abs(group.read(C.BLOCKSIZE)).max())
+for _ in range(2):
+    group.read(C.BLOCKSIZE)
 second = float(np.abs(group.read(C.BLOCKSIZE)).max())
 check("audio read once is gone, so nothing may read a source twice",
       first > 0.05 and second < 0.001, "%.3f then %.3f" % (first, second))

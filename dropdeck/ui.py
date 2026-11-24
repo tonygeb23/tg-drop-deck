@@ -20,6 +20,7 @@ import wx
 import webbrowser
 
 from . import appicon
+from . import cabletest
 from . import constants as C
 from . import dsp
 from . import endpoints
@@ -507,6 +508,10 @@ def _folder_words(path):
     return folder or "its folder"
 
 
+#: Who the microphone is, in a sentence about what it is listening to.
+_YOUR_MIC = "Your microphone"
+
+
 #: What belongs to the studio rather than to a board: the sound cards, the
 #: microphone, the send and the sources. Since opening a board moves the app
 #: onto ITS cards and its send, a board that brings none of its own (File,
@@ -981,8 +986,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_bed_gain(self.board.bed_volume)
         self.mixer.set_playlist_gain(self.board.playlist_volume)
         self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
-        self.mixer.ducking = self.board.ducking
-        self.mixer.duck_db = self.board.duck_db
+        self._apply_ducking(self.board)
         # The microphone shares the mixers' duck bus, which is what makes
         # opening it duck a bed playing out of a completely different sound
         # card. It is created closed: nothing here opens a microphone except
@@ -996,6 +1000,7 @@ class DropDeckFrame(wx.Frame):
         # processing library is missing, because a chain that does nothing is
         # simpler for everything downstream than a chain that is None.
         self.mic.channel = self.board.mic_channel
+        self.mic.talk_detect = bool(self.board.talk_duck)
         if dsp.available():
             self.mic.chain = dsp.MicChain(self.mixer.samplerate,
                                           self.board.voice_settings)
@@ -1438,6 +1443,10 @@ class DropDeckFrame(wx.Frame):
                         % _count(missing, "file"))
         if not self.mixer.is_running:
             bits.append(f"Audio could not start. {self.mixer.last_error or ''}")
+        # The system default on the slow way in, said once. See
+        # mixer.wasapi_default.
+        notices = self.mixer.take_notices()
+        bits.extend(notices)
         # A send the board asked for and did not get. _start_send is called
         # quietly at startup with a comment saying this line would say so,
         # and this line had no send branch at all, so a cable that had been
@@ -1473,7 +1482,7 @@ class DropDeckFrame(wx.Frame):
         wrong = (bool(missing) or not self.mixer.is_running or send_failed
                  or bool(self._routing_conflicts()) or bool(board_note)
                  or bool(taken) or bool(clashes) or bool(data_note)
-                 or bool(safety))
+                 or bool(safety) or bool(notices))
         (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     def _board_name(self):
@@ -4206,6 +4215,39 @@ class DropDeckFrame(wx.Frame):
         mic = getattr(self, "mic", None)
         return bool(mic is not None and mic.is_open)
 
+    def _apply_ducking(self, board):
+        """Every ducking setting the board holds, onto the mixers and the mic.
+
+        One place, because there are three callers (startup, opening a board
+        and Preferences) and a setting pushed in two of them is a board
+        change that leaves the last board's ducking running.
+        """
+        self.mixer.ducking = board.ducking
+        self.mixer.duck_db = board.duck_db
+        self.mixer.talk_duck = bool(board.talk_duck)
+        self.mixer.talk_duck_db = float(board.talk_duck_db)
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            mic.talk_detect = bool(board.talk_duck)
+
+    def _follow_output_rate(self):
+        """The microphone AND every source onto the main output's rate.
+
+        Both are read by the main output, so both have to arrive at its
+        rate. Only the microphone used to be told, so a source went on at
+        the old rate after the output moved card: sharp or flat on the air
+        until something restarted it. Each reopens only if its rate changed.
+        """
+        rate = self.mixer.samplerate
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            mic.set_output_rate(rate)
+        for source in getattr(self, "sources", []):
+            try:
+                source.input.set_output_rate(rate)
+            except Exception:
+                errorlog.record_current()
+
     def _mic_spec(self):
         return {"name": self.board.mic_device_name,
                 "hostapi": self.board.mic_device_hostapi}
@@ -4265,6 +4307,17 @@ class DropDeckFrame(wx.Frame):
         # needs to know it is the one in the laptop lid that is live.
         missing = spec.get("name") if spec.get("name") and device is None \
             else None
+        # Before anything opens: a microphone on the far end of the cable
+        # the show is being sent into puts the show back into itself. With
+        # no send running there is no loop, and `_start_send` refuses the
+        # setup if one is started later.
+        loops = (self._send_loops([(_YOUR_MIC, self._mic_capture_name())])
+                 if self.sending() and self.board.stream_mic else [])
+        if loops:
+            self.mic_item.Check(False)
+            self.announce(" ".join(loops))
+            self._update_status()
+            return False
         self.mic.device = device
         if not self.mic.start():
             self.mic_item.Check(False)
@@ -4285,6 +4338,15 @@ class DropDeckFrame(wx.Frame):
             line += (". Your chosen microphone, %s, is not plugged in, so this "
                      "is the system default" % missing)
         self.announce(line)
+        if self.mic.default_by_mme and not getattr(self, "_told_slow_mic",
+                                                   False):
+            # Once a session, queued behind the line above. Everything else
+            # about the default microphone goes through WASAPI now.
+            self._told_slow_mic = True
+            self.announce("Windows would not open your default microphone "
+                          "the quick way, so it came in the older, slower "
+                          "way. Choosing it by name on the Microphone page "
+                          "may avoid that", interrupt=False)
         if fell_back is not None and not getattr(self, "_told_route", False):
             # Once a session, on the chattier channel, and queued behind the
             # line above rather than cutting it off. Worth knowing once; not
@@ -4435,7 +4497,15 @@ class DropDeckFrame(wx.Frame):
             self.mixer.monitor_source = getattr(self, "source_group", self.mic)
             self.warm_cache()
         trouble = ""
-        if changed_input and self._mic_open():
+        loops = (self._send_loops([(_YOUR_MIC, self._mic_capture_name())])
+                 if changed_input and self._mic_open() and self.sending()
+                 and self.board.stream_mic else [])
+        if loops:
+            # Refused rather than opened, for the reason in _toggle_mic.
+            self.mic.stop()
+            self.mic_item.Check(False)
+            trouble = " ".join(loops)
+        elif changed_input and self._mic_open():
             if self.mic.start(device=index):
                 # Opened is not yet working. See _check_mic_signal.
                 wx.CallLater(C.MIC_SIGNAL_CHECK_MS, self._check_mic_signal,
@@ -5357,8 +5427,7 @@ class DropDeckFrame(wx.Frame):
         notes = self._follow_board_cards()
         self.mixer.set_sfx_gain(board.sfx_volume)
         self.mixer.set_bed_gain(board.bed_volume)
-        self.mixer.ducking = board.ducking
-        self.mixer.duck_db = board.duck_db
+        self._apply_ducking(board)
         self.mixer.set_playlist_gain(board.playlist_volume)
         self.mixer.playlist_monitor_only = board.playlist_monitor_only
         self.mixer.bed_fade_in = board.bed_fade_in
@@ -5496,13 +5565,11 @@ class DropDeckFrame(wx.Frame):
             moved = True
         if not moved:
             return notes
-        mic = getattr(self, "mic", None)
-        if mic is not None:
-            # After the move, for the reason `_on_settings` gives.
-            mic.set_output_rate(self.mixer.samplerate)
+        # After the move, for the reason `_on_settings` gives.
+        self._follow_output_rate()
         # A card that would not open is said, never a box: this runs inside
         # Open, New and a reload.
-        return notes + list(self.mixer.problems)
+        return notes + list(self.mixer.problems) + self.mixer.take_notices()
 
     def _cards_not_here(self):
         """A sentence for each card the board names that is not plugged in."""
@@ -5747,9 +5814,27 @@ class DropDeckFrame(wx.Frame):
         """
         missing = []
         unchosen = []
+        refused = []
         soloed = self.anything_soloed()
+        # A source on the far end of the send's own cable is never opened
+        # while the send runs: it would put the show back into itself.
+        far_end = self._send_far_end() if self.sending() else ""
         for source in getattr(self, "sources", []):
             try:
+                loops = ([] if (getattr(source, "is_program", False)
+                                or not getattr(source, "wanted_on_air",
+                                               False))
+                         else routing.captures_itself(
+                             far_end, [(source.name,
+                                        getattr(source, "device_name", ""))],
+                             self.board.send_device_name))
+                if loops:
+                    source.stop()
+                    source.last_error = ("refused, it would send your show "
+                                         "back into itself")
+                    source.was_open = False
+                    refused.extend(loops)
+                    continue
                 # Mute and solo go in BEFORE the capture starts, or a muted
                 # source is on the air for a moment.
                 opened = source.start(self.mixer.samplerate, soloed=soloed)
@@ -5771,7 +5856,7 @@ class DropDeckFrame(wx.Frame):
             # opened here is not announced as having come back.
             source.was_open = source.is_open
         self._next_source_watch = time.monotonic() + C.SOURCE_WATCH_SECONDS
-        said = []
+        said = list(refused)
         if missing:
             said.append("These sources would not open: %s"
                         % ", ".join(missing))
@@ -5782,11 +5867,15 @@ class DropDeckFrame(wx.Frame):
                            "has" if len(unchosen) == 1 else "have",
                            "it is" if len(unchosen) == 1 else "they are"))
         self._sources_trouble = ". ".join(said)
-        if said and not quiet:
+        if refused and not quiet:
+            # Not the help channel: a source refused is something nobody
+            # could otherwise know.
+            self.announce(self._sources_trouble)
+        elif said and not quiet:
             self.announce_help(self._sources_trouble)
         self._sync_air_taps()
         self._update_status()
-        return not (missing or unchosen)
+        return not (missing or unchosen or refused)
 
     def stop_sources(self):
         for source in getattr(self, "sources", []):
@@ -6990,6 +7079,14 @@ class DropDeckFrame(wx.Frame):
             if not quiet:
                 self.announce(self.send_failed)
             return False
+        # Refused before a card is opened: an open microphone that goes out,
+        # and every source set to go on air, compared by name.
+        loops = self._send_loops(self._captures())
+        if loops:
+            self.send_failed = " ".join(loops)
+            if not quiet:
+                self.announce(self.send_failed)
+            return False
         send = sendout.Send(device=device, gain_db=self.board.send_gain_db)
         if not send.is_running:
             send.close()
@@ -7181,6 +7278,8 @@ class DropDeckFrame(wx.Frame):
         if self.sending():
             parts.append(self.send_report())
         elif self.board.send_device_name:
+            if self.board.send_on and self.send_failed:
+                parts.append(self.send_failed)
             parts.extend(self._cable_lines())
         ok, why = self.mixer.keeping_up()
         if not ok:
@@ -7232,6 +7331,60 @@ class DropDeckFrame(wx.Frame):
             except Exception:
                 pass
         return " ".join(said)
+
+    def _send_far_end(self):
+        """The recording end of the cable the send goes into, or "".
+
+        Found the one way this app knows two ends belong together, the
+        cable's own pairing in the registry (`cabletest.capture_for`), and
+        never by guessing from a name. Reading the registry may fail for any
+        reason, and that is "not known", never a refusal.
+        """
+        name = self.board.send_device_name
+        if not name:
+            return ""
+        try:
+            return cabletest.capture_for(name) or ""
+        except Exception:
+            return ""
+
+    def _mic_capture_name(self):
+        """The input the microphone would really open, by name.
+
+        The one chosen when it is here, and Windows' default otherwise,
+        which is what `_toggle_mic` falls back to.
+        """
+        spec = self._mic_spec()
+        if spec.get("name") and resolve_input(spec) is not None:
+            return spec["name"]
+        return micinput.default_input_name()
+
+    def _captures(self):
+        """(who, device name) for every input that would put the far end
+        back into the send: the microphone if it is OPEN and goes out, and
+        each sound card source set to go on air, muted or not, because
+        unmuting it must not be what closes the loop. A closed microphone is
+        Ctrl+M's to refuse, and a source you only listen to is never sent."""
+        found = []
+        if self._mic_open() and self.board.stream_mic:
+            found.append((_YOUR_MIC, self._mic_capture_name()))
+        for source in getattr(self, "sources", []):
+            name = getattr(source, "device_name", "")
+            if (name and not getattr(source, "is_program", False)
+                    and getattr(source, "wanted_on_air", False)):
+                found.append((source.name, name))
+        return found
+
+    def _send_loops(self, captures):
+        """Why these inputs would put the send back into itself. Sentences.
+
+        Empty with no send set up, which is the ordinary case and costs one
+        attribute read.
+        """
+        if not (self.board.send_on and self.board.send_device_name):
+            return []
+        return routing.captures_itself(self._send_far_end(), captures,
+                                       self.board.send_device_name)
 
     def _live_bank_devices(self):
         """The bank routing as device indices, which is what routing wants."""
@@ -8573,6 +8726,8 @@ class DropDeckFrame(wx.Frame):
             bank_devices = dialog.chosen_bank_devices
             self.board.ducking = dialog.duck_on.GetValue()
             self.board.duck_db = float(dialog.duck_db.GetValue())
+            self.board.talk_duck = bool(dialog.talk_duck.GetValue())
+            self.board.talk_duck_db = float(dialog.talk_duck_db.GetValue())
             self.board.announce_playback = dialog.announce_playback.GetValue()
             self.board.speech_level = dialog.speech_level
             self.board.bed_fade_in = dialog.bed_fade_in
@@ -8692,8 +8847,7 @@ class DropDeckFrame(wx.Frame):
                 self.board.voice_on = chain.enabled
                 self.board.voice_settings = chain.to_dict()
 
-        self.mixer.ducking = self.board.ducking
-        self.mixer.duck_db = self.board.duck_db
+        self._apply_ducking(self.board)
         self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
         self._rebuild_station_menu()
         # The overlay is built FROM these settings, so it has to be rebuilt
@@ -8727,9 +8881,7 @@ class DropDeckFrame(wx.Frame):
             # handing the microphone the old primary's rate, which is the one
             # it already had, so the call did nothing and the microphone kept
             # monitoring and broadcasting at the wrong speed.
-            mic = getattr(self, "mic", None)
-            if mic is not None:
-                mic.set_output_rate(self.mixer.samplerate)
+            self._follow_output_rate()
             self.warm_cache()
 
             if self.mixer.problems:
@@ -8765,6 +8917,7 @@ class DropDeckFrame(wx.Frame):
             heard.append("The picture going out could not be changed. The "
                          "new one starts the next time you go live or record "
                          "the picture")
+        heard.extend(self.mixer.take_notices())
         # Saved first, so nothing said after it can stand in its way.
         self._touch()
         if heard:

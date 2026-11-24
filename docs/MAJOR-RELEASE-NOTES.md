@@ -143,6 +143,41 @@ Plain sentences for the changelog and the release post, added by each step.
 
 ## Sound
 
+- "System default" now plays through Windows' quick audio route, so a key on
+  the default sound card sounds in about 22 milliseconds instead of about 180.
+  If Windows will not open it that way, Drop Deck uses the older route and
+  says so once. Your default microphone is opened the same way.
+- A music bed started while your microphone is on now comes in already ducked.
+  It used to start at full level and drop a moment later.
+- Stop everything no longer clicks when "Fade out when stopping" is off. It
+  stops in five milliseconds, the same as stopping one sound.
+- With "What I listen on" set to another card, auditioning a sound plays there,
+  not out of your main output, so nobody listening to your main output hears
+  you choosing sounds.
+- A microphone plugged into one input of a two input interface now comes
+  through at its full level, without the other input's hiss. Drop Deck takes
+  the side with the voice on it when the other is nearly silent, and goes back
+  to both when both carry sound. Sources still mix both sides.
+- Your microphone processing stays right when your sound card runs at a
+  different rate, such as 96 kHz. The low cut used to sit an octave too high
+  and make the voice thin.
+- Sources follow a change of sound card straight away, instead of playing at
+  the wrong speed until they were restarted.
+- When the card you listen on runs at a different rate from your main output,
+  your microphone, your sources and the send you are checking now sound at the
+  right pitch and without crackles.
+- Your microphone and your sources no longer drift late or tick over a long
+  show when two sound cards run at slightly different speeds. Drop Deck keeps
+  the delay steady and makes any correction too small to hear.
+- Hearing the send through Ctrl+Shift+H no longer has small gaps in it.
+- Drop Deck refuses a setup that would feed your show back into itself: a send
+  into a virtual cable while your microphone or a source listens to the other
+  end of the same cable. It says which input to change.
+- New, and off unless you turn it on: "Duck further while I am talking" on the
+  Sounds and beds page of Preferences. The music still ducks when your
+  microphone is on, as before, and goes a little further down while you are
+  actually speaking, by the amount you set in "By how much".
+
 ## Speech and keys
 
 ## Where things are

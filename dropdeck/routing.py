@@ -104,6 +104,69 @@ def conflicts(bank_devices=None, monitor_device=None, program_device=None,
     return found
 
 
+#: MME cuts every device name to this many characters. See micinput.
+_MME_NAME = 31
+
+
+def same_device(a, b):
+    """Are two names the same sound device, however Windows spelled them.
+
+    Equal; or one is the other cut to 31 characters, which is how MME
+    offers every device; or one is the endpoint's short name and the other
+    that name with its card in brackets, "CABLE Output" against "CABLE
+    Output (VB-Audio Virtual Cable)", which is what the registry and
+    PortAudio each call the same thing.
+    """
+    raw = (a or "", b or "")
+    a, b = raw[0].strip(), raw[1].strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # Unstripped: the cut can end on a space, "CABLE Output (VB-Audio
+    # Virtual " is exactly 31, and that space is part of MME's name.
+    short, full = sorted(raw, key=len)
+    if len(short) == _MME_NAME and full.startswith(short):
+        return True
+    short, full = sorted((a, b), key=len)
+    return full.startswith(short + " (")
+
+
+def captures_itself(far_end, captures, sent_to=""):
+    """Every input that would pick the send's own far end back up.
+
+    ``far_end`` is the recording device at the other end of the cable the
+    whole show is sent into ("CABLE Output (VB-Audio Virtual Cable)"), as
+    `cabletest.capture_for` finds it from the cable's own pairing, and
+    ``sent_to`` the playback end it is sent into. ``captures`` is a list of
+    (who, device name) pairs: the microphone and every source.
+
+    **This is the loop, and nothing used to stop it.** The send carries the
+    microphone and every source, so a source listening to the far end of
+    the send's own cable hears the show, puts it on the air, and the send
+    carries it round again a cable's delay later: an echo that feeds itself.
+    A microphone set to the far end is the same thing. Returns one sentence
+    per input that would do it, to be said as the reason it was refused.
+    """
+    found = []
+    if not far_end:
+        return found
+    for who, name in captures or []:
+        if same_device(name, far_end):
+            found.append(
+                "%s listens to %s, which is the other end of %s, where your "
+                "show is being sent. That would send the show back into "
+                "itself, round and round, so it is refused. Choose a "
+                "different input for %s, or send the show to another card."
+                % (who, name, sent_to or "that cable", _object(who)))
+    return found
+
+
+def _object(who):
+    """"Your microphone" is "your microphone" mid sentence; a name is kept."""
+    return who[:1].lower() + who[1:] if who.startswith("Your ") else who
+
+
 def _banks_said(banks):
     """"bank 2" or "banks 2 and 3", said rather than listed."""
     words = ["bank %d" % bank for bank in banks]

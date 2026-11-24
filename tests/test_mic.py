@@ -182,11 +182,16 @@ check("and the block is still the right shape, so a caller can just add it",
 
 mic.monitor = True
 mic.stream = object()          # pretend the device is open; nothing is read
-feed(mic, C.BLOCKSIZE, amplitude=0.5)
+# Three blocks, because the ring hands nothing over until it holds a read, a
+# write and a margin (micinput._Ring). That target is what stops it ticking.
+for _ in range(3):
+    feed(mic, C.BLOCKSIZE, amplitude=0.5)
 block = mic.read(C.BLOCKSIZE)
 check("with monitoring on the audio comes back", rms(block) > 0.2, rms(block))
 check("in both channels", np.allclose(block[:, 0], block[:, 1]))
 
+for _ in range(2):
+    mic.read(C.BLOCKSIZE)       # the other two blocks it was holding
 check("reading again with nothing fed returns silence, not the same block "
       "twice", rms(mic.read(C.BLOCKSIZE)) == 0.0)
 
@@ -195,12 +200,18 @@ big = mic.read(C.BLOCKSIZE * 4)
 check("asking for more than has arrived returns silence for the rest, "
       "never a wait", big.shape == (C.BLOCKSIZE * 4, CHANNELS))
 
+def primed_peak(mic, amplitude):
+    """The peak of the first block out of a ring filled to its target."""
+    mic._reset_ring()
+    for _ in range(3):
+        feed(mic, C.BLOCKSIZE, amplitude=amplitude)
+    return float(np.abs(mic.read(C.BLOCKSIZE)).max())
+
+
 mic.gain_db = 6.0
-feed(mic, C.BLOCKSIZE, amplitude=0.4)
-louder = float(np.abs(mic.read(C.BLOCKSIZE)).max())
+louder = primed_peak(mic, 0.4)
 mic.gain_db = -6.0
-feed(mic, C.BLOCKSIZE, amplitude=0.4)
-quieter = float(np.abs(mic.read(C.BLOCKSIZE)).max())
+quieter = primed_peak(mic, 0.4)
 check("the gain reaches the monitored audio", louder > quieter * 2,
       "louder %.4f quieter %.4f" % (louder, quieter))
 
@@ -292,7 +303,7 @@ check("in the right shape for the mixer to add straight in",
 mic.samplerate = 48000
 mic._reset_ring()
 check("matching rates resample nothing at all", not mic.resampling)
-for _ in range(2):
+for _ in range(3):
     feed(mic, C.BLOCKSIZE, amplitude=0.5)
 check("and still monitor", rms(mic.read(C.BLOCKSIZE)) > 0.2)
 
@@ -315,7 +326,9 @@ def at_own_rate(mic, seconds, hz=1000.0):
         mic._callback(wave[:, None], C.BLOCKSIZE, None, None)
         position += C.BLOCKSIZE
         if mic._monitor.available:
-            pieces.append(mic._monitor.read(mic._monitor.available))
+            # Taken raw, past the ring's fill target: this measures what the
+            # resampler put in, and the target would hold the first back.
+            pieces.append(mic._monitor._take(mic._monitor.available))
     return np.concatenate(pieces)[:, 0].astype(np.float64)
 
 

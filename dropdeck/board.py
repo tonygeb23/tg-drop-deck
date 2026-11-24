@@ -373,6 +373,21 @@ def _warn_seconds(value):
     return max(C.MIN_WARN_SECONDS, min(C.MAX_WARN_SECONDS, seconds))
 
 
+def _talk_db(value):
+    """How much further duck while talking goes, off disk, in decibels.
+
+    Clamped into what Preferences offers; anything that is not a number is
+    the default. Said as a positive number of decibels DOWN.
+    """
+    try:
+        db = abs(float(value))
+    except (TypeError, ValueError):
+        return C.DEFAULT_TALK_DUCK_DB
+    if db != db:                         # NaN
+        return C.DEFAULT_TALK_DUCK_DB
+    return max(C.MIN_TALK_DUCK_DB, min(C.MAX_TALK_DUCK_DB, db))
+
+
 def _fade(value, fallback):
     """A bed fade off disk, in seconds, or ``fallback`` if it is not a number.
 
@@ -1017,6 +1032,12 @@ class Board:
         self.bed_volume = C.DEFAULT_BED_VOLUME
         self.ducking = True
         self.duck_db = C.DEFAULT_DUCK_DB
+        #: Duck while talking (feedback 44): the music a little further down
+        #: while the processed voice is above the gate threshold, on top of
+        #: the open microphone's duck. Off unless somebody turns it on, which
+        #: is also what every board saved before it existed gets.
+        self.talk_duck = False
+        self.talk_duck_db = C.DEFAULT_TALK_DUCK_DB
         #: How long a bed takes to reach full level, and to fall away when it
         #: is stopped. Zero means it plays exactly as recorded: a bed cued for
         #: its downbeat cannot ease in, which is Brian Hartgen's point and is
@@ -1806,6 +1827,8 @@ class Board:
             "bed_volume": self.bed_volume,
             "ducking": self.ducking,
             "duck_db": self.duck_db,
+            "talk_duck": bool(self.talk_duck),
+            "talk_duck_db": _talk_db(self.talk_duck_db),
             "bed_fade_in": self.bed_fade_in,
             "bed_fade_out": self.bed_fade_out,
             "bank_names": {str(k): v for k, v in self.bank_names.items()},
@@ -2009,6 +2032,9 @@ class Board:
         board.bed_volume = float(data.get("bed_volume", C.DEFAULT_BED_VOLUME))
         board.ducking = bool(data.get("ducking", True))
         board.duck_db = float(data.get("duck_db", C.DEFAULT_DUCK_DB))
+        board.talk_duck = data.get("talk_duck", False) is True
+        board.talk_duck_db = _talk_db(data.get("talk_duck_db",
+                                               C.DEFAULT_TALK_DUCK_DB))
         board.playlist_volume = float(
             data.get("playlist_volume", C.DEFAULT_PLAYLIST_VOLUME))
         board.mic_device_name = data.get("mic_device_name")

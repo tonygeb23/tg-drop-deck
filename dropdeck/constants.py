@@ -287,10 +287,32 @@ MAX_BED_FADE = 5.0
 
 FADE_OUT_PANIC = 0.25
 
+#: The shortest any stop is, the abrupt one included. A sound cut dead on a
+#: sample is a step, and a step is a click: measured on Stop everything with
+#: the stop fade off, a 1 kHz tone at -3 dBFS went to nothing in one sample.
+#: The engine ramps a block at a time, so this is five milliseconds or one
+#: output block, whichever is longer, the same as stopping a single pad.
+ABRUPT_STOP_SECONDS = 0.005
+
 #: Beds drop by this much while a sound effect or drop is playing, then come back.
 DEFAULT_DUCK_DB = -9.0
 DUCK_ATTACK = 0.12
 DUCK_RELEASE = 0.70
+
+#: Duck while talking (feedback 44), off unless a board turns it on. The open
+#: microphone's duck above is the FLOOR and is untouched; this takes the music
+#: further down only while the processed voice is above the gate threshold,
+#: so it can never clip a first syllable: the floor was down before it was
+#: spoken. Attack and release are the music's; the hold is the voice's, so a
+#: breath between two words does not bring the music up.
+DEFAULT_TALK_DUCK_DB = 6.0
+MIN_TALK_DUCK_DB = 1.0
+MAX_TALK_DUCK_DB = 18.0
+TALK_DUCK_ATTACK = 0.03
+TALK_DUCK_RELEASE = 0.80
+TALK_HOLD_SECONDS = 0.40
+#: The gate threshold when there is no voice chain to ask. dsp.DEFAULTS.
+TALK_THRESHOLD_DB = -45.0
 
 #: How many frames a block of audio is, wherever this app chooses the number
 #: for itself: the microphone's input stream, and every test that renders the
@@ -324,13 +346,13 @@ BLOCKSIZE = 512
 #:   the same Yeti on WASAPI                     512:  23 ms   0:  22 ms
 #:   CABLE Input on WASAPI                       512:  22 ms   0:  22 ms
 #:
-#: Which turned up something worth knowing on its own: **the Windows system
+#: Which turned up something worth knowing on its own: **PortAudio's system
 #: default output goes through MME, and MME is about two hundred milliseconds
 #: whatever it is asked for.** The same speakers chosen explicitly under
-#: WASAPI are twenty two. Anybody who cares about the gap between a key and a
-#: sound should pick the WASAPI entry in Preferences, Output rather than
-#: leaving it on the system default. output_devices() already lists WASAPI
-#: first for this reason.
+#: WASAPI are twenty two. So "System default" is opened as Windows' default
+#: card through WASAPI shared mode, with MME only as a fall back that is said
+#: once (mixer.wasapi_default). Measured again 24 November 2026: 180.3 ms
+#: before, 22.0 ms after, for the app's own mixer on "System default".
 #:
 #: What it sounded like: about six gaps a second, four milliseconds each, so
 #: a 1 kHz tone came back reading 974 Hz on a cycle count. Tony reported it as
@@ -373,6 +395,38 @@ MAX_MIC_GAIN_DB = 24.0
 #: A quarter of a second of monitoring held back, which is far more than the
 #: two streams will ever drift apart in and small enough to be inaudible.
 MIC_RING_FRAMES = 12000
+
+#: The fill a microphone or source ring keeps, between its own card's clock
+#: and the output's. See micinput._Ring. RING_MARGIN is what is left over
+#: after the leanest read in a window: enough for a few milliseconds of
+#: scheduling jitter on either side, and every millisecond of it is delay in
+#: the presenter's headphones. More than RING_SLACK_HIGH above it and the
+#: excess is dropped; less than RING_SLACK_LOW and a little is played twice.
+#: Simulated over an hour at 30 and 100 ppm apart either way: no holes, no
+#: steps, never more than 22 ms held, where the ring without a target was
+#: 239 ms late after an hour at +100 and had 541 holes at -100.
+RING_MARGIN_SECONDS = 0.005
+RING_SLACK_HIGH_SECONDS = 0.005
+RING_SLACK_LOW_SECONDS = 0.0015
+#: How long each correction's crossfade is, how far either side of the
+#: asked for length it looks for the best match, and how long it watches
+#: the fill before deciding anything.
+RING_SPLICE_SECONDS = 0.005
+RING_SEARCH_SECONDS = 0.005
+RING_WINDOW_SECONDS = 1.0
+
+#: "mix" on a two channel input takes the louder side alone when the other is
+#: this much quieter, and goes back to both when they are within JOIN again.
+#: Levels are smoothed over SMOOTH, a change waits for HOLD of sound pointing
+#: the same way, and nothing is judged while the louder side is under FLOOR
+#: (raw input, before the gain). The handover glides over GLIDE. See
+#: micinput.MicInput.pick_louder.
+MIC_SIDE_SPLIT_DB = 15.0
+MIC_SIDE_JOIN_DB = 9.0
+MIC_SIDE_SMOOTH_SECONDS = 0.3
+MIC_SIDE_HOLD_SECONDS = 1.0
+MIC_SIDE_FLOOR_DB = -65.0
+MIC_SIDE_GLIDE_SECONDS = 0.05
 
 #: How long an open microphone has to send something before the app says it
 #: has not. A real microphone is never digitally silent: even in a quiet room
@@ -1152,6 +1206,16 @@ MONITOR_RING_SECONDS = 1.0
 #: not hearing it at all. Nothing on the ordinary path pays it: with one card,
 #: or with the banks on the monitor's own card, no bus exists.
 MONITOR_PRIME_SECONDS = 0.04
+
+#: The microphone, the sources and the confidence feed arrive at the MAIN
+#: output's rate, and a monitor card may run at another. They are converted
+#: on the way into the monitor (mixer.RateAdapter). Low quality on purpose:
+#: measured, soxr's LQ is flat to 15 kHz (-0.08 dB) going from 48 to 44.1 kHz
+#: and holds back at most 10 ms, against 19 ms for HQ, and this is the
+#: presenter's own ears, never the air. PAD covers the most it holds back, so
+#: the conversion never runs short and never clicks.
+MONITOR_RESAMPLE_QUALITY = "LQ"
+MONITOR_RESAMPLE_PAD_SECONDS = 0.011
 
 #: How much the encoder takes at a time. A quarter of a second is small enough
 #: to keep the delay down and big enough that the thread is not spinning.
