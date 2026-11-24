@@ -716,8 +716,8 @@ class SettingsDialog(wx.Dialog):
     #: The tabs, in order. Named rather than numbered at the call sites, so
     #: adding one in the middle does not open the wrong page somewhere else.
     (PAGE_OUTPUT, PAGE_SOUND, PAGE_PLAYLIST, PAGE_MIC, PAGE_VOICE,
-     PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH,
-     PAGE_SHOT) = range(10)
+     PAGE_ONAIR, PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH,
+     PAGE_SHOT) = range(11)
 
     def __init__(self, parent, board, mixer, mic=None, page=None):
         super().__init__(parent, title="Preferences")
@@ -735,6 +735,7 @@ class SettingsDialog(wx.Dialog):
         self._build_playlist_tab()
         self._build_mic_tab()
         self._build_voice_tab()
+        self._build_onair_tab()
         self._build_stream_tab()
         self._build_picture_tab()
         self._build_record_tab()
@@ -782,6 +783,7 @@ class SettingsDialog(wx.Dialog):
                 self.PAGE_PLAYLIST: self.crossfade_ctrl,
                 self.PAGE_MIC: self.mic_device,
                 self.PAGE_VOICE: self.voice_list,
+                self.PAGE_ONAIR: self.onair_on,
                 self.PAGE_STREAM: self.stream_server,
                 self.PAGE_VIDEO: self.video_server,
                 self.PAGE_RECORD: self.record_format,
@@ -1404,6 +1406,90 @@ class SettingsDialog(wx.Dialog):
             except Exception:
                 pass
         return changed
+
+    def _build_onair_tab(self):
+        """What the listener gets, and how loud songs and sounds are.
+
+        Next to Voice, because it is the same idea for the whole show: the
+        voice tab shapes the microphone, this one shapes what goes out. It
+        reaches the stream, both recordings and the send, and never your own
+        output, so a key sounds exactly as soon as it always did.
+        """
+        panel, sizer = self._page("On air sound")
+        board = self.board
+        self.onair_on = wx.CheckBox(panel, label="On air sound &on")
+        self.onair_on.SetValue(bool(getattr(board, "onair_on", False)))
+        self.onair_on.SetToolTip(
+            "Evens out the music and keeps every peak under the ceiling, on "
+            "the stream, in recordings and in the send. Alt+Shift+P turns it "
+            "off and on for a moment, to compare.")
+        sizer.Add(self.onair_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(panel, label="&Even out the music"), 0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.onair_even = wx.Choice(
+            panel, choices=[label for _key, label in C.ONAIR_EVEN_CHOICES])
+        name_field(self.onair_even, "Even out the music")
+        keys = [key for key, _label in C.ONAIR_EVEN_CHOICES]
+        current = getattr(board, "onair_even", C.DEFAULT_ONAIR_EVEN)
+        self.onair_even.SetSelection(keys.index(current)
+                                     if current in keys else 1)
+        self.onair_even.SetToolTip(
+            "Gentle brings a quiet song up and a loud one down over a few "
+            "seconds. Firm does it about twice as fast and from further "
+            "away. Off leaves the music as it is and keeps only the ceiling.")
+        row.Add(self.onair_even, 1, wx.EXPAND)
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 10)
+
+        # A spin box in decibels, never a slider: a wx slider is read out
+        # as a percentage, and a ceiling of "83 per cent" means nothing.
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(panel, label="&Never louder than, in dBFS"), 0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.onair_ceiling = wx.SpinCtrlDouble(
+            panel, min=C.MIN_ONAIR_CEILING_DB, max=C.MAX_ONAIR_CEILING_DB,
+            inc=0.5, initial=float(getattr(board, "onair_ceiling_db",
+                                           C.DEFAULT_ONAIR_CEILING_DB)))
+        self.onair_ceiling.SetDigits(1)
+        name_field(self.onair_ceiling, "Never louder than, in dBFS")
+        self.onair_ceiling.SetToolTip(
+            "The loudest any moment of the show can be. Minus two leaves room "
+            "for MP3 and AAC, which come back out a little louder than they "
+            "went in.")
+        row.Add(self.onair_ceiling, 0)
+        sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        def follows(_event=None):
+            on = self.onair_on.GetValue()
+            self.onair_even.Enable(on)
+            self.onair_ceiling.Enable(on)
+
+        follows()
+        self.onair_on.Bind(wx.EVT_CHECKBOX, lambda e: (follows(), e.Skip()))
+
+        self._label(panel, sizer, "Songs and sounds")
+        self.match_loudness = wx.CheckBox(
+            panel, label="&Match the loudness of songs and sounds")
+        self.match_loudness.SetValue(bool(getattr(board, "match_loudness",
+                                                  False)))
+        self.match_loudness.SetToolTip(
+            "Each song and sound is measured once, in the background, and "
+            "played at a level that matches the rest. A level you set on a "
+            "sound or a song yourself always wins. This changes what you "
+            "hear as well as what goes out.")
+        sizer.Add(self.match_loudness, 0, wx.ALL, 10)
+
+    @property
+    def onair_settings(self):
+        """What the On air sound tab says, as board fields."""
+        keys = [key for key, _label in C.ONAIR_EVEN_CHOICES]
+        chosen = self.onair_even.GetSelection()
+        return {"onair_on": bool(self.onair_on.GetValue()),
+                "onair_even": keys[chosen] if 0 <= chosen < len(keys)
+                else C.DEFAULT_ONAIR_EVEN,
+                "onair_ceiling_db": float(self.onair_ceiling.GetValue()),
+                "match_loudness": bool(self.match_loudness.GetValue())}
 
     def _build_stream_tab(self):
         """Where the show goes, and a button that proves it before air.

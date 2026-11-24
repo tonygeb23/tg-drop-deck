@@ -148,6 +148,9 @@ class Recorder:
         self._take_lock = threading.Lock()
         self._taken = 0
         self._edge = 0
+        #: The on air sound for this file, or None. See
+        #: streamout.on_air_sound.
+        self.processor = None
 
     # ------------------------------------------------------------- state --
     @property
@@ -344,6 +347,7 @@ class Recorder:
     def _feed(self, block):
         if not len(block):
             return
+        block = streamout.on_air_sound(self.processor, block)
         self.frames_written += len(block)
         if self._file is not None:
             self._file.write(block)

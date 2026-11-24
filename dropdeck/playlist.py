@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 
 from . import audiofile
 from . import constants as C
+from . import loudness
 from .engine import probe
-from .slot import format_duration
+from .slot import _loudness_fields, format_duration, take_loudness
 
 
 def format_cue(seconds):
@@ -93,6 +94,12 @@ class Track:
     #: the cue point is taken from, so a crossfade lands on the song and not
     #: on the run out after it. ``None`` means not measured yet.
     tail_silence: float | None = None
+    #: How loud the file is and its loudest sample, measured on the same
+    #: pass as the run out. The same three fields and rules as a pad's: see
+    #: slot.take_loudness and loudness.trim_for.
+    loudness: float | None = None
+    peak_db: float | None = None
+    loudness_for: str | None = field(default=None, compare=False)
 
     @property
     def is_drop(self) -> bool:
@@ -154,7 +161,7 @@ class Track:
         tail = float(self.tail_silence or 0.0)
         return max(0.0, duration - max(0.0, min(tail, duration)))
 
-    def read_metadata(self):
+    def read_metadata(self, loudness=False):
         """Fill in artist, title and the run out. Safe to call twice.
 
         Returns True if anything changed. Never raises: a file with broken
@@ -181,6 +188,11 @@ class Track:
                     measured = 0.0
             self.tail_silence = float(measured)
             changed = True
+        if loudness and self.needs_loudness():
+            try:
+                changed = self.measure_loudness() or changed
+            except Exception:
+                pass
         return changed
 
     def crossfade_seconds(self, default):
@@ -257,7 +269,8 @@ class Track:
                 "crossfade": self.crossfade, "trim_db": float(self.trim_db),
                 "enabled": bool(self.enabled),
                 "artist": self.artist, "title": self.title,
-                "tail_silence": self.tail_silence}
+                "tail_silence": self.tail_silence,
+                **_loudness_fields(self)}
 
     @classmethod
     def from_dict(cls, data):
@@ -279,7 +292,26 @@ class Track:
             artist=data.get("artist"),
             title=data.get("title"),
             tail_silence=tail,
-        )
+        )._take_loudness(data)
+
+    def _take_loudness(self, data):
+        take_loudness(self, data)
+        return self
+
+    def needs_loudness(self):
+        """Not measured for the file it holds now, and there to measure."""
+        return (bool(self.filepath) and self.loudness_for != self.filepath
+                and not self.is_missing)
+
+    def measure_loudness(self):
+        """Measure, on the background pass. True if anything changed."""
+        path = self.filepath
+        if not path or self.loudness_for == path:
+            return False
+        level, peak = audiofile.measure_loudness(path)
+        self.loudness, self.peak_db = level, peak
+        self.loudness_for = path
+        return True
 
 
 
@@ -658,11 +690,17 @@ class Playlist:
                                or self.tracks[last].duration or 0.0)
 
     # ------------------------------------------------------------ metadata --
-    def needs_metadata(self):
-        """The tracks whose tags or run out have never been looked at."""
+    def needs_metadata(self, loudness=False):
+        """The tracks whose tags or run out have never been looked at.
+
+        ``loudness`` asks for the tracks not yet measured for loudness
+        matching as well. Only when matching is on: it decodes the whole
+        song, and a board that does not match has no use for the answer.
+        """
         return [t for t in self.tracks
                 if not t.is_missing
-                and (not t.has_metadata or t.tail_silence is None)]
+                and (not t.has_metadata or t.tail_silence is None
+                     or (loudness and t.needs_loudness()))]
 
     # ----------------------------------------------------------- relinking --
     def relink(self, index):
@@ -694,8 +732,11 @@ class Playlist:
             if not track.filepath:
                 continue
             if base_dir and _is_relative(track.filepath):
+                measured = track.loudness_for == track.filepath
                 track.filepath = os.path.normpath(
                     os.path.join(base_dir, track.filepath))
+                if measured:
+                    track.loudness_for = track.filepath
             playlist.tracks.append(track)
         return playlist
 
@@ -720,6 +761,9 @@ class PlaylistPlayer:
         #: else's business.
         self.on_warning = on_warning
         self.warn_seconds = 0.0
+        #: Loudness matching, set by the frame from the board. A track's own
+        #: trim still wins; see loudness.trim_for.
+        self.match_loudness = False
         self._warned = False
         self.index = -1
         self.playing = False
@@ -768,7 +812,8 @@ class PlaylistPlayer:
         track = self.playlist[index]
         voice = self.mixer.play(
             self._next_deck(), track.filepath,
-            bus=C.BUS_PLAYLIST, loop=False, trim_db=track.trim_db,
+            bus=C.BUS_PLAYLIST, loop=False,
+            trim_db=loudness.trim_for(track, self.match_loudness),
             name=track.display_name, duration=track.duration,
             # A hair of a fade in, never a ramp. Long enough that the first
             # sample cannot click, short enough that the song starts where

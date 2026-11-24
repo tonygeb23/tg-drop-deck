@@ -405,6 +405,45 @@ def tags(path):
     return found
 
 
+# -------------------------------------------------------------- loudness ---
+def measure_loudness(path):
+    """How loud a whole file is, and its loudest sample. (LUFS, dBFS).
+
+    Either can be None: None loudness for a file too short or too quiet for
+    BS.1770 to have an answer (under 400 ms, or nothing above -70 LUFS), and
+    both None for a file that will not open. Measured ONCE, on the background
+    pass beside `tail_silence`, and saved with the board, because it decodes
+    the whole file: a press only ever reads the stored numbers.
+
+    Stereo, the way the app plays it, so a mono file counts twice, exactly as
+    it sounds when it comes out of both speakers.
+    """
+    from . import loudness
+    try:
+        handle = reader(path)
+    except Exception:
+        return None, None
+    try:
+        rate = float(handle.samplerate or 48000)
+        piece = max(1, int(round(rate * loudness.PIECE_SECONDS)))
+        energies, counts = [], []
+        peak = 0.0
+        while True:
+            data = handle.read(piece)
+            if not len(data):
+                break
+            peak = max(peak, float(np.abs(data).max()))
+            energies.append(loudness.energy(data, rate))
+            counts.append(len(data))
+        level = loudness.integrated(energies, counts)
+        peak_db = (20.0 * float(np.log10(peak))) if peak > 0.0 else None
+        return level, peak_db
+    except Exception:
+        return None, None
+    finally:
+        handle.close()
+
+
 # --------------------------------------------------------------- silence ---
 def tail_silence(path, duration=None):
     """How many seconds of the end of this file are not music.

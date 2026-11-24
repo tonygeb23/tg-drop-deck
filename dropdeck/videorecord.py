@@ -233,6 +233,9 @@ class VideoRecorder:
 
         self._thread = None
         self._stop = threading.Event()
+        #: The on air sound for the MP4's audio, or None. Its own instance.
+        #: See streamout.on_air_sound.
+        self.processor = None
         self._paused = threading.Event()
         self._take_lock = threading.Lock()
         self._taken = 0
@@ -564,6 +567,7 @@ class VideoRecorder:
     def _feed_audio(self, block):
         if not len(block) or self._audio is None:
             return
+        block = streamout.on_air_sound(self.processor, block)
         self.frames_written += len(block)
         out = self._resampler.feed(block)
         if not len(out):

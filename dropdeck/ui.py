@@ -28,6 +28,7 @@ from . import errorlog
 from . import feedback
 from . import framing
 from . import health
+from . import loudness
 from . import overlay
 from . import picture
 from . import proccapture
@@ -159,6 +160,11 @@ ID_VIDEO_RECORD = wx.ID_HIGHEST + 424
 #: and Ctrl+Shift+W, and next to Ctrl+Shift+P which goes to the running order
 #: this is built from.
 ID_CUE_SHEET = wx.ID_HIGHEST + 425
+#: The on air sound, off and on for a moment, to hear what it is doing.
+#: Alt+Shift+P, in the family of things you change mid show, beside
+#: Alt+Shift+R for pausing a recording. A compare for this session and
+#: never saved, so a show cannot start bypassed because of yesterday.
+ID_ONAIR_COMPARE = wx.ID_HIGHEST + 428
 
 ID_LIVE_TO_AUDIO = wx.ID_HIGHEST + 414
 ID_LIVE_TO_VIDEO = wx.ID_HIGHEST + 415
@@ -1048,6 +1054,9 @@ class DropDeckFrame(wx.Frame):
         self.warm_cache()
 
         self._start_player()
+        #: Alt+Shift+P's compare. Never saved: see ID_ONAIR_COMPARE.
+        self._onair_bypassed = False
+        self._apply_onair()
         # The board that just loaded may be a running order nobody has read
         # the tags of yet: boards saved before 2.6.0 have none.
         wx.CallAfter(self.scan_playlist_metadata)
@@ -1178,8 +1187,17 @@ class DropDeckFrame(wx.Frame):
             # picked up when it finishes; see _playlist_metadata_ready.
             return None
         board = self.board
-        pending = board.playlist.needs_metadata()
-        if not pending:
+        # Loudness, for matching, beside the run out and on the same thread:
+        # it decodes the whole file, which is exactly what must never happen
+        # between a keypress and a sound. A press uses what is stored here.
+        matching = bool(getattr(board, "match_loudness", False))
+        pending = board.playlist.needs_metadata(loudness=matching)
+        # Only an attribute is looked at here, on the window's thread. Whether
+        # the file is there, or is a folder, is asked on the pass itself.
+        pads = ([slot for slot in board.slots
+                 if slot.filepath and slot.loudness_for != slot.filepath]
+                if matching else [])
+        if not pending and not pads:
             return None
 
         def work():
@@ -1188,9 +1206,17 @@ class DropDeckFrame(wx.Frame):
                 if self._closing.is_set():
                     return
                 try:
-                    changed = track.read_metadata() or changed
+                    changed = track.read_metadata(loudness=matching) or changed
                 except Exception:
                     pass          # a broken file is the trigger path's problem
+            for slot in pads:
+                if self._closing.is_set():
+                    return
+                try:
+                    if slot.needs_loudness():
+                        changed = slot.measure_loudness() or changed
+                except Exception:
+                    pass
             if changed and not self._closing.is_set():
                 wx.CallAfter(self._playlist_metadata_ready, board)
 
@@ -1443,6 +1469,12 @@ class DropDeckFrame(wx.Frame):
                         % _count(missing, "file"))
         if not self.mixer.is_running:
             bits.append(f"Audio could not start. {self.mixer.last_error or ''}")
+        # A card the board names that would not open, or is not plugged in.
+        # Both went to the default output in silence at startup: only
+        # Preferences and opening a board ever said so.
+        cards = (list(getattr(self.mixer, "problems", []) or [])
+                 + self._cards_not_here())
+        bits.extend(cards)
         # The system default on the slow way in, said once. See
         # mixer.wasapi_default.
         notices = self.mixer.take_notices()
@@ -1482,7 +1514,7 @@ class DropDeckFrame(wx.Frame):
         wrong = (bool(missing) or not self.mixer.is_running or send_failed
                  or bool(self._routing_conflicts()) or bool(board_note)
                  or bool(taken) or bool(clashes) or bool(data_note)
-                 or bool(safety) or bool(notices))
+                 or bool(safety) or bool(notices) or bool(cards))
         (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     def _board_name(self):
@@ -1851,6 +1883,12 @@ class DropDeckFrame(wx.Frame):
         air.Append(ID_STREAM_STATS, "Who is lis&tening...\tCtrl+Shift+A",
                    "How many people are on the stream, and what the server "
                    "thinks is playing")
+        # Alt+Q: this level had J, Q and Z left. The label says the state,
+        # because a toggle nobody can see has to say where it is.
+        self.onair_item = air.Append(
+            ID_ONAIR_COMPARE, self._onair_label(),
+            "Turn the on air sound off for a moment and back on, to hear "
+            "what it is doing to the show. Not saved")
         # Alt+M for caMera. Not Alt+S: Station already has it on this menu,
         # and two items sharing a mnemonic means the first one wins and the
         # second is unreachable by keyboard. tests/test_menus.py caught it.
@@ -2067,6 +2105,7 @@ class DropDeckFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_send_setup, id=ID_SEND_SETUP)
         self.Bind(wx.EVT_MENU, self._on_send_monitor, id=ID_SEND_MONITOR)
         self.Bind(wx.EVT_MENU, self._on_send_status, id=ID_SEND_STATUS)
+        self.Bind(wx.EVT_MENU, self._on_onair_compare, id=ID_ONAIR_COMPARE)
         self.Bind(wx.EVT_MENU, self._on_routing, id=ID_ROUTING)
         self.Bind(wx.EVT_MENU, self.toggle_video_recording,
                   id=ID_VIDEO_RECORD)
@@ -2167,6 +2206,8 @@ class DropDeckFrame(wx.Frame):
             # whose screen reader add-on has taken Ctrl+Shift+S or
             # Ctrl+Shift+P for itself (Clipboard Announcer's default is
             # Ctrl+Shift+S), which this app cannot see happening.
+            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("P"),
+                                ID_ONAIR_COMPARE),
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("W"),
                                 ID_VIEW_NEXT),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("V"), ID_PL_PASTE),
@@ -2978,7 +3019,7 @@ class DropDeckFrame(wx.Frame):
             # with its own fade, so it sounds like a change and not a fault.
             replaced = self._stop_other_beds(index)
             voice = self.mixer.play(index, path, is_bed=True,
-                                   loop=slot.loop, trim_db=slot.trim_db,
+                                   loop=slot.loop, trim_db=self._trim_for(slot),
                                    name=slot.display_name, duration=duration)
             if voice is None:
                 self.announce(f"Could not play {slot.display_name}")
@@ -2991,8 +3032,8 @@ class DropDeckFrame(wx.Frame):
             return
 
         voice = self.mixer.play(index, path, is_bed=False, loop=False,
-                                trim_db=slot.trim_db, name=slot.display_name,
-                                duration=duration)
+                                trim_db=self._trim_for(slot),
+                                name=slot.display_name, duration=duration)
         if voice is None:
             self.announce(f"Could not play {slot.display_name}")
             return
@@ -3413,6 +3454,8 @@ class DropDeckFrame(wx.Frame):
         self.announce_help(f"{slot.display_name} assigned to "
                            f"{slot.bank_short} {slot.number}")
         self._touch()
+        # Measured now, in the background, so its first press is matched.
+        self.scan_playlist_metadata()
 
     def rename_slot(self, slot):
         if not slot.is_assigned:
@@ -4215,6 +4258,86 @@ class DropDeckFrame(wx.Frame):
         mic = getattr(self, "mic", None)
         return bool(mic is not None and mic.is_open)
 
+    # ------------------------------------------------------ on air sound --
+    def _trim_for(self, slot):
+        """The trim a pad plays at: its own, or the matched one."""
+        return loudness.trim_for(slot, bool(self.board.match_loudness))
+
+    def _onair_active(self):
+        return (bool(getattr(self.board, "onair_on", False))
+                and not getattr(self, "_onair_bypassed", False))
+
+    def _onair_consumers(self):
+        """The stream, the two recorders and the send: whatever is running."""
+        return [thing for thing in (getattr(self, name, None) for name in
+                                    ("streamer", "recorder", "video_recorder",
+                                     "send"))
+                if thing is not None]
+
+    def _apply_onair(self):
+        """Put the board's on air sound on everything that carries the show.
+
+        A chain of its OWN for each, made the first time it is seen, so the
+        send's mix minus never shares a gain with the stream. The mixers stop
+        soft clipping the air and send sums while it is on, because the
+        ceiling does that job on the summed show; the presenter's output is
+        not touched either way. The duck bus is read live, so a rebuilt set
+        of outputs is followed.
+        """
+        active = self._onair_active()
+        board = self.board
+        self.mixer.air_soft_clip = not active
+        bus = self.mixer.duck_bus
+        for consumer in self._onair_consumers():
+            # Never allowed to stop a stream, a recording or a send starting:
+            # one that cannot take a chain goes out as it always did.
+            try:
+                chain = getattr(consumer, "processor", None)
+                if chain is None:
+                    rate = (getattr(getattr(consumer, "bus", None),
+                                    "samplerate", None)
+                            or self.mixer.samplerate)
+                    consumer.processor = dsp.ProgramChain(
+                        rate, even=board.onair_even,
+                        ceiling_db=board.onair_ceiling_db,
+                        held=lambda: bus.loud, on=active)
+                else:
+                    chain.configure(on=active, even=board.onair_even,
+                                    ceiling_db=board.onair_ceiling_db)
+            except Exception:
+                errorlog.record_current()
+        player = getattr(self, "player", None)
+        if player is not None:
+            player.match_loudness = bool(board.match_loudness)
+        item = getattr(self, "onair_item", None)
+        if item is not None:
+            item.SetItemLabel(self._onair_label())
+
+    def _onair_label(self):
+        if not getattr(self.board, "onair_on", False):
+            state = "switched off in Preferences"
+        elif getattr(self, "_onair_bypassed", False):
+            state = "off for now"
+        else:
+            state = "on"
+        return ("&Quick compare, on air sound is %s" % state
+                + chr(9) + "Alt+Shift+P")
+
+    def _on_onair_compare(self, _event=None):
+        """Alt+Shift+P. The on air sound off, and on again, to compare.
+
+        Essential speech, because the answer is the whole point: the person
+        comparing needs to know which of the two they are hearing.
+        """
+        if not self.board.onair_on:
+            self.announce("On air sound is switched off. Preferences, On air "
+                          "sound turns it on")
+            return
+        self._onair_bypassed = not self._onair_bypassed
+        self._apply_onair()
+        self.announce("On air sound off" if self._onair_bypassed
+                      else "On air sound on")
+
     def _apply_ducking(self, board):
         """Every ducking setting the board holds, onto the mixers and the mic.
 
@@ -4504,7 +4627,7 @@ class DropDeckFrame(wx.Frame):
             # Refused rather than opened, for the reason in _toggle_mic.
             self.mic.stop()
             self.mic_item.Check(False)
-            trouble = " ".join(loops)
+            trouble = " ".join(loops).rstrip(".")
         elif changed_input and self._mic_open():
             if self.mic.start(device=index):
                 # Opened is not yet working. See _check_mic_signal.
@@ -5428,6 +5551,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.set_sfx_gain(board.sfx_volume)
         self.mixer.set_bed_gain(board.bed_volume)
         self._apply_ducking(board)
+        self._apply_onair()
         self.mixer.set_playlist_gain(board.playlist_volume)
         self.mixer.playlist_monitor_only = board.playlist_monitor_only
         self.mixer.bed_fade_in = board.bed_fade_in
@@ -5460,6 +5584,8 @@ class DropDeckFrame(wx.Frame):
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
         notes.extend(self._secure_board(board))
+        # Loudness for matching, measured on the background pass.
+        self.scan_playlist_metadata()
         self._update_status()
         return notes
 
@@ -6331,6 +6457,7 @@ class DropDeckFrame(wx.Frame):
             on_state=self._on_stream_state,
             on_trouble=self._on_stream_trouble,
             video_source=self.video_source)
+        self._apply_onair()
         self.streamer.set_title(self._now_playing_title())
         self.streamer.start()
         self._start_framing()
@@ -6364,6 +6491,7 @@ class DropDeckFrame(wx.Frame):
             bitrate=self.board.record_bitrate,
             folder=self._record_folder(),
             on_state=self._on_record_state)
+        self._apply_onair()
         if not self.recorder.start():
             detail = self.recorder.detail
             self.recorder = None
@@ -6428,6 +6556,7 @@ class DropDeckFrame(wx.Frame):
             bitrate=self.board.record_bitrate,
             folder=self._record_folder(),
             on_state=self._on_record_state)
+        self._apply_onair()
         if not self.video_recorder.start():
             detail = self.video_recorder.detail
             self.video_recorder = None
@@ -7098,6 +7227,7 @@ class DropDeckFrame(wx.Frame):
         self.send_failed = ""
         self.send = send
         self.board.send_on = True
+        self._apply_onair()
         # The confidence feed is an EXTRA on the source group, which is what
         # makes it impossible for it to loop: the group sums extras into what
         # the presenter hears and leaves them out of what goes out.
@@ -8728,6 +8858,9 @@ class DropDeckFrame(wx.Frame):
             self.board.duck_db = float(dialog.duck_db.GetValue())
             self.board.talk_duck = bool(dialog.talk_duck.GetValue())
             self.board.talk_duck_db = float(dialog.talk_duck_db.GetValue())
+            matching_was = bool(self.board.match_loudness)
+            for field, value in dialog.onair_settings.items():
+                setattr(self.board, field, value)
             self.board.announce_playback = dialog.announce_playback.GetValue()
             self.board.speech_level = dialog.speech_level
             self.board.bed_fade_in = dialog.bed_fade_in
@@ -8836,7 +8969,17 @@ class DropDeckFrame(wx.Frame):
             self.board.video_fps = picture_settings["video_fps"]
             self.board.video_bitrate = picture_settings["video_bitrate"]
             self.board.framing_level = picture_settings["framing_level"]
-            self.board.stream_mic = dialog.stream_mic.GetValue()
+            mic_out = bool(dialog.stream_mic.GetValue())
+            if mic_out and not self.board.stream_mic and self.sending() \
+                    and self._mic_open():
+                # Refused the way Ctrl+M refuses: the microphone would put
+                # the far end of the send's own cable back into the send.
+                loops = self._send_loops(
+                    [(_YOUR_MIC, self._mic_capture_name())])
+                if loops:
+                    heard.append(" ".join(loops).rstrip("."))
+                    mic_out = False
+            self.board.stream_mic = mic_out
             self.board.stream_titles = dialog.stream_titles.GetValue()
             self.board.ask_before_live = (dialog.ask_before_live.GetValue())
             self.board.playlist_monitor_only = (
@@ -8848,6 +8991,9 @@ class DropDeckFrame(wx.Frame):
                 self.board.voice_settings = chain.to_dict()
 
         self._apply_ducking(self.board)
+        self._apply_onair()
+        if self.board.match_loudness and not matching_was:
+            self.scan_playlist_metadata()
         self.mixer.playlist_monitor_only = self.board.playlist_monitor_only
         self._rebuild_station_menu()
         # The overlay is built FROM these settings, so it has to be rebuilt

@@ -388,6 +388,23 @@ def _talk_db(value):
     return max(C.MIN_TALK_DUCK_DB, min(C.MAX_TALK_DUCK_DB, db))
 
 
+def _onair_ceiling(value):
+    """"Never louder than", off disk, in dBFS: clamped, never rejected."""
+    try:
+        db = float(value)
+    except (TypeError, ValueError):
+        return C.DEFAULT_ONAIR_CEILING_DB
+    if db != db:                         # NaN
+        return C.DEFAULT_ONAIR_CEILING_DB
+    return max(C.MIN_ONAIR_CEILING_DB, min(C.MAX_ONAIR_CEILING_DB, db))
+
+
+def _onair_even(value):
+    """"Even out the music", off disk: one of the three, or the default."""
+    keys = [key for key, _label in C.ONAIR_EVEN_CHOICES]
+    return value if value in keys else C.DEFAULT_ONAIR_EVEN
+
+
 def _fade(value, fallback):
     """A bed fade off disk, in seconds, or ``fallback`` if it is not a number.
 
@@ -1038,6 +1055,15 @@ class Board:
         #: is also what every board saved before it existed gets.
         self.talk_duck = False
         self.talk_duck_db = C.DEFAULT_TALK_DUCK_DB
+        #: On air sound: the leveller and ceiling on what the listener gets,
+        #: and loudness matching of songs and pads. Both ON for a board made
+        #: here (File, New, the demo pack, a first run) and both OFF for a
+        #: board saved before they existed, which loads without them: a show
+        #: somebody has set up by ear does not change under them on update.
+        self.onair_on = True
+        self.onair_even = C.DEFAULT_ONAIR_EVEN
+        self.onair_ceiling_db = C.DEFAULT_ONAIR_CEILING_DB
+        self.match_loudness = True
         #: How long a bed takes to reach full level, and to fall away when it
         #: is stopped. Zero means it plays exactly as recorded: a bed cued for
         #: its downbeat cannot ease in, which is Brian Hartgen's point and is
@@ -1829,6 +1855,10 @@ class Board:
             "duck_db": self.duck_db,
             "talk_duck": bool(self.talk_duck),
             "talk_duck_db": _talk_db(self.talk_duck_db),
+            "onair_on": bool(self.onair_on),
+            "onair_even": _onair_even(self.onair_even),
+            "onair_ceiling_db": _onair_ceiling(self.onair_ceiling_db),
+            "match_loudness": bool(self.match_loudness),
             "bed_fade_in": self.bed_fade_in,
             "bed_fade_out": self.bed_fade_out,
             "bank_names": {str(k): v for k, v in self.bank_names.items()},
@@ -2035,6 +2065,16 @@ class Board:
         board.talk_duck = data.get("talk_duck", False) is True
         board.talk_duck_db = _talk_db(data.get("talk_duck_db",
                                                C.DEFAULT_TALK_DUCK_DB))
+        # Missing means a board from before these existed, which keeps the
+        # sound it had. The shipped demo is the one exception: it is a new
+        # board to whoever opens it, so it gets a new board's defaults.
+        fresh = same_path(path, demo_board_path())
+        for field in ("onair_on", "match_loudness"):
+            value = data.get(field, fresh)
+            setattr(board, field, value is True)
+        board.onair_even = _onair_even(data.get("onair_even"))
+        board.onair_ceiling_db = _onair_ceiling(
+            data.get("onair_ceiling_db", C.DEFAULT_ONAIR_CEILING_DB))
         board.playlist_volume = float(
             data.get("playlist_volume", C.DEFAULT_PLAYLIST_VOLUME))
         board.mic_device_name = data.get("mic_device_name")
@@ -2269,7 +2309,11 @@ class Board:
             entry = raw[index] if index < len(raw) else None
             slot = Slot.from_dict(index, entry)
             if slot.filepath and _is_relative(slot.filepath):
+                measured = slot.loudness_for == slot.filepath
                 slot.filepath = os.path.normpath(os.path.join(base, slot.filepath))
+                if measured:
+                    # Still the same file, now with its whole path.
+                    slot.loudness_for = slot.filepath
             board.slots[index] = slot
         board._adopt_slots()
         board.dirty = False

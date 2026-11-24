@@ -314,6 +314,48 @@ TALK_HOLD_SECONDS = 0.40
 #: The gate threshold when there is no voice chain to ask. dsp.DEFAULTS.
 TALK_THRESHOLD_DB = -45.0
 
+# ----------------------------------------------------------- on air sound --
+# What the listener gets: the whole show, after the cards are summed, through
+# a slow leveller and a ceiling. One instance each in the stream, the two
+# recorders and the send; never the presenter's own output. dsp.ProgramChain.
+
+#: "Never louder than", in dBFS, and what Preferences allows. Two below full
+#: scale because MP3, AAC and Opus all decode a little above what went in:
+#: measured +0.26 to +0.63 dB on AAC at 128 to 256 kbps.
+DEFAULT_ONAIR_CEILING_DB = -2.0
+MIN_ONAIR_CEILING_DB = -12.0
+MAX_ONAIR_CEILING_DB = 0.0
+ONAIR_CEILING_RELEASE_MS = 100.0
+#: Nothing quieter than this is levelled: a gap, a fade, room tone. Without
+#: it the leveller would spend every pause winding itself up to full boost.
+ONAIR_FLOOR_LUFS = -45.0
+#: "Even out the music", in the order Preferences offers them.
+ONAIR_EVEN_CHOICES = (("off", "Off, the ceiling only"),
+                      ("gentle", "Gentle"),
+                      ("firm", "Firm"))
+DEFAULT_ONAIR_EVEN = "gentle"
+
+# ------------------------------------------------------ loudness matching --
+# Songs and pads brought to one loudness by a default trim, measured once on
+# the background pass. A trim the user set wins.
+
+#: Where matched files land. BS.1770 integrated loudness, the same meter
+#: the leveller uses. Inside the -16 to -20 AES recommends for streamed
+#: audio, and at the QUIET end of ordinary masters on purpose: the presenter's
+#: output has no limiter, so a file can only be turned up as far as its own
+#: peaks allow, which for most commercial music is not at all. Turning the
+#: loud ones down to where the quiet ones already are is what lines them up.
+#: Measured on four of Tony's tracks, -18.3 to -6.3 LUFS: 12.0 LU apart
+#: before, 0.3 after.
+MATCH_TARGET_LUFS = -18.0
+#: How far the trim may go either way. Down far enough for a brickwalled
+#: master at -6, up only a little, and never past the file's own headroom:
+#: a boosted peak must stay under MATCH_PEAK_CEILING_DB, below where the
+#: presenter's output starts rounding peaks off (C.SOFT_CLIP_FROM, -1.4 dBFS).
+MATCH_MOST_CUT_DB = -15.0
+MATCH_MOST_BOOST_DB = 6.0
+MATCH_PEAK_CEILING_DB = -1.5
+
 #: How many frames a block of audio is, wherever this app chooses the number
 #: for itself: the microphone's input stream, and every test that renders the
 #: mixer by hand.
@@ -632,6 +674,14 @@ A BEEP BEFORE A TRACK ENDS
   It is off until you turn it on, and a track shorter than the warning does
   not get one.
 
+ON AIR SOUND
+  What goes out, to the stream, both recordings and the send, can be evened
+  out and kept under a ceiling: Preferences, On air sound. It never changes
+  what you hear yourself. Alt+Shift+P turns it off and on again for a moment,
+  so you can hear what it is doing; that is not saved. The same page can
+  match the loudness of your songs and sounds, which does change what you
+  hear, and a level you set on a sound or a song yourself always wins.
+
 RECORDING THE SHOW
   Ctrl+R starts and stops it, and it says Recording started and Recording
   stopped at every speech level, because a file being written makes no sound.
@@ -937,6 +987,7 @@ GLOBAL
                             it in one press
   Ctrl+R                    Start and stop recording
   Alt+Shift+R               Pause and resume the recording
+  Alt+Shift+P               On air sound off and on, to compare
   F1                        This help
   Help, User manual         The full manual on the web: every feature,
                             every setting, a contents and an FAQ

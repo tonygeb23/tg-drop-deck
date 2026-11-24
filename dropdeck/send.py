@@ -56,7 +56,7 @@ from .audiofile import CHANNELS
 from .engine import db_to_gain
 from .micinput import _Ring as _FillRing
 from .mixer import describe_device
-from .streamout import AirBus
+from .streamout import AirBus, on_air_sound
 
 
 class _Ring:
@@ -165,6 +165,10 @@ class Send:
         self.stream = None
 
         self.bus = AirBus(self.samplerate, seconds=C.SEND_RING_SECONDS)
+        #: The on air sound for the send, or None. Its own instance, so the
+        #: mix minus is processed apart from the stream's sum and shares no
+        #: gain with it. See streamout.on_air_sound.
+        self.processor = None
         self.confidence = Confidence(
             int(self.samplerate * C.SEND_MONITOR_SECONDS), self.samplerate)
 
@@ -287,6 +291,8 @@ class Send:
             gain = db_to_gain(self.gain_db) if self.gain_db else 1.0
             if gain != 1.0:
                 block = block * gain
+            # After the send's own level, so the ceiling has the last word.
+            block = on_air_sound(self.processor, block)
             self.peak = float(np.abs(block).max()) if frames else 0.0
             outdata[:] = block
             self.confidence.offer(block)

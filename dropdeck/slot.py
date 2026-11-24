@@ -91,6 +91,12 @@ class Slot:
     #: a folder rather than a file. Saved so the label is right before the first
     #: scan, which then corrects it. ``None`` for an ordinary slot.
     folder_count: int | None = None
+    #: How loud the file is (BS.1770 integrated, LUFS) and its loudest
+    #: sample (dBFS), measured once on the background pass for loudness
+    #: matching. See loudness.trim_for. None until measured, and loudness
+    #: stays None for a file too short to have an answer.
+    loudness: float | None = None
+    peak_db: float | None = None
 
     def __post_init__(self):
         #: The folder's contents, scanned. Never saved: it is what is on disk
@@ -98,6 +104,12 @@ class Slot:
         #: another jingle in without touching the app.
         self._folder_files: list = []
         self._folder_stamp = None
+        #: Which file the loudness above belongs to. Never saved: a board
+        #: file carries the numbers and no path, so an export names nobody's
+        #: folders, and on load they belong to the file the slot names. A
+        #: pad given another sound no longer matches it and is measured
+        #: again; nothing uses a number for the wrong file.
+        self.loudness_for = None
         self._last_pick = None
 
     # ------------------------------------------------------------- identity --
@@ -154,6 +166,23 @@ class Slot:
     def is_missing(self) -> bool:
         """Assigned, but the file is not where it used to be."""
         return bool(self.filepath) and not os.path.exists(self.filepath)
+
+    def needs_loudness(self) -> bool:
+        """A file not yet measured for loudness matching. A folder pad plays
+        a different file each press, so it has no one loudness to match."""
+        return (bool(self.filepath) and self.loudness_for != self.filepath
+                and not self.is_folder and not self.is_missing)
+
+    def measure_loudness(self) -> bool:
+        """Measure, on the background pass. True if anything changed."""
+        from . import audiofile
+        path = self.filepath
+        if not path or self.loudness_for == path or self.is_folder:
+            return False
+        level, peak = audiofile.measure_loudness(path)
+        self.loudness, self.peak_db = level, peak
+        self.loudness_for = path
+        return True
 
     @property
     def display_name(self) -> str:
@@ -281,6 +310,7 @@ class Slot:
             "folder_count": self.folder_count,
             "hidden": bool(self.hidden),
             "toggle_stop": bool(self.toggle_stop),
+            **_loudness_fields(self),
         }
 
     @classmethod
@@ -300,7 +330,11 @@ class Slot:
             folder_count=_maybe_int(data.get("folder_count")),
             hidden=bool(data.get("hidden", False)),
             toggle_stop=bool(data.get("toggle_stop", False)),
-        )
+        )._take_loudness(data)
+
+    def _take_loudness(self, data):
+        take_loudness(self, data)
+        return self
 
     def clear(self) -> None:
         """Empty the slot but keep any custom hotkey the user set up."""
@@ -313,3 +347,34 @@ class Slot:
         self._folder_stamp = None
         self._last_pick = None
         self.loop = self.is_bed
+
+
+def _number(value):
+    """A finite number off disk, or None. A board file is not trusted."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value
+
+
+def _loudness_fields(item):
+    """The loudness a pad or a song saves: its numbers, only if they are for
+    the file it holds now, and never a path."""
+    if item.loudness_for is None or item.loudness_for != item.filepath:
+        return {}
+    return {"loudness": item.loudness, "peak_db": item.peak_db,
+            "loudness_checked": True}
+
+
+def take_loudness(item, data):
+    """Put saved loudness back on a pad or a song, for the file it names."""
+    if not isinstance(data, dict) or data.get("loudness_checked") is not True:
+        return
+    level = _number(data.get("loudness"))
+    peak = _number(data.get("peak_db"))
+    item.loudness = level if level is None or -80.0 <= level <= 10.0 else None
+    item.peak_db = peak if peak is None or -120.0 <= peak <= 30.0 else None
+    item.loudness_for = item.filepath

@@ -327,6 +327,13 @@ class Mixer:
         #: from it so a send works with nothing live and nothing recording.
         #: See send.py.
         self.send_tap = None
+        #: Whether the on air and send sums are soft clipped here. True
+        #: unless the on air sound is running, which ceilings them itself on
+        #: the stream's, the recorders' and the send's own threads, after the
+        #: cards are summed: clipping each card first would bend a sum that
+        #: the ceiling would have left alone. The presenter's output is
+        #: soft clipped either way. See dsp.ProgramChain.
+        self.air_soft_clip = True
 
         #: Where this mixer's own program block goes so that a monitor on
         #: ANOTHER sound card can hear it, or None. Set on every mixer except
@@ -950,9 +957,11 @@ class Mixer:
                     air += mic.read_air(frames)
             except Exception:
                 pass          # a microphone must never take the show down
-        if frames and float(np.abs(air).max()) > C.SOFT_CLIP_FROM:
+        if not self.air_soft_clip:
+            pass
+        elif frames and float(np.abs(air).max()) > C.SOFT_CLIP_FROM:
             _soft_clip(air)
-        if send is not None and send is not air:
+        if send is not None and send is not air and self.air_soft_clip:
             if frames and float(np.abs(send).max()) > C.SOFT_CLIP_FROM:
                 _soft_clip(send)
         # With the rate, because a bank on a card that would only open at
@@ -1263,7 +1272,7 @@ class MixerGroup:
         """Re-route. Everything playing stops, because a voice belongs to a stream."""
         previous = (self.sfx_gain, self.bed_gain, self.ducking, self.duck_db,
                     self.bed_fade_in, self.bed_fade_out, self.playlist_gain,
-                    self.talk_duck, self.talk_duck_db)
+                    self.talk_duck, self.talk_duck_db, self.air_soft_clip)
         monitor = self.monitor_source
         # The stream, and the microphone feeding it. Rebuilding replaces every
         # mixer, and a new mixer has no tap, so changing an output device while
@@ -1292,6 +1301,7 @@ class MixerGroup:
         self.set_playlist_gain(previous[6])
         self.talk_duck = previous[7]
         self.talk_duck_db = previous[8]
+        self.air_soft_clip = previous[9]
         # Rebuilding replaced every mixer, so the monitor has to be re-attached
         # or it would go on writing into an output nothing is draining.
         self.monitor_source = monitor
@@ -1523,6 +1533,15 @@ class MixerGroup:
     def duck_db(self, value):
         for mixer in self._mixers.values():
             mixer.duck_db = value
+
+    @property
+    def air_soft_clip(self):
+        return self.primary.air_soft_clip
+
+    @air_soft_clip.setter
+    def air_soft_clip(self, value):
+        for mixer in self._mixers.values():
+            mixer.air_soft_clip = bool(value)
 
     @property
     def talk_duck(self):

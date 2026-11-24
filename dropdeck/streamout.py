@@ -269,6 +269,24 @@ class AirBus:
         self._rates = {}
 
 
+def on_air_sound(processor, block):
+    """A block of the summed show, through the on air sound if there is one.
+
+    Called by the stream, the two recorders and the send, each with its own
+    `dsp.ProgramChain`, after the cards were summed by its own bus: on the
+    stream's and the recorders' threads, and in the send's own card's
+    callback, where it costs 0.2 ms of a 43 ms block. Never on a callback that
+    feeds the presenter, and never raises: a processor that fails hands the
+    block back untouched.
+    """
+    if processor is None or block is None or not len(block):
+        return block
+    try:
+        return processor.process(block)
+    except Exception:
+        return block
+
+
 class Taps:
     """One tap, several buses.
 
@@ -1801,6 +1819,9 @@ class Streamer:
         self._stop = threading.Event()
         self._destination = None
         self._resampler = None
+        #: The on air sound for this stream, or None. Its own, never shared
+        #: with a recording or the send. See on_air_sound.
+        self.processor = None
         self._lock = threading.Lock()
         self._title = ""
         self._sent_title = None
@@ -2156,7 +2177,8 @@ class Streamer:
         try:
             left = self.bus.available()
             if left and self._destination is not None:
-                block = self._resampler.feed(self.bus.read(left))
+                block = self._resampler.feed(on_air_sound(
+                    self.processor, self.bus.read(left)))
                 if len(block):
                     self._destination.feed(block)
         except Exception:
@@ -2253,7 +2275,7 @@ class Streamer:
             idle = 0.0
             self._beat = time.monotonic()
             self._watch_backlog()
-            block = self.bus.read(chunk)
+            block = on_air_sound(self.processor, self.bus.read(chunk))
             block = self._resampler.feed(block)
             if len(block):
                 self._destination.feed(block)

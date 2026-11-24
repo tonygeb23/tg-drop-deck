@@ -177,6 +177,27 @@ Plain sentences for the changelog and the release post, added by each step.
   Sounds and beds page of Preferences. The music still ducks when your
   microphone is on, as before, and goes a little further down while you are
   actually speaking, by the amount you set in "By how much".
+- New: On air sound, a page of its own in Preferences next to Voice. What goes
+  to your stream, your recordings and the send is evened out, so a loud song
+  and a quiet one arrive closer together, and nothing is ever louder than the
+  ceiling you set, minus 2 dBFS to start with. It never changes what you hear
+  yourself, and it holds still while your microphone or a drop has the music
+  ducked. "Even out the music" can be Off, Gentle or Firm.
+- Alt+Shift+P turns the on air sound off for a moment, and on again, so you
+  can hear what it is doing. Drop Deck says "On air sound off" and "On air
+  sound on". It is not saved, so a show never starts with it off by accident.
+- New: "Match the loudness of songs and sounds", on the same page. Each song
+  and sound is measured once, in the background, and played at a matching
+  level. A level you set on a sound or a song yourself always wins. Quiet
+  files are only turned up as far as they can go without distorting.
+- Both are on for a new board, the demo pack and a first start. A board you
+  already have keeps the sound it had until you turn them on.
+- Drop Deck now says at startup when a sound card your board uses would not
+  open, or is not plugged in, instead of quietly playing through the Windows
+  default.
+- Turning on "Put the microphone on air" while you are sending, with your
+  microphone set to the other end of the cable you are sending into, is
+  refused and Drop Deck says why, the same as Ctrl+M.
 
 ## Speech and keys
 

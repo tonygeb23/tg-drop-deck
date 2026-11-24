@@ -575,3 +575,141 @@ class MicChain:
             if values:
                 out["plugin_values"] = dict(values)
         return out
+
+
+# ---------------------------------------------------------------------------
+# On air sound
+# ---------------------------------------------------------------------------
+
+#: "Even out the music". Each is a slow leveller in front of the ceiling, and
+#: "off" is the ceiling alone. The leveller aims the last ``window`` seconds
+#: of the show at ``target`` LUFS (BS.1770 short term loudness is three
+#: seconds), moving no faster than ``up`` and ``down`` decibels a second and
+#: never further than ``boost`` up or ``cut`` down from where the music was.
+#: Gentle is the review's numbers. Firm reaches the same place in roughly
+#: half the time and from further away, for a show whose music ranges more.
+EVEN_OUT = {
+    "off": None,
+    "gentle": {"target": -18.0, "window": 3.0, "up": 1.0, "down": 3.0,
+               "boost": 6.0, "cut": 10.0},
+    "firm": {"target": -18.0, "window": 3.0, "up": 2.0, "down": 6.0,
+             "boost": 9.0, "cut": 12.0},
+}
+
+
+class ProgramChain:
+    """The on air sound: a slow leveller, then the ceiling. Never raises.
+
+    What the listener gets, and only that. One instance each in the stream,
+    the audio recorder, the picture recorder and the send, so none shares a
+    gain or a window with another and the send's mix minus is processed on
+    its own, after both sums are finished. It never touches the presenter's
+    output, so nothing between a keypress and a sound has changed.
+
+    **The leveller holds while the duck is down** (``held``, which is
+    `DuckBus.loud`): under the voice or a drop the music is meant to be
+    quiet, and a leveller that noticed would wind it back up underneath
+    them. It also holds below C.ONAIR_FLOOR_LUFS, so a pause is not treated
+    as very quiet music. It measures what arrives, before its own gain, so a
+    block's correction never feeds back into its own measurement.
+
+    The ceiling is `Ceiling`, the voice chain's own: instant attack, nothing
+    held back, so the show is not one sample later for it.
+    """
+
+    def __init__(self, samplerate, even=None, ceiling_db=None, held=None,
+                 on=True):
+        from . import constants as C
+        self.samplerate = int(samplerate)
+        self.on = bool(on)
+        self.even = even if even in EVEN_OUT else C.DEFAULT_ONAIR_EVEN
+        #: A callable answering whether the duck is down, or None.
+        self.held = held
+        self._floor = C.ONAIR_FLOOR_LUFS
+        self._ceiling = Ceiling(self.samplerate,
+                                C.DEFAULT_ONAIR_CEILING_DB
+                                if ceiling_db is None else ceiling_db,
+                                C.ONAIR_CEILING_RELEASE_MS)
+        #: Where the leveller has the music, in decibels, and how loud the
+        #: last window measured, for a report. Both this instance's own.
+        self.gain_db = 0.0
+        self.loudness = None
+        self._window = []
+        self._window_energy = 0.0
+        self._window_frames = 0
+
+    @property
+    def ceiling_db(self):
+        return self._ceiling.ceiling_db
+
+    def configure(self, on=None, even=None, ceiling_db=None):
+        """Change a setting on a chain that is running. Takes at the next
+        block; the gain it has reached is kept, so nothing jumps."""
+        if on is not None:
+            self.on = bool(on)
+        if even is not None and even in EVEN_OUT:
+            self.even = even
+        if ceiling_db is not None:
+            self._ceiling.ceiling_db = float(ceiling_db)
+
+    def reset(self):
+        self.gain_db = 0.0
+        self.loudness = None
+        self._window = []
+        self._window_energy = 0.0
+        self._window_frames = 0
+        self._ceiling.reset()
+
+    def _held(self):
+        try:
+            return bool(self.held()) if self.held is not None else False
+        except Exception:
+            return False
+
+    def process(self, block):
+        """One block of the show in, the same length out."""
+        if not self.on or block is None or not len(block):
+            return block
+        try:
+            out = np.asarray(block, dtype=np.float32)
+            plan = EVEN_OUT.get(self.even)
+            if plan is not None:
+                out = self._level(out, plan)
+            return self._ceiling.process(out)
+        except Exception:
+            return block
+
+    def _level(self, block, plan):
+        from . import loudness
+        frames = len(block)
+        rate = float(self.samplerate)
+        start = self.gain_db
+        aim = start
+        if not self._held():
+            # Measured only while not held, so the window is the MUSIC's
+            # level and not the voice over it or the duck under it.
+            self._window.append((loudness.energy(block, rate), frames))
+            longest = plan["window"] * rate
+            while (len(self._window) > 1
+                   and sum(n for _e, n in self._window[1:]) >= longest):
+                self._window.pop(0)
+            # Summed afresh every block rather than added to and taken from
+            # all night, so rounding cannot walk it anywhere.
+            self._window_energy = sum(e for e, _n in self._window)
+            self._window_frames = sum(n for _e, n in self._window)
+            level = loudness.lufs(self._window_energy, self._window_frames)
+            self.loudness = level
+            if (level is not None and level >= self._floor
+                    and self._window_frames >= 0.4 * rate):
+                aim = max(-plan["cut"], min(plan["boost"],
+                                            plan["target"] - level))
+        seconds = frames / rate
+        step = (plan["up"] if aim > start else plan["down"]) * seconds
+        end = start + max(-step, min(step, aim - start))
+        self.gain_db = end
+        if start == end:
+            if start == 0.0:
+                return block
+            return block * np.float32(10.0 ** (start / 20.0))
+        ramp = 10.0 ** (np.linspace(start, end, frames) / 20.0)
+        return (block * ramp[:, None]).astype(np.float32)
