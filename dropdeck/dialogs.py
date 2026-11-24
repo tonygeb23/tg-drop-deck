@@ -25,6 +25,7 @@ from . import feedback
 from . import dsp
 from . import camera
 from . import framing
+from . import globalhotkeys
 from . import colours
 from . import cuesheet
 from . import overlay
@@ -197,6 +198,8 @@ class AssignHotkeyDialog(wx.Dialog):
                 "Alt. A key on its own would be taken away from everything "
                 "else you are running.\n"
                 "Alt counts as a modifier, so Alt plus a letter is fine. "
+                "Shift plus a letter, and Ctrl plus C, V and the other keys "
+                "every program uses, are refused for the same reason.\n"
                 "Press Delete to clear it. Tab reaches the buttons.")
         else:
             explain = ("Press the key combination you want, then choose OK.\n"
@@ -303,6 +306,15 @@ class AssignHotkeyDialog(wx.Dialog):
                 "Shift." % key_label(code, 0))
             self._say(self.warning.GetLabel())
             return
+        # Shift plus a letter, Ctrl+C and the like: refused here, the way
+        # Alt+F4 is, because as a global hotkey every other program on the
+        # machine would lose it. See globalhotkeys.refusal.
+        if self.global_mode:
+            why = globalhotkeys.refusal(key_label(code, modifiers))
+            if why:
+                self.warning.SetLabel(why)
+                self._say(why)
+                return
         # One of the app's own keys. Refused, the way Alt+F4 is: a bank four
         # pad on Ctrl+S took Save board away with nothing to say so.
         used = self._taken.get((code, modifiers))
@@ -1604,10 +1616,14 @@ class SettingsDialog(wx.Dialog):
         Both places read the same two things in the same order now, so the
         box always shows the key that is actually in force, and an empty box
         means what it says.
+
+        **Both ask `preflight.video_key`**, which hands a kept key only to
+        the server it was kept for. So a board pointing at another server
+        shows an empty box, and its own Check my stream key cannot send the
+        kept key there; an untouched empty box changes nothing on OK.
         """
         try:
-            return (secrets.fetch(self.board.stream_name or "")
-                    or getattr(self.board, "video_key", "") or "")
+            return preflight.video_key(self.board)[0]
         except Exception:
             return getattr(self.board, "video_key", "") or ""
 
@@ -1861,21 +1877,31 @@ class SettingsDialog(wx.Dialog):
                 setattr(self.board, field, value)
         self.board.save_station()
         self._refresh_stations(settings["name"])
-        note = self._keep_key(settings["name"], video["key"])
+        server = video["server"]
+        note = self._keep_key(settings["name"], video["key"],
+                              host=(C.RTMP_INGEST[server]
+                                    if server in C.RTMP_FIXED_ADDRESS
+                                    else video["host"]),
+                              changed=video["key_changed"])
         self._say_test("Saved %s.%s" % (settings["name"], note))
 
-    def _keep_key(self, station, key):
+    def _keep_key(self, station, key, host="", changed=True):
         """Put the stream key somewhere better than the board file.
 
         Returns what to add to the spoken confirmation, because a key that
         could NOT be kept safely is something the user has to be told: it
         stays in the board file then, the way it always did, and a board file
         travels.
+
+        Kept for `host`, the server beside it, and handed to no other. A box
+        left EMPTY and untouched is not "forget it": it is left empty over a
+        key kept for another server, which Save station must not delete.
         """
         if not key:
-            secrets.forget(station)
+            if changed:
+                secrets.forget(station)
             return ""
-        if secrets.store(station, key):
+        if secrets.store(station, key, host=host):
             return " The stream key is in Windows Credential Manager."
         return (" The stream key could NOT be stored safely, so it is in "
                 "your board file. Do not send that file to anybody.")
@@ -1886,8 +1912,11 @@ class SettingsDialog(wx.Dialog):
             self._say_test("There is nothing saved by that name.")
             return
         # A forgotten station must not leave its key behind in the credential
-        # store, where nothing would ever clean it up.
+        # store, where nothing would ever clean it up, nor its password,
+        # unless the setup in use is still called that and still needs it.
         secrets.forget(name)
+        if name != (self.board.stream_name or ""):
+            secrets.forget(name, secrets.PASSWORD_PREFIX)
         self._refresh_stations()
         self._say_test("Forgot %s." % name)
 
@@ -1986,6 +2015,12 @@ class SettingsDialog(wx.Dialog):
                             "be read out.")
             return
 
+        held = self._kept_key_held(settings, key)
+        if held:
+            self._say_video(held + ". Nothing was checked and nothing was "
+                                   "sent.")
+            return
+
         platform = settings.get("server", "")
         label = streamout.server_label(platform) or parsed.hostname
         if not self._agree_to_check(platform, label):
@@ -2015,6 +2050,28 @@ class SettingsDialog(wx.Dialog):
 
         threading.Thread(target=work, daemon=True,
                          name="dropdeck-keycheck").start()
+
+    def _kept_key_held(self, settings, key):
+        """Why the kept key in the box may not go to the address in the box.
+
+        "" when it may, or when the key is one the user typed. The box shows
+        a kept key only beside the server it was kept for; changing the
+        address and pressing Check would otherwise send it to the new one.
+        """
+        name = self.board.stream_name or ""
+        # Untouched, and the kept one rather than the board's own fallback.
+        if (not key or key != getattr(self, "_key_at_open", "")
+                or key != secrets.fetch(name)):
+            return ""
+        server = settings.get("server", "")
+        address = (C.RTMP_INGEST[server] if server in C.RTMP_FIXED_ADDRESS
+                   else settings.get("host", ""))
+        kept, held, tied = secrets.key_for(name, address,
+                                           trusted=C.RTMP_PLATFORM_INGESTS)
+        if kept:
+            return ""
+        return preflight.held_key_sentence({"host": address, "key_held": held,
+                                            "key_tied_to": tied})
 
     def _agree_to_check(self, platform, label):
         """Ask first, where connecting at all is the thing people fear.
@@ -5602,6 +5659,16 @@ class ScreenTextDialog(wx.Dialog):
             speaker(text)
 
 
+#: What the Ask box says about a screen nobody has agreed to send yet.
+CHECK_THE_SHOT_FIRST = ("Check the shot first. Your screen is only sent once "
+                        "you have said yes to it, and Ask then asks about "
+                        "that same picture.")
+
+
+class ShotNotAgreed(Exception):
+    """A picture of the screen that nobody has agreed to send in this check."""
+
+
 class AskPanel(wx.Panel):
     """Type a question about a picture, hear the answer, ask another.
 
@@ -5621,11 +5688,14 @@ class AskPanel(wx.Panel):
     """
 
     def __init__(self, parent, frame, get_picture, kind="camera",
-                 label="&Ask a question about this"):
+                 label="&Ask a question about this", not_ready=None):
         super().__init__(parent)
         self.frame = frame
         self.get_picture = get_picture
         self.kind = kind
+        #: Asked before anything is sent: a sentence saying why not yet, or
+        #: "". The shot check uses it so a screen is never sent unasked.
+        self.not_ready = not_ready
         self.history = []
         self._busy = False
 
@@ -5672,6 +5742,10 @@ class AskPanel(wx.Panel):
             self._show("Type a question first.")
             self.question.SetFocus()
             return
+        waiting = self.not_ready() if self.not_ready is not None else ""
+        if waiting:
+            self._show(waiting)
+            return
         key = self._key()
         if not key:
             self._show("No key has been set up yet. Open Preferences, AI "
@@ -5688,6 +5762,9 @@ class AskPanel(wx.Panel):
         def work():
             try:
                 shot = getter()
+            except ShotNotAgreed as exc:
+                wx.CallAfter(self._done, asked, False, str(exc))
+                return
             except Exception as exc:
                 wx.CallAfter(self._done, asked, False,
                              "There is no picture to ask about. %s" % exc)
@@ -5771,7 +5848,7 @@ class ShotCheckDialog(wx.Dialog):
         # about the shot that was described rather than a fresh one taken
         # while the presenter was moving.
         self.ask = AskPanel(self, frame, self._last_or_fresh,
-                            kind=self._kind())
+                            kind=self._kind(), not_ready=self._not_agreed)
         outer.Add(self.ask, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
         row = wx.StdDialogButtonSizer()
@@ -5826,11 +5903,27 @@ class ShotCheckDialog(wx.Dialog):
                 "of it. %s is asked." % (where, who))
 
     def _last_or_fresh(self):
-        """The picture the check looked at, or a new one if it never ran."""
+        """The picture the check looked at, or a new one if it never ran.
+
+        **Never a new one of the SCREEN.** With no check run, this took a
+        fresh grab of the desktop and Ask sent it without asking, which
+        breaks the one rule the shot check has (CLAUDE.md: a screen is never
+        sent without asking, every time). A screen is sent only as the
+        picture somebody said yes to in this check. A camera still is the
+        face about to be broadcast anyway and is taken fresh, as before.
+        """
         if self._looked_at is not None:
             return self._looked_at
+        if vision.needs_consent(self._kind()):
+            raise ShotNotAgreed(CHECK_THE_SHOT_FIRST)
         shot, _note = self.frame.preview_picture()
         return shot
+
+    def _not_agreed(self):
+        """Why Ask must not send anything yet, or "". See _last_or_fresh."""
+        if self._looked_at is None and vision.needs_consent(self._kind()):
+            return CHECK_THE_SHOT_FIRST
+        return ""
 
     def _picture(self):
         """Delegated, so being on air or not is the frame's business.

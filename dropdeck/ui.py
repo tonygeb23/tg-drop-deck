@@ -971,6 +971,9 @@ class DropDeckFrame(wx.Frame):
         #: Banks whose hint has been spoken this session. See _on_bank_changed.
         self._hinted_banks = set()
         self.board = self._load_startup_board()
+        # Both before anything reads the board's keys, folder or plugin.
+        self._trust_own_board_once()
+        self._resolve_plugin_name(self.board)
         self.mixer = MixerGroup(bank_devices=self._resolve_bank_devices(),
                                 open_stream=True,
                                 monitor_device=self._resolve_monitor_device())
@@ -1070,6 +1073,8 @@ class DropDeckFrame(wx.Frame):
         if self.board.global_hotkeys_on:
             self.hotkeys.start()
         self.global_item.Check(self.hotkeys.enabled)
+        #: What the startup board was refused, for the startup line.
+        self._startup_safety = self._secure_board(self.board)
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self.Bind(wx.EVT_ACTIVATE, self._on_frame_activate)
@@ -1417,6 +1422,13 @@ class DropDeckFrame(wx.Frame):
             bits.append(micdiag.keys_sentence(taken))
         clashes = self._own_key_clashes()
         bits.extend(clashes)
+        # What the board asked for and was refused: a plugin not installed
+        # here, a recording folder that is not on this computer, global
+        # hotkeys that would take keys every program needs.
+        safety = list(getattr(self, "_startup_safety", []) or [])
+        if getattr(getattr(self, "hotkeys", None), "enabled", False):
+            safety.extend(self._unsafe_hotkey_notes())
+        bits.extend(safety)
         found = getattr(self.board, "found_beside", 0)
         if found:
             bits.append(_found_beside_sentence(found))
@@ -1460,7 +1472,8 @@ class DropDeckFrame(wx.Frame):
         # is carrying one of them.
         wrong = (bool(missing) or not self.mixer.is_running or send_failed
                  or bool(self._routing_conflicts()) or bool(board_note)
-                 or bool(taken) or bool(clashes) or bool(data_note))
+                 or bool(taken) or bool(clashes) or bool(data_note)
+                 or bool(safety))
         (self.announce if wrong else self.announce_help)(". ".join(bits))
 
     def _board_name(self):
@@ -1529,6 +1542,8 @@ class DropDeckFrame(wx.Frame):
         for slot in self.board.slots:
             if slot.index in refused:
                 continue
+            if slot.global_hotkey and globalhotkeys.refusal(slot.global_hotkey):
+                continue                       # never offered to Windows
             parsed = (globalhotkeys.parse(slot.global_hotkey)
                       if slot.global_hotkey else None)
             if parsed is not None:
@@ -2362,8 +2377,40 @@ class DropDeckFrame(wx.Frame):
     # the machine.
 
     def _sync_global_hotkeys(self):
-        self.hotkeys.set_bindings({s.index: s.global_hotkey
-                                   for s in self.board.slots if s.global_hotkey})
+        # One that would take a key every program needs stays on its pad, in
+        # the file, and is never offered to Windows. `_unsafe_hotkey_notes`
+        # says which.
+        self.hotkeys.set_bindings({
+            s.index: s.global_hotkey for s in self.board.slots
+            if s.global_hotkey and not globalhotkeys.refusal(s.global_hotkey)})
+
+    def _unsafe_hotkey_notes(self):
+        """The sentence for this board's global hotkeys that are not used.
+
+        Said in the startup line, the Loaded line and when Ctrl+G turns them
+        on, which are the moments they would otherwise have been registered.
+        """
+        held = []
+        for slot in self.board.slots:
+            text = slot.global_hotkey
+            use = globalhotkeys.everyday_use(text) if text else ""
+            if use:
+                held.append("%s on %s %d, which %s"
+                            % (text, slot.bank_short, slot.number,
+                               "types a character"
+                               if use == globalhotkeys.TYPES else "is " + use))
+        if not held:
+            return []
+        many = len(held) > 1
+        return ["%s not used, because every other program needs %s: %s. %s "
+                "on %s until you change %s"
+                % ("These global hotkeys are" if many
+                   else "This global hotkey is",
+                   "those keys" if many else "that key",
+                   "; ".join(held),
+                   "They stay" if many else "It stays",
+                   "their pads" if many else "its pad",
+                   "them" if many else "it")]
 
     def _on_hotkey_problem(self, message):
         """A hotkey Windows would not give us. Say so rather than swallow it.
@@ -2381,11 +2428,13 @@ class DropDeckFrame(wx.Frame):
         self._touch()
         if on:
             count = self.hotkeys.count()
-            self.announce(
-                "Global hotkeys on. %d %s active."
-                % (count, "hotkey" if count == 1 else "hotkeys") if count
-                else "Global hotkeys on. None assigned yet. Use Sounds, "
-                     "assign a global hotkey.")
+            unsafe = self._unsafe_hotkey_notes()
+            said = ("Global hotkeys on. %d %s active."
+                    % (count, "hotkey" if count == 1 else "hotkeys") if count
+                    else "Global hotkeys on. None active." if unsafe
+                    else "Global hotkeys on. None assigned yet. Use Sounds, "
+                         "assign a global hotkey.")
+            self.announce(" ".join([said] + [line + "." for line in unsafe]))
         else:
             self.announce("Global hotkeys off. Other programs have those keys "
                           "back.")
@@ -2399,7 +2448,7 @@ class DropDeckFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             text = dialog.hotkey_text()
-            if text and globalhotkeys.parse(text) is None:
+            if text and not globalhotkeys.usable(text):
                 self._on_hotkey_problem(globalhotkeys.describe(text))
                 return
             slot.global_hotkey = text or None
@@ -3442,7 +3491,7 @@ class DropDeckFrame(wx.Frame):
 
         if chosen["global_hotkey"] != slot.global_hotkey:
             text = chosen["global_hotkey"]
-            if text and globalhotkeys.parse(text) is None:
+            if text and not globalhotkeys.usable(text):
                 self._on_hotkey_problem(globalhotkeys.describe(text))
             else:
                 slot.global_hotkey = text
@@ -5272,6 +5321,10 @@ class DropDeckFrame(wx.Frame):
             said += (". %d %s could not be found and %s left out"
                      % (missing, "sound" if missing == 1 else "sounds",
                         "was" if missing == 1 else "were"))
+        # Said every time, because an export is made to be handed on and the
+        # person handing it on is entitled to know what is not in it.
+        # board.for_export is what makes it true.
+        said += ". Passwords and your own folders were left out"
         self.announce(said)
 
     def _adopt(self, board):
@@ -5341,8 +5394,99 @@ class DropDeckFrame(wx.Frame):
         self._rebuild_station_menu()
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
+        notes.extend(self._secure_board(board))
         self._update_status()
         return notes
+
+    def _trust_own_board_once(self):
+        """The first start of this version trusts the board it opens.
+
+        3.10.1 kept stream keys without saying which server each was for, and
+        let a board record to any folder. This version hands a key only to
+        its own server and drops a recording folder on a share, which would
+        refuse a broadcaster's custom server and their NAS at the top of the
+        first show after updating. So once, on the board that opens at
+        startup, which is the user's own (the one open last, from
+        last_board.json, or board.json), each kept key is tied to the server
+        that board names for it, and a share it records to is remembered as
+        picked here. Never the demo, which is nobody's. Written down in
+        MACHINE_FILE so it happens once: after that, a board from anywhere
+        else is held to the rules.
+        """
+        state = board_module.machine_state()
+        if state.get("upgrade_trusted"):
+            return
+        board = self.board
+        if not getattr(self, "_loaded_demo", False):
+            try:
+                board.tie_kept_keys()
+            except Exception:
+                errorlog.record_current()
+            folder = getattr(board, "dropped_record_folder", "")
+            if (folder and board_module.network_folder(folder)
+                    and board_module.remember_record_folder(folder)):
+                board.record_folder = folder
+                board.dropped_record_folder = ""
+                board.load_notes = [note for note in board.load_notes
+                                    if note != board_module.DROPPED_FOLDER_NOTE]
+        state = board_module.machine_state()
+        state["upgrade_trusted"] = True
+        board_module.save_machine_state(state)
+
+    def _resolve_plugin_name(self, board):
+        """A voice plugin named by its file name alone, found here.
+
+        An export carries only the file name (board.for_export). Exactly one
+        installed plugin of that name is used; anything else is left as it
+        is, so the voice runs without it and `_plugin_refusal` says so.
+        """
+        settings = board.voice_settings or {}
+        wanted = settings.get("plugin")
+        found = vst.by_file_name(wanted) if isinstance(wanted, str) else ""
+        if found:
+            board.voice_settings = dict(settings, plugin=found)
+
+    def _secure_board(self, board):
+        """What a board just opened was refused, said, and its passwords put
+        away. Sentences for the Loaded line or the startup line.
+
+        At startup and on every open and reload, because a board is plain
+        JSON that people send each other: a recording folder on somebody's
+        server and a plugin from anywhere are dropped, and the Icecast
+        passwords go into Credential Manager rather than staying in the file.
+        """
+        notes = list(getattr(board, "load_notes", []) or [])
+        refusal = self._plugin_refusal(board)
+        if refusal:
+            notes.append(refusal)
+        stored, said = self._put_passwords_away(board)
+        notes.extend(said)
+        if stored or getattr(board, "load_notes", None):
+            # Written back, so the password and the folder leave the file
+            # and the folder is said once rather than at every start.
+            board.dirty = True
+            timer = getattr(self, "_save_timer", None)
+            if timer is not None:
+                timer.Start(2000, oneShot=True)
+        return notes
+
+    def _put_passwords_away(self, board):
+        """`board.secure_passwords`, and what to say about it.
+
+        Returns (stored, sentences). Windows refusing is said once a session,
+        because it is the same fact every time a board opens.
+        """
+        try:
+            stored, refused = board.secure_passwords()
+        except Exception:
+            errorlog.record_current()
+            return False, []
+        if not refused or getattr(self, "_password_refusal_said", False):
+            return stored, []
+        self._password_refusal_said = True
+        return stored, ["Windows would not keep your station password safely, "
+                        "so it stays in your board file. Do not send that "
+                        "file to anybody"]
 
     def _follow_board_cards(self):
         """The board's own sound cards and monitor card, if they differ.
@@ -5466,12 +5610,15 @@ class DropDeckFrame(wx.Frame):
             return ["Global hotkeys off"] if was_on else []
         count = hotkeys.count()
         clashes = self._own_key_clashes()
-        said = ["Global hotkeys on, %d active" % count
-                if count else "Global hotkeys on, none assigned"]
+        unsafe = self._unsafe_hotkey_notes()
+        said = ["Global hotkeys on, %d active" % count if count
+                else "Global hotkeys on, none active" if unsafe
+                else "Global hotkeys on, none assigned"]
         if count and not clashes:
             # A clash line ends with the same advice, so it is said once.
             said[0] += ". Ctrl+G turns them off"
         said.extend(self._hotkey_refusals())
+        said.extend(unsafe)
         said.extend(clashes)
         # The listener reports the same refusals to the UI thread with a box.
         # They have just been said, so that one report is dropped.
@@ -5724,6 +5871,7 @@ class DropDeckFrame(wx.Frame):
         okayed those stale values were written back over what the new board
         had saved. The board you opened quietly became the board you left.
         """
+        self._resolve_plugin_name(board)
         mic = getattr(self, "mic", None)
         if mic is None:
             return
@@ -5755,6 +5903,11 @@ class DropDeckFrame(wx.Frame):
         if chain is None or not getattr(chain, "wanted_plugin", None):
             return
         path = chain.wanted_plugin
+        if not vst.is_installed(path):
+            # Left asked for, so the board keeps it, and never loaded: a
+            # plugin is a DLL that runs in this process. The Loaded line or
+            # the startup line says so (`_plugin_refusal`).
+            return
         values = dict(getattr(chain, "wanted_plugin_values", {}) or {})
 
         def work():
@@ -5771,6 +5924,20 @@ class DropDeckFrame(wx.Frame):
             wx.CallAfter(self._voice_plugin_ready, chain, plugin, path)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _plugin_refusal(self, board):
+        """The sentence for a board whose voice plugin will not be loaded.
+
+        Empty when there is no plugin, or it is one installed here.
+        """
+        if not dsp.available():
+            return ""
+        wanted = (board.voice_settings or {}).get("plugin") or ""
+        if not wanted or vst.is_installed(wanted):
+            return ""
+        return ("This board asks for a voice plugin that is not installed "
+                "here, %s, so the voice runs without it"
+                % vst.plugin_name(wanted))
 
     def _voice_plugin_ready(self, chain, plugin, path):
         if chain is not getattr(getattr(self, "mic", None), "chain", None):
@@ -6039,6 +6206,11 @@ class DropDeckFrame(wx.Frame):
             return False
 
         settings = self._stream_settings()
+        # A kept key that belongs to another server is never sent, whatever
+        # else is true. No window: the sentence says where to put it right.
+        if streamout.is_rtmp(settings["server"]) and settings.get("key_held"):
+            self.announce(preflight.held_key_sentence(settings))
+            return False
         # Refused HERE rather than at the far end. A missing key comes back
         # from YouTube as a bare I/O error several seconds into going live,
         # which is the worst moment and the least useful message.
@@ -6047,6 +6219,11 @@ class DropDeckFrame(wx.Frame):
                           "in on the Video streaming page")
             self._on_settings(page=page)
             return False
+        if settings.get("key_untied"):
+            # The first time a key kept by 3.10.1 is used, with a platform's
+            # own ingest: from now on it goes to that server and no other.
+            secrets.store(self.board.stream_name or "", settings["password"],
+                          host=settings["host"])
 
         self.air_bus = streamout.AirBus(self.mixer.samplerate)
         self._sync_air_taps()
@@ -7683,9 +7860,20 @@ class DropDeckFrame(wx.Frame):
         """
         board = self.board
         if board.live_to == C.LIVE_TO_VIDEO:
-            key = secrets.fetch(board.stream_name or "") or board.video_key
-            return {"server": board.video_server, "host": board.video_host,
+            # The platform's own ingest for YouTube and Facebook, whatever
+            # the board says, and the station's key only if it was kept for
+            # that server. Mark, 24 November 2026: a board naming the
+            # station and its own server got the key sent to that server.
+            host = preflight.video_address(board)
+            key, held, tied, untied = preflight.video_key(board)
+            return {"server": board.video_server, "host": host,
                     "port": 0, "mount": "", "user": "", "password": key,
+                    # Why a kept key is not in "password", for the pre-flight
+                    # and start_stream to say. See preflight.held_key_sentence.
+                    "key_held": held, "key_tied_to": tied,
+                    # A key kept before keys were tied, about to be used
+                    # with a platform's own ingest, which start_stream ties.
+                    "key_untied": untied,
                     "format": "aac", "bitrate": board.stream_bitrate,
                     "name": board.stream_name,
                     # The CHANNEL, which is not the radio station. Kept as a
@@ -8341,8 +8529,12 @@ class DropDeckFrame(wx.Frame):
                                    if undone else "Nothing changed")
                 # A station saved or forgotten on the Streaming tab is a
                 # deliberate act and survives Cancel, so the menu has to show
-                # it and the board still has to reach the disk.
+                # it and the board still has to reach the disk, with its
+                # password in Credential Manager rather than in the file.
                 self._rebuild_station_menu()
+                _stored, said = self._put_passwords_away(self.board)
+                if said:
+                    self.announce(". ".join(said))
                 if self.board.dirty:
                     self._save_timer.Start(2000, oneShot=True)
                 return
@@ -8368,12 +8560,29 @@ class DropDeckFrame(wx.Frame):
             # key I already have", which is what the label under it says,
             # and is the difference between tabbing past a field and wiping
             # a credential.
-            if shot["key"]:
-                secrets.store(shot["provider"], shot["key"],
-                              secrets.VISION_PREFIX)
+            if shot["key"] and not secrets.store(shot["provider"], shot["key"],
+                                                 secrets.VISION_PREFIX):
+                # It never goes in the board file, which is shared and would
+                # hand somebody a bill, so a refusal means it is not kept at
+                # all. That used to happen without a word.
+                heard.append("Windows would not keep your AI provider key, so "
+                             "it was not saved. It is never put in your board "
+                             "file. Try again in Preferences, AI Provider")
             self.board.record_format = dialog.record_format_key
             self.board.record_bitrate = dialog.record_bitrate_value
-            self.board.record_folder = dialog.record_folder_path
+            folder = dialog.record_folder_path
+            if folder and not (board_module.local_folder(folder)
+                               or board_module.network_folder(folder)):
+                heard.append("Save recordings in has to be a whole folder "
+                             "path, such as one chosen with Browse, so it was "
+                             "not changed")
+            else:
+                # A share chosen HERE is the user's own, and is written down
+                # on this computer so the board may keep it. The same share
+                # arriving in somebody else's board file is still dropped.
+                if board_module.network_folder(folder):
+                    board_module.remember_record_folder(folder)
+                self.board.record_folder = folder
             self.board.stop_presses = int(dialog.stop_presses.GetValue())
             self.board.stop_fade = dialog.stop_fade.GetValue()
             self.board.playlist.crossfade = dialog.crossfade
@@ -8396,7 +8605,15 @@ class DropDeckFrame(wx.Frame):
             # connect could not be set at all. `tests/test_3_1.py` asserted
             # only that the control gave back what was typed into it, which
             # is the box answering about itself.
-            self.board.stream_stats_url = stream["stats_url"]
+            if (stream["stats_url"]
+                    and not board_module.web_address(stream["stats_url"])):
+                # Asked with urllib, which opens a file or an FTP server as
+                # readily as a web page.
+                heard.append("Where listeners connect has to be a web address "
+                             "starting with http or https, so it was not "
+                             "changed")
+            else:
+                self.board.stream_stats_url = stream["stats_url"]
             self.board.stream_public = stream["public"]
             video = dialog.video_settings
             self.board.video_server = video["server"]
@@ -8420,6 +8637,14 @@ class DropDeckFrame(wx.Frame):
             # borrowing it meant that merely looking at the video page and
             # pressing OK wiped a user's radio station password.
             self._apply_stream_key(video, was_called, stream["name"] or "")
+            # The station password is filed by name too. The new name's is
+            # stored below; the old one's goes unless a saved station still
+            # answers to it.
+            if (was_called and was_called != (stream["name"] or "")
+                    and not self._is_saved_station(was_called)):
+                secrets.forget(was_called, secrets.PASSWORD_PREFIX)
+            _stored, said = self._put_passwords_away(self.board)
+            heard.extend(said)
             picture_settings = dialog.picture_settings
             self.board.picture = picture_settings["picture"]
             self.board.picture_file = picture_settings["picture_file"]
@@ -8659,12 +8884,25 @@ class DropDeckFrame(wx.Frame):
         key = video.get("key", "")
         changed = video.get("key_changed", True)
         renamed = bool(was_called) and was_called != now_called
+        # **A key is kept for the server it was typed beside**, and handed to
+        # no other (secrets.key_for). The platform's own ingest for YouTube
+        # and Facebook, as everywhere else.
+        server = video.get("server", "")
+        host = (C.RTMP_INGEST[server] if server in C.RTMP_FIXED_ADDRESS
+                else video.get("host", ""))
 
-        if not key:
+        if changed and not key:
             self.board.video_key = ""
             secrets.forget(now_called)
+        elif not changed and not key:
+            # **An untouched EMPTY box is not "forget it".** The box is left
+            # empty over a key kept for another server, so it cannot be sent
+            # there from the box, and pressing OK must not delete it. A
+            # rename still carries it, below.
+            if renamed and not self.board.video_key:
+                self._carry_stream_key(was_called, now_called)
         elif changed:
-            if secrets.store(now_called, key):
+            if secrets.store(now_called, key, host=host):
                 self.board.video_key = ""
             else:
                 self.board.video_key = key
@@ -8682,10 +8920,18 @@ class DropDeckFrame(wx.Frame):
             # already on the board travels with the board and needs nothing;
             # one in the credential store has to be filed again, because the
             # store is keyed by the name.
-            secrets.store(now_called, key)
+            self._carry_stream_key(was_called, now_called)
 
         if renamed and not self._is_saved_station(was_called):
             secrets.forget(was_called)
+
+    @staticmethod
+    def _carry_stream_key(was_called, now_called):
+        """A kept key filed again under a station's new name, still tied to
+        the server it was kept for, which a rename does not change."""
+        kept = secrets.fetch(was_called)
+        if kept:
+            secrets.store(now_called, kept, host=secrets.tied_to(was_called))
 
     def _is_saved_station(self, name):
         """Is that name still one of the saved setups on the shelf."""

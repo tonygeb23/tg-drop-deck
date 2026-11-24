@@ -10,7 +10,9 @@ existing keys being made global:
   1. **It never registers a bare key.** Making `1` a system-wide hotkey would
      take the digit away from every other program on the machine, including the
      one you are typing into. Every global hotkey needs at least one modifier,
-     and this module refuses to register anything that does not.
+     and this module refuses to register anything that does not. Nor Shift
+     plus a printable key, nor Ctrl plus copy, paste and the like, for the
+     same reason: see `refusal`.
   2. **The in-app map is untouched.** `1`-`0` with Shift, Ctrl, Ctrl+Shift and
      Alt+Ctrl still work exactly as they always have while the board has focus.
      A global hotkey is a *second*, separate key the user assigns on purpose.
@@ -85,6 +87,73 @@ def parse(text):
     return mods | MOD_NOREPEAT, key
 
 
+#: What Ctrl plus each of these does in nearly every Windows program. A
+#: global hotkey on one takes it away from all of them: a board holding
+#: Ctrl+C as a pad's global hotkey stopped copy working anywhere on the
+#: machine while global hotkeys were on (Mark, 24 November 2026).
+CTRL_KEYS_EVERYBODY_NEEDS = {
+    "A": "select all", "C": "copy", "V": "paste", "X": "cut", "Z": "undo",
+    "Y": "redo", "S": "save", "F": "find", "N": "new", "O": "open",
+    "P": "print", "W": "close",
+}
+
+
+def refusal(text):
+    """Why a combination that parses must still not be a GLOBAL hotkey.
+
+    "" when it may be. Separate from `parse`, which also reads this app's
+    own menu keys, Ctrl+S among them, to find out which of them another
+    program holds. This is a rule about taking a key from every program:
+
+    - Shift plus one printable key is how every program types that capital
+      letter or symbol, so it would be typed nowhere else on the machine.
+    - Ctrl plus A, C, V, X, Z, Y, S, F, N, O, P or W is select all, copy,
+      paste and the rest, everywhere.
+
+    It adds to the rule that a global hotkey needs a modifier, which `parse`
+    keeps.
+    """
+    use = everyday_use(text)
+    if not use:
+        return ""
+    if use == TYPES:
+        return ("%s types a character in every program, so as a global "
+                "hotkey it would be taken from all of them. Add Ctrl or Alt."
+                % text)
+    return ("%s is %s in nearly every program, so as a global hotkey it "
+            "would stop working everywhere else. Add Alt or Shift."
+            % (text, use))
+
+
+#: What `everyday_use` answers for Shift plus a printable key.
+TYPES = "typing"
+
+
+def everyday_use(text):
+    """What every program uses this combination for, in a word or two.
+
+    `TYPES` for Shift plus a printable key, "copy" and the like for the
+    Ctrl keys, "" for anything a global hotkey may have.
+    """
+    parsed = parse(text)
+    if parsed is None:
+        return ""
+    mods = parsed[0] & 0x000F
+    parts = [p.strip().upper()
+             for p in str(text).replace("-", "+").split("+") if p.strip()]
+    key = next((p for p in parts if p not in MODIFIER_NAMES), "")
+    if mods == MOD_SHIFT and (len(key) == 1 or key == "SPACE"):
+        return TYPES
+    if mods == MOD_CONTROL and key in CTRL_KEYS_EVERYBODY_NEEDS:
+        return CTRL_KEYS_EVERYBODY_NEEDS[key]
+    return ""
+
+
+def usable(text):
+    """Can this be registered as a global hotkey at all."""
+    return parse(text) is not None and not refusal(text)
+
+
 def describe(text):
     """Why a hotkey was refused, in words the user can act on."""
     if not text:
@@ -94,7 +163,7 @@ def describe(text):
             return ("A global hotkey needs a modifier. %s on its own would be "
                     "taken away from every other program." % text)
         return "%s is not a hotkey this can register." % text
-    return ""
+    return refusal(text)
 
 
 class GlobalHotkeys:
@@ -113,6 +182,7 @@ class GlobalHotkeys:
         self._wanted = {}          # slot index -> hotkey text
         self._registered = {}      # hotkey id -> slot index
         self._failed = {}          # slot index -> hotkey text that would not register
+        self._refused = {}         # slot index -> hotkey text `refusal` kept back
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- state
@@ -131,6 +201,14 @@ class GlobalHotkeys:
         silently does nothing is worse than one that says it is taken."""
         with self._lock:
             return dict(self._failed)
+
+    @property
+    def refused(self):
+        """Hotkeys never offered to Windows, because they would take a key
+        every program needs. See `refusal`. Not failures: nobody else has
+        them, and saying another program does would be untrue."""
+        with self._lock:
+            return dict(self._refused)
 
     def count(self):
         with self._lock:
@@ -175,10 +253,17 @@ class GlobalHotkeys:
             wanted = dict(self._wanted)
             self._registered.clear()
             self._failed.clear()
+            self._refused.clear()
 
         hotkey_id = 1
         for index, text in sorted(wanted.items()):
             parsed = parse(text)
+            if parsed is not None and refusal(text):
+                # The last word, whoever asked: a board file is the usual
+                # way one of these arrives, and the window filters them too.
+                with self._lock:
+                    self._refused[index] = text
+                continue
             if parsed is None:
                 with self._lock:
                     self._failed[index] = text

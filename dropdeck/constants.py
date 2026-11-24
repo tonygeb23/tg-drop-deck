@@ -1279,6 +1279,12 @@ RTMP_INGEST_BACKUP = {
     "youtube": "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
 }
 
+#: Every address above. A stream key kept before keys were tied to the server
+#: they are for (3.10.1 and earlier) is handed only to one of these, and tied
+#: to it the first time. See secrets.key_for.
+RTMP_PLATFORM_INGESTS = (tuple(RTMP_INGEST.values())
+                         + tuple(RTMP_INGEST_BACKUP.values()))
+
 #: WHAT HAPPENS WHEN YOU CONNECT, which is not the same on the two platforms
 #: and is the most important thing about this feature.
 #:

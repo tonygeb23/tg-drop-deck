@@ -42,6 +42,11 @@ AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}
 DefaultDirName={localappdata}\Programs\{#AppPublisher}\{#AppName}
+; The folder cannot be chosen. Uninstalling removes what this program put in
+; its folder, and a folder that could be pointed at Documents made that
+; somebody's Documents. An existing install keeps the folder it has.
+DisableDirPage=yes
+UsePreviousAppDir=yes
 DefaultGroupName={#AppPublisher}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -85,11 +90,24 @@ Filename: "{app}\{#AppExeName}"; Description: "Open {#AppName}"; Flags: nowait p
 Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: WantsRestart
 
 [UninstallDelete]
-; Only the installed program. The user's board, their own sounds and their
-; hotkeys live in {userappdata}\TG Studios\TG Drop Deck and are deliberately
-; left behind: uninstalling to fix a problem must not destroy a board someone
-; spent an afternoon building.
-Type: filesandordirs; Name: "{app}"
+; Only what the program itself leaves in its folder. The uninstaller already
+; removes every file this script installed, so this list is the rest, and it
+; is NAMED: a delete of the whole of {app} emptied whatever folder had been
+; chosen, Documents included. What the program writes there:
+;   _internal.replaced    the old files, kept aside while an update replaces
+;                         them, if removing them afterwards failed
+;   .dropdeck-write-test  the probe that asks whether the folder can be
+;                         written, if removing it failed
+; Nothing else. The error log and the board live in the settings folder,
+; {userappdata}\TG Studios\TG Drop Deck, which is left alone: uninstalling to
+; fix a problem must not destroy a board someone spent an afternoon building.
+; A portable style userdata folder inside {app} is the user's settings too and
+; is never named here, so the folder itself is removed only when empty.
+; Update staging goes BESIDE the program folder, not in it, and the program
+; clears it at its next start.
+Type: filesandordirs; Name: "{app}\_internal.replaced"
+Type: files; Name: "{app}\.dropdeck-write-test"
+Type: dirifempty; Name: "{app}"
 
 [Code]
 function WantsRestart: Boolean;

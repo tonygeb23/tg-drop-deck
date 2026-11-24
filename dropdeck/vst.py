@@ -61,6 +61,55 @@ def installed():
     return sorted(found.items(), key=lambda pair: pair[0].lower())
 
 
+def _same_file(path):
+    """A path in one spelling, worked out from the string alone.
+
+    Never by asking the disk: `realpath` on a share or a WebDAV address goes
+    out to that server, which is the very thing being kept out.
+    """
+    try:
+        return os.path.normcase(os.path.normpath(os.path.abspath(str(path))))
+    except (TypeError, ValueError):
+        return ""
+
+
+def is_installed(path):
+    """Is this one of the plugins installed on this machine, by its path.
+
+    A plugin is a DLL, and loading one runs its code in this process. A
+    board is plain JSON that people send each other, and its voice settings
+    named a plugin by path, so opening a board could run a DLL from
+    anywhere, a share or a WebDAV address included. Only a plugin in the
+    folders Windows installs them to, as `installed` lists them, is loaded.
+    """
+    wanted = _same_file(path) if path else ""
+    return bool(wanted) and any(_same_file(found) == wanted
+                                for _name, found in installed())
+
+
+def by_file_name(name):
+    """The installed plugin with this file name, or "".
+
+    For a board that names its plugin by file name alone, which is how an
+    export carries it (board.for_export): the folder it came from had the
+    sender's Windows name in it. Only a bare file name is looked up, and only
+    an answer of exactly one counts; anything else and the voice runs
+    without it.
+    """
+    text = str(name or "").strip()
+    if not text or "\\" in text or "/" in text or ":" in text:
+        return ""
+    found = [path for _name, path in installed()
+             if os.path.basename(path).lower() == text.lower()]
+    return found[0] if len(found) == 1 else ""
+
+
+def plugin_name(path):
+    """What a plugin is called, from its path, for a sentence."""
+    text = str(path or "").replace("/", "\\").rstrip("\\")
+    return os.path.splitext(text.rsplit("\\", 1)[-1])[0] or "a plugin"
+
+
 class LoadFailed(RuntimeError):
     """A plugin that would not load, with a reason worth saying."""
 
@@ -75,6 +124,11 @@ def load(path):
     """
     if pedalboard is None:
         raise LoadFailed("plugin support is not installed in this copy")
+    # Before anything touches the path: even asking whether it exists would
+    # go out to a share.
+    if not is_installed(path):
+        raise LoadFailed("%s is not one of the plugins installed on this "
+                         "computer" % plugin_name(path))
     if not os.path.exists(path):
         raise LoadFailed("there is no plugin at %s" % path)
     try:

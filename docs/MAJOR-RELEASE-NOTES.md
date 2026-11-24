@@ -66,6 +66,49 @@ Plain sentences for the changelog and the release post, added by each step.
 
 ## Security and privacy
 
+- A board can only use a voice plugin that is installed on your computer. A
+  board asking for one from anywhere else, such as a network share, opens
+  with the voice running without it, and Drop Deck says so.
+- A board can no longer send your stream key to a server of its own. YouTube
+  and Facebook always go to their own address, whatever the board says, and
+  each stream key now goes only to the server it was saved for. A board
+  pointing somewhere else is stopped before it goes live, with a sentence
+  saying why, and the go live summary names the server whenever it is not
+  the platform's own.
+- Stream keys saved by 3.10.1 keep working, custom servers included. The
+  first time this version starts, each key is tied to the server your own
+  board names for it, with nothing to retype. A key your board does not name
+  still works with YouTube, Facebook and Restream; for any other server, type
+  it again once on the Video streaming page.
+- Your Icecast or SHOUTcast password now lives in Windows Credential Manager,
+  one per station, like the stream key, and leaves the board file. If Windows
+  will not keep it, it stays in the board file and Drop Deck says so once.
+- Exporting a board with its sounds leaves out your passwords, any stream
+  key, your recordings folder and the folders you last used. Your own
+  picture goes with it, beside the sounds, and the voice plugin goes by its
+  name alone: the computer that opens the board uses its own copy of that
+  plugin. The confirmation says "Passwords and your own folders were left
+  out."
+- The Ask box in Check my shot never sends your screen unless you have
+  agreed to it in that check. Before then it says "Check the shot first".
+- Uninstalling removes Drop Deck and nothing else from its folder, and the
+  installer no longer asks where to put it, so it cannot be pointed at a
+  folder such as Documents.
+- Recording to a NAS or other network folder works when you chose that
+  folder in Preferences on this computer, and the one your board already
+  records to keeps working after the update. A board from somebody else
+  naming a network or web folder records to your usual folder instead, and
+  Drop Deck says so once. Sounds kept on a network share work exactly as
+  before.
+- Where listeners connect has to be a web address starting with http or
+  https.
+- Global hotkeys can no longer be Shift plus a letter or symbol, or Ctrl plus
+  A, C, V, X, Z, Y, S, F, N, O, P or W, because every other program needs
+  those keys. A board that already has one keeps it on the pad, but it is not
+  used, and Drop Deck says which and why.
+- If Windows will not keep your AI provider key, Drop Deck now says so
+  instead of dropping it without a word.
+
 ## Sound
 
 ## Speech and keys

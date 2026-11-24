@@ -18,6 +18,7 @@ import threading
 import time
 
 from . import constants as C
+from . import secrets
 from .playlist import DropLibrary, Playlist
 from .slot import Slot
 
@@ -125,6 +126,178 @@ def _rtmp_address(value):
             text.startswith("/"):
         return ""
     return text
+
+
+def web_address(value):
+    """Where listeners are counted, out of a board file: http or https only.
+
+    It is handed to urllib, which opens `file:` and `ftp:` as readily as a
+    web page, so a board could point it at a file on this computer or a
+    server of its author's choosing. Nothing else was ever going to work in
+    it anyway: a statistics page is a web page.
+    """
+    text = str(value or "").strip()
+    try:
+        import urllib.parse
+        parts = urllib.parse.urlsplit(text)
+    except Exception:
+        return ""
+    if parts.scheme.lower() in ("http", "https") and parts.netloc:
+        return text
+    return ""
+
+
+def local_folder(value):
+    """A folder on this computer, by its whole path, or "".
+
+    For where recordings go. A board is plain JSON that people send each
+    other, and a recording folder of `\\\\somebody.example@SSL\\DavWWWRoot`
+    writes the show, microphone and all, to their server, and makes Windows
+    offer them the user's sign in on the way. So a board may only name a
+    drive letter folder here; a share, a WebDAV address or a relative path is
+    dropped and the usual folder used. Sounds on a network share are a
+    different matter and are left alone: people keep music on a NAS.
+    """
+    text = str(value or "").strip()
+    if not text or text.startswith(("\\\\", "//")):
+        return ""
+    drive, rest = os.path.splitdrive(text)
+    if not re.fullmatch(r"[A-Za-z]:", drive) or not rest.startswith(("\\", "/")):
+        return ""
+    return text
+
+
+#: What the Loaded line or the startup line says about a dropped folder.
+DROPPED_FOLDER_NOTE = ("This board asked for its recordings to go somewhere "
+                       "that is not a folder on this computer, so they go to "
+                       "your usual recordings folder")
+
+
+def network_folder(value):
+    """A folder on a share, `\\\\server\\share\\...`, or "".
+
+    Not the device namespaces `\\\\?\\` and `\\\\.\\`, which are not folders
+    anybody records into.
+    """
+    text = str(value or "").strip()
+    if not text.startswith(("\\\\", "//")) or text[2:3] in ("?", "."):
+        return ""
+    drive, _rest = os.path.splitdrive(text)
+    if drive.replace("/", "\\").strip("\\").count("\\") < 1:
+        return ""
+    return text
+
+
+#: Things about THIS computer that must never travel in a board file, kept
+#: beside the board in the settings folder: the network folders recordings
+#: were sent to from Preferences here, and whether the first start of this
+#: version has tied the stream keys 3.10.1 kept. A board is sent to people;
+#: this file is not, which is the whole of why these are not board fields.
+MACHINE_FILE = "this computer.json"
+
+
+def machine_state():
+    """What MACHINE_FILE holds, or {}. Never raises."""
+    try:
+        with open(os.path.join(config_dir(), MACHINE_FILE), "r",
+                  encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_machine_state(data):
+    """Write MACHINE_FILE. True when it landed. Never raises."""
+    path = os.path.join(config_dir(), MACHINE_FILE)
+    temp = path + ".tmp"
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=1)
+        _replace(temp, path)
+        return True
+    except Exception:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        return False
+
+
+def _folder_key(path):
+    """A folder in one spelling, from the string alone: never by asking a
+    share, which could be anybody's server."""
+    return os.path.normcase(os.path.normpath(str(path).strip()))
+
+
+def picked_record_folder(value):
+    """A network folder chosen in Preferences on this computer, or "".
+
+    The one way a share is accepted as a board's recording folder. People
+    record to a NAS, and a folder picked here is the user's own; a share
+    arriving in a board file from somebody else is accepted only if it is
+    one the user picked here themselves.
+    """
+    text = network_folder(value)
+    if not text:
+        return ""
+    wanted = _folder_key(text)
+    picked = machine_state().get("record_folders") or []
+    if any(isinstance(p, str) and _folder_key(p) == wanted for p in picked):
+        return text
+    return ""
+
+
+def remember_record_folder(value):
+    """Note a network folder chosen in Preferences, so boards may use it."""
+    text = network_folder(value)
+    if not text:
+        return False
+    state = machine_state()
+    picked = [p for p in state.get("record_folders") or []
+              if isinstance(p, str)]
+    if not any(_folder_key(p) == _folder_key(text) for p in picked):
+        picked.append(text)
+        state["record_folders"] = picked
+        return save_machine_state(state)
+    return True
+
+
+def for_export(data):
+    """A board's dict with what is the user's own left out, for an export.
+
+    An export is made to be handed to somebody. The Icecast password and a
+    stream key the credential store refused are in a board's own file so the
+    board works; in an export they would let whoever receives it broadcast as
+    the user. The recording folder and the last folders sounds and running
+    orders came from are paths with the user's name in them and mean nothing
+    on another computer. The words on the picture read from a file are a
+    path on this computer for the same reason. Every saved station is cleaned
+    the same way, because each one carries its own copy.
+    """
+    out = copy.deepcopy(data)
+
+    def clean(entry):
+        for field in ("stream_password", "video_key"):
+            if field in entry:
+                entry[field] = ""
+        for spot in (entry.get("text_places") or {}).values():
+            if isinstance(spot, dict):
+                spot["file"] = ""
+
+    clean(out)
+    for field in ("record_folder", "last_sound_dir", "last_playlist_dir"):
+        out[field] = ""
+    # The plugin by its file name alone: its folder can be under the user's
+    # own AppData, with their Windows name in it. The receiving computer
+    # finds its own copy by that name (ui._resolve_plugin_name).
+    voice = out.get("voice_settings")
+    if isinstance(voice, dict) and voice.get("plugin"):
+        voice["plugin"] = _basename(str(voice["plugin"]))
+    for station in out.get("stream_stations") or []:
+        if isinstance(station, dict):
+            clean(station)
+    return out
 
 
 def _stations(value):
@@ -835,6 +1008,19 @@ class Board:
         self.drops = DropLibrary()
         #: How many missing sounds `load` found beside the board by itself.
         self.found_beside = 0
+        #: What `load` refused out of the file, as sentences for the Loaded
+        #: line or the startup line to say once. A board is plain JSON that
+        #: people send each other, so a setting it could not keep is said,
+        #: not swallowed.
+        self.load_notes = []
+        #: The recording folder `load` refused, kept only so the first start
+        #: of this version can trust it on the user's own board. Never used
+        #: and never saved.
+        self.dropped_record_folder = ""
+        #: Station passwords that are safely in Credential Manager, as
+        #: (station, server, password). The file leaves these out; see
+        #: `secure_passwords`. Nothing here is ever written to disk.
+        self._kept_passwords = set()
         #: What `find_beside` repaired, {(kind, which): (guess, the path the
         #: file had)}.
         #: Saved back as the original, because a guess is not a fact.
@@ -1354,6 +1540,8 @@ class Board:
             data = self.to_dict()
         if paths is None:
             paths = self.sound_paths()
+        # Here, and not left to the caller, so no export can carry them.
+        data = for_export(data)
         target = os.path.abspath(target)
         stem = name or os.path.splitext(_basename(self.path or ""))[0] \
             or "Drop Deck board"
@@ -1397,6 +1585,24 @@ class Board:
             else:
                 missing.append(path)
 
+        # The picture travels the way a sound does, beside the sounds, so the
+        # export does not carry a path from this computer. One that is not
+        # there is left out rather than carried as somebody's folder.
+        pictures = {}
+        for entry in [data] + [s for s in data.get("stream_stations") or []
+                               if isinstance(s, dict)]:
+            path = entry.get("picture_file") or ""
+            if not path:
+                continue
+            key = os.path.normcase(os.path.abspath(path))
+            if key not in pictures:
+                if os.path.isfile(path):
+                    pictures[key] = destination(_basename(path))
+                    plan.append((path, pictures[key]))
+                else:
+                    pictures[key] = ""
+        picture_copies = {dest for dest in pictures.values() if dest}
+
         total = 0
         for source, _dest in plan:
             try:
@@ -1412,15 +1618,21 @@ class Board:
                 size = 0
             try:
                 done = _copy_file(source, dest, done, total, progress)
-                copied += 1
+                if dest not in picture_copies:
+                    copied += 1
             except ExportStopped:
                 raise
             except OSError:
+                done += size
+                if dest in picture_copies:
+                    for key, moved in list(pictures.items()):
+                        if moved == dest:
+                            pictures[key] = ""
+                    continue
                 # Gone or unreadable since the plan was made. One sound must
                 # not cost the whole export: it is counted as missing and
                 # the board keeps its original path for it.
                 missing.append(source)
-                done += size
                 for key, moved in list(mapping.items()):
                     if moved == dest:
                         del mapping[key]
@@ -1429,8 +1641,14 @@ class Board:
             moved = mapping.get(os.path.normcase(os.path.abspath(path)), path)
             return _portable(moved, target)
 
-        payload = json.dumps(_map_sound_paths(copy.deepcopy(data), carried),
-                             indent=2)
+        out = _map_sound_paths(copy.deepcopy(data), carried)
+        for entry in [out] + [s for s in out.get("stream_stations") or []
+                              if isinstance(s, dict)]:
+            if entry.get("picture_file"):
+                moved = pictures.get(
+                    os.path.normcase(os.path.abspath(entry["picture_file"])), "")
+                entry["picture_file"] = _portable(moved, target) if moved else ""
+        payload = json.dumps(out, indent=2)
         temp = board_file + ".tmp"
         with open(temp, "w", encoding="utf-8") as handle:
             handle.write(payload)
@@ -1486,10 +1704,124 @@ class Board:
                 self.video_host = _rtmp_address(self.video_host)
                 if self.video_server not in C.VIDEO_SERVER_ORDER:
                     self.video_server = "youtube"
+                # For the reason in `load`: a saved station is the same
+                # JSON, and it must not be the way round that rule.
+                if self.video_server in C.RTMP_FIXED_ADDRESS:
+                    self.video_host = C.RTMP_INGEST[self.video_server]
+                self.stream_stats_url = web_address(self.stream_stats_url)
                 if self.picture not in C.PICTURE_SOURCES:
                     self.picture = C.PICTURE_CARD
                 return True
         return False
+
+    # ------------------------------------------------------------ passwords --
+    def _password_entries(self):
+        """Every (name, server, password, station dict or None) on the board,
+        the live one first."""
+        yield (self.stream_name or "", self.stream_host or "",
+               self.stream_password or "", None)
+        for station in self.stream_stations:
+            yield (station.get("stream_name") or "",
+                   station.get("stream_host") or "",
+                   station.get("stream_password") or "", station)
+
+    def password_kept(self, name, host, password):
+        """Is this password in Credential Manager, so the file leaves it out."""
+        return bool(password) and ((name or "", secrets.host_key(host),
+                                    password) in self._kept_passwords)
+
+    def secure_passwords(self):
+        """Station passwords into Credential Manager, and back out of it.
+
+        Called by the window, never by `load` or `save`, so reading and
+        writing a board file never touches the credential store.
+
+        A password still in the board file is stored under its station's
+        name, tied to its server the way a stream key is, and the file leaves
+        it out from the next save on, but only once Windows has said it kept
+        it. A board whose file has none is given back the one kept for its
+        station, when it is for the same server: a board naming somebody's
+        station and pointing at another server gets nothing.
+
+        One name holds one password. A second, different one under a name
+        already claimed here stays in the file rather than overwrite it.
+
+        Returns (stored, refused): whether one was newly kept, so the file
+        needs writing, and whether Windows refused one, which stays in the
+        file and has to be said.
+        """
+        stored = refused = False
+        claimed = {}
+        for name, host, password, station in list(self._password_entries()):
+            if not host.strip():
+                continue
+            spot = (name, secrets.host_key(host))
+            if not password:
+                password, _held, _tied = secrets.key_for(
+                    name, host, secrets.PASSWORD_PREFIX)
+                if not password:
+                    continue
+                if station is None:
+                    self.stream_password = password
+                else:
+                    station["stream_password"] = password
+                self._kept_passwords.add(spot + (password,))
+                claimed.setdefault(name, spot + (password,))
+                continue
+            if claimed.get(name, spot + (password,)) != spot + (password,):
+                continue
+            claimed[name] = spot + (password,)
+            if spot + (password,) in self._kept_passwords:
+                continue
+            if secrets.store(name, password, secrets.PASSWORD_PREFIX, host):
+                self._kept_passwords.add(spot + (password,))
+                stored = True
+            else:
+                refused = True
+        return stored, refused
+
+    def tie_kept_keys(self):
+        """Tie each stream key kept by 3.10.1 to the server this board names
+        for its station. Returns how many were tied.
+
+        For the first start of this version only, on the board that opens at
+        startup (ui._trust_own_board_once). 3.10.1 kept keys by station name
+        alone, so a key saved for a custom server, Mixcloud through somebody's
+        own RTMP relay for instance, has nothing written down to say where it
+        goes, and holding it back would refuse a working show at the top of
+        the first one after updating. The user's own board is the best
+        witness there is to where each key belongs. A key already tied is
+        left alone, and the live station is asked before its saved copies.
+        """
+        tied = 0
+        seen = set()
+        entries = [(self.stream_name, self.video_server, self.video_host)]
+        entries += [(s.get("stream_name"),
+                     s.get("video_server") or self.video_server,
+                     s.get("video_host") or self.video_host)
+                    for s in self.stream_stations]
+        for name, server, host in entries:
+            name = name or ""
+            if name in seen:
+                continue
+            seen.add(name)
+            address = (C.RTMP_INGEST[server] if server in C.RTMP_FIXED_ADDRESS
+                       else _rtmp_address(host))
+            if not address:
+                continue
+            key = secrets.fetch(name)
+            if key and not secrets.tied_to(name) and secrets.store(
+                    name, key, host=address):
+                tied += 1
+        return tied
+
+    def _station_for_file(self, station):
+        """A saved station as it is written: without a password that is kept."""
+        out = dict(station)
+        if self.password_kept(out.get("stream_name"), out.get("stream_host"),
+                              out.get("stream_password")):
+            out["stream_password"] = ""
+        return out
 
     def save_station(self, name=None):
         """Remember the current settings under their own name.
@@ -1563,7 +1895,10 @@ class Board:
             "stream_port": int(self.stream_port),
             "stream_mount": self.stream_mount,
             "stream_user": self.stream_user,
-            "stream_password": self.stream_password,
+            # Left out once Credential Manager has it. See secure_passwords.
+            "stream_password": ("" if self.password_kept(
+                self.stream_name, self.stream_host, self.stream_password)
+                else self.stream_password),
             "stream_format": self.stream_format,
             "stream_bitrate": int(self.stream_bitrate),
             "stream_name": self.stream_name,
@@ -1603,7 +1938,8 @@ class Board:
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
-            "stream_stations": list(self.stream_stations),
+            "stream_stations": [self._station_for_file(station)
+                                for station in self.stream_stations],
             "mic_channel": self.mic_channel,
             "cue_sound": str(self.cue_sound),
             "cue_level_db": float(self.cue_level_db),
@@ -1801,7 +2137,7 @@ class Board:
         board.stream_description = data.get("stream_description") or ""
         board.stream_genre = data.get("stream_genre") or ""
         board.stream_url = data.get("stream_url") or ""
-        board.stream_stats_url = data.get("stream_stats_url") or ""
+        board.stream_stats_url = web_address(data.get("stream_stats_url"))
         # A board file is not a trusted document, so every one of these falls
         # back rather than becoming a setting that explodes at air time.
         board.video_server = (data.get("video_server")
@@ -1822,6 +2158,13 @@ class Board:
             board.stream_server = "icecast"
             board.stream_host = ""
         board.video_host = _rtmp_address(board.video_host)
+        # YouTube and Facebook have ONE ingest each, and the address box is
+        # locked to it in Preferences. The file's own address was kept all
+        # the same, so a board saying "youtube" with somebody's server in
+        # video_host sent the stream key there while the go live summary
+        # said YouTube Live (Mark, 24 November 2026). Never from the file.
+        if board.video_server in C.RTMP_FIXED_ADDRESS:
+            board.video_host = C.RTMP_INGEST[board.video_server]
         if not board.video_host:
             board.video_host = C.RTMP_INGEST.get(board.video_server, "")
         picture = data.get("picture")
@@ -1866,7 +2209,17 @@ class Board:
         fmt = data.get("record_format")
         board.record_format = fmt if fmt in C.RECORD_FORMAT_KEYS else "mp3"
         board.record_bitrate = _stream_bitrate(data.get("record_bitrate", 192))
-        board.record_folder = data.get("record_folder") or ""
+        wanted = data.get("record_folder") or ""
+        # A share only when it was picked in Preferences on this computer.
+        board.record_folder = (local_folder(wanted)
+                               or picked_record_folder(wanted))
+        if wanted and not board.record_folder:
+            # Kept aside, never used, for the first start of this version to
+            # trust on the user's own board (ui._trust_own_board_once).
+            board.dropped_record_folder = str(wanted)
+            # Never the path itself: it is the board author's text, and read
+            # aloud it is a run of backslashes.
+            board.load_notes.append(DROPPED_FOLDER_NOTE)
         try:
             board.stop_presses = max(C.MIN_STOP_PRESSES,
                                      min(C.MAX_STOP_PRESSES,
@@ -1899,6 +2252,19 @@ class Board:
         settings = data.get("voice_settings")
         board.voice_settings = dict(settings) if isinstance(settings, dict) else {}
         board.stream_stations = _stations(data.get("stream_stations"))
+        # An exported board carries its picture beside its sounds, written
+        # relative to itself the way the sounds are.
+        picture_base = os.path.dirname(os.path.abspath(path))
+
+        def beside(held):
+            if isinstance(held, str) and _is_relative(held):
+                return os.path.normpath(os.path.join(picture_base, held))
+            return held
+
+        board.picture_file = beside(board.picture_file)
+        for entry in board.stream_stations:
+            if entry.get("picture_file"):
+                entry["picture_file"] = beside(entry["picture_file"])
         # A board written before stations existed still has one set up, and
         # losing it on upgrade would be the worst kind of small betrayal.
         if not board.stream_stations and board.stream_host:

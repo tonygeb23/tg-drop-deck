@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 
 from . import constants as C
+from . import secrets
 from . import streamout
 
 
@@ -134,21 +135,27 @@ def where_it_goes(settings, video):
         # An RTMP address has the stream key in it, so it goes through
         # host_label. YouTube and Facebook have one address each and it is
         # not the user's to choose, so naming the platform is enough.
-        platform = streamout.server_label(settings.get("server", "")) or ""
+        server = settings.get("server", "")
+        platform = streamout.server_label(server) or ""
         channel = (settings.get("video_name") or "").strip()
+        # **The address is said whenever it is not the platform's own.**
+        # Mark, 24 November 2026: a board saying "youtube" and naming his
+        # server summarised as "YouTube Live" while the key went to him.
+        own = (server in C.RTMP_FIXED_ADDRESS and host
+               and secrets.same_host(host, C.RTMP_INGEST.get(server, "")))
+        where = "" if own or not host else streamout.host_label(host)
         if channel and platform:
-            return "%s, on %s" % (channel, platform)
+            said = "%s, on %s" % (channel, platform)
+            return "%s, %s" % (said, where) if where else said
         if channel:
-            return channel
+            return "%s, %s" % (channel, where) if where else channel
         if not platform:
             return streamout.host_label(host)
         # YouTube and Facebook have ONE address each and it is not the user's
         # to choose, so the address tells them nothing they can act on and
         # reads as a scary URL on the way to air. A custom server's address
         # is the one useful fact about it, so that one keeps it.
-        if settings.get("server", "") in C.RTMP_FIXED_ADDRESS:
-            return platform
-        return "%s, %s" % (platform, streamout.host_label(host))
+        return "%s, %s" % (platform, where) if where else platform
     name = (settings.get("name") or "").strip()
     where = "%s%s" % (host, settings.get("mount", "") or "")
     if name:
@@ -351,7 +358,11 @@ def check(settings, board, audio_running=True, mic_open=False,
                           C.FIX_AUDIO))
 
     # ------------------------------------------------------------- the faults
-    if video and not settings.get("password"):
+    if video and settings.get("key_held"):
+        # Before "no stream key", which would be untrue: there is one, and it
+        # belongs to another server.
+        notes.append(Note(STOP, held_key_sentence(settings), C.FIX_VIDEO))
+    elif video and not settings.get("password"):
         notes.append(Note(STOP, "There is no stream key for this station",
                           C.FIX_VIDEO))
     if not video and host and not settings.get("password"):
@@ -377,6 +388,53 @@ def check(settings, board, audio_running=True, mic_open=False,
     if warning:
         notes.append(Note(WARN, warning, ""))
     return Preflight(board.live_to, lines, notes)
+
+
+def video_address(board):
+    """Where the video side really goes: the platform's own ingest for
+    YouTube and Facebook, whatever the board file says."""
+    server = getattr(board, "video_server", "")
+    if server in C.RTMP_FIXED_ADDRESS:
+        return C.RTMP_INGEST[server]
+    return getattr(board, "video_host", "") or ""
+
+
+def video_key(board):
+    """The stream key Ctrl+B would use, as (key, held, tied, untied).
+
+    One answer for the streamer and for the key box in Preferences, so the
+    box always shows the key in force (the 3.8.4 lesson). `held` and `tied`
+    are `secrets.key_for`'s; `untied` is a key kept before keys were tied,
+    about to be used with a platform's own ingest. The board's own
+    `video_key`, the fallback for a credential store that refused the
+    write, is used only when nothing is kept for the station at all.
+    """
+    kept, held, tied = secrets.key_for(getattr(board, "stream_name", "") or "",
+                                       video_address(board),
+                                       trusted=C.RTMP_PLATFORM_INGESTS)
+    key = kept or ("" if held else (getattr(board, "video_key", "") or ""))
+    return key, held, tied, bool(kept) and not tied
+
+
+def held_key_sentence(settings):
+    """Why the station's stream key is not going where Ctrl+B points.
+
+    `settings["key_held"]` is what `secrets.key_for` said. A key is handed
+    only to the server it was kept for, because a board file names its
+    station and its server and either can be somebody else's choice.
+    """
+    host = streamout.host_label(settings.get("host", "")) or "this server"
+    if settings.get("key_held") == secrets.FOR_ANOTHER_HOST:
+        tied = (streamout.host_label(settings.get("key_tied_to", ""))
+                or "another server")
+        return ("The stream key saved for this station is for %s, not %s, so "
+                "it is not being sent there. If %s is right, type the key "
+                "again on the Video streaming page" % (tied, host, host))
+    return ("The stream key saved for this station was kept before Drop Deck "
+            "noted which server each key is for, and %s is not YouTube, "
+            "Facebook or Restream, so it is not being sent there. If %s is "
+            "right, type the key again on the Video streaming page"
+            % (host, host))
 
 
 def going_live_warning(board):

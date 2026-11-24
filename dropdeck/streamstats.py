@@ -151,7 +151,20 @@ def candidates(settings):
     return out
 
 
+def is_web(url):
+    """http or https with a host. Nothing else is ever asked: urllib opens
+    `file:` and `ftp:` as readily as a web page, and a board file chooses
+    the address."""
+    try:
+        parts = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    return parts.scheme.lower() in ("http", "https") and bool(parts.netloc)
+
+
 def _get(url):
+    if not is_web(url):
+        raise ValueError("not a web address")
     request = urllib.request.Request(url, headers={
         "User-Agent": "%s/%s" % (C.APP_NAME, C.APP_VERSION),
         "Accept": "application/json, text/plain, */*"})
@@ -228,6 +241,9 @@ def fetch(settings):
     places = candidates(settings)
     if not places:
         return Stats(error="No server is set up yet, so there is nobody to ask")
+    if not all(is_web(place) for place in places):
+        return Stats(error="Where listeners connect has to be a web address "
+                           "starting with http or https, so nothing was asked")
     mount_wanted = (settings.get("mount") or "").strip()
     if mount_wanted and not mount_wanted.startswith("/"):
         mount_wanted = "/" + mount_wanted

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import urllib.parse
 from ctypes import wintypes
 
 #: One target per station, so removing a station removes its key and a user
@@ -84,25 +85,73 @@ def available():
 #: It is also billable, which a stream key is not.
 VISION_PREFIX = "TG Drop Deck vision key: "
 
+#: The third: an Icecast or SHOUTcast source password, one per station. It
+#: lived in board.json until the major release after 3.10.1, while the guide
+#: already said it was in Credential Manager. Anybody holding it can take
+#: over the station's mount, so it is the same kind of secret as a stream key.
+PASSWORD_PREFIX = "TG Drop Deck station password: "
+
+#: What Credential Manager shows beside each one, so nobody has to guess.
+_COMMENTS = {
+    TARGET_PREFIX: "A live stream key. Safe to delete.",
+    VISION_PREFIX: "A shot check key for an AI service. Safe to delete.",
+    PASSWORD_PREFIX: "A radio station source password. Safe to delete.",
+}
+
+#: The user name every credential was written with through 3.10.1. A key
+#: carrying it was kept before keys were tied to a server, so where it
+#: belongs is not known.
+_UNTIED = "stream"
+
+#: In front of the server a credential belongs to, in its user name, which
+#: Credential Manager shows: "for rtmps://a.rtmps.youtube.com/live2".
+_TIED = "for "
+
 
 def target_for(station, prefix=TARGET_PREFIX):
     return prefix + (station or "the current station")
 
 
-def store(station, key, prefix=TARGET_PREFIX):
-    """Keep a key. True when it really went into the credential store."""
+def host_key(address):
+    """An address in one spelling, for comparing two of them.
+
+    Case is dropped from the scheme and the host name only, and a trailing
+    slash goes, because those are the differences somebody retyping an
+    address makes without meaning a different server.
+    """
+    text = str(address or "").strip().rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        return text.lower()
+    if parts.scheme and parts.netloc:
+        return urllib.parse.urlunsplit((parts.scheme.lower(),
+                                        parts.netloc.lower(), parts.path,
+                                        parts.query, ""))
+    return text.lower()
+
+
+def same_host(one, other):
+    """Do two addresses name the same server. Two empty ones do not."""
+    return bool(host_key(one)) and host_key(one) == host_key(other)
+
+
+# The three things this module asks of Windows. Kept apart from everything
+# that decides what to do, so a test can stand a dictionary in for them and
+# never touch the user's real Credential Manager.
+
+def _write(target, text, user, comment):
+    """One credential written. True when Windows kept it."""
     dll = _advapi()
     if dll is None:
         return False
-    if not key:
-        return forget(station, prefix)
-    blob = key.encode("utf-16-le")
+    blob = text.encode("utf-16-le")
     buffer = (ctypes.c_byte * len(blob)).from_buffer_copy(blob)
     credential = _CREDENTIAL()
     credential.Flags = 0
     credential.Type = _CRED_TYPE_GENERIC
-    credential.TargetName = target_for(station, prefix)
-    credential.Comment = "A live stream key. Safe to delete."
+    credential.TargetName = target
+    credential.Comment = comment
     credential.CredentialBlobSize = len(blob)
     credential.CredentialBlob = ctypes.cast(
         ctypes.pointer(buffer), ctypes.POINTER(ctypes.c_byte))
@@ -110,7 +159,7 @@ def store(station, key, prefix=TARGET_PREFIX):
     credential.AttributeCount = 0
     credential.Attributes = None
     credential.TargetAlias = None
-    credential.UserName = "stream"
+    credential.UserName = user
     try:
         dll.CredWriteW.argtypes = [ctypes.POINTER(_CREDENTIAL), wintypes.DWORD]
         dll.CredWriteW.restype = wintypes.BOOL
@@ -119,28 +168,29 @@ def store(station, key, prefix=TARGET_PREFIX):
         return False
 
 
-def fetch(station, prefix=TARGET_PREFIX):
-    """The key for one station, or an empty string. Never raises."""
+def _read(target):
+    """(text, user name) of one credential, or None. Never raises."""
     dll = _advapi()
     if dll is None:
-        return ""
+        return None
     pointer = ctypes.POINTER(_CREDENTIAL)()
     try:
         dll.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
                                   wintypes.DWORD,
                                   ctypes.POINTER(ctypes.POINTER(_CREDENTIAL))]
         dll.CredReadW.restype = wintypes.BOOL
-        ok = dll.CredReadW(target_for(station, prefix), _CRED_TYPE_GENERIC, 0,
+        ok = dll.CredReadW(target, _CRED_TYPE_GENERIC, 0,
                            ctypes.byref(pointer))
         if not ok or not pointer:
-            return ""
+            return None
         try:
             record = pointer.contents
             size = int(record.CredentialBlobSize)
+            user = record.UserName or ""
             if size <= 0:
-                return ""
+                return "", user
             raw = ctypes.string_at(record.CredentialBlob, size)
-            return raw.decode("utf-16-le", "replace")
+            return raw.decode("utf-16-le", "replace"), user
         finally:
             try:
                 dll.CredFree.argtypes = [ctypes.c_void_p]
@@ -148,11 +198,11 @@ def fetch(station, prefix=TARGET_PREFIX):
             except Exception:
                 pass
     except Exception:
-        return ""
+        return None
 
 
-def forget(station, prefix=TARGET_PREFIX):
-    """Remove a station's key. True when there is no longer one there."""
+def _delete(target):
+    """One credential removed. False only when Windows could not be asked."""
     dll = _advapi()
     if dll is None:
         return False
@@ -160,12 +210,86 @@ def forget(station, prefix=TARGET_PREFIX):
         dll.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
                                     wintypes.DWORD]
         dll.CredDeleteW.restype = wintypes.BOOL
-        dll.CredDeleteW(target_for(station, prefix), _CRED_TYPE_GENERIC, 0)
+        dll.CredDeleteW(target, _CRED_TYPE_GENERIC, 0)
     except Exception:
         return False
+    return True
+
+
+def store(station, key, prefix=TARGET_PREFIX, host=""):
+    """Keep a key. True when it really went into the credential store.
+
+    `host` is the server the key is for, and it is written beside the key.
+    A board file is plain JSON that people send each other, and a station is
+    found by NAME, so a board naming somebody's station could otherwise send
+    their key wherever the board pointed. `key_for` hands a key only to the
+    server it was kept for.
+    """
+    if not key:
+        return forget(station, prefix)
+    user = (_TIED + host_key(host)) if host_key(host) else _UNTIED
+    return _write(target_for(station, prefix), key, user,
+                  _COMMENTS.get(prefix, _COMMENTS[TARGET_PREFIX]))
+
+
+def fetch(station, prefix=TARGET_PREFIX):
+    """The key for one station, or an empty string. Never raises."""
+    found = _read(target_for(station, prefix))
+    return found[0] if found else ""
+
+
+def tied_to(station, prefix=TARGET_PREFIX):
+    """The server a kept key belongs to, or "" when nobody wrote one down."""
+    found = _read(target_for(station, prefix))
+    if not found or not str(found[1]).startswith(_TIED):
+        return ""
+    return str(found[1])[len(_TIED):]
+
+
+#: Why `key_for` held a key back.
+FOR_ANOTHER_HOST = "another host"
+NOT_TIED = "not tied"
+
+
+def key_for(station, host, prefix=TARGET_PREFIX, trusted=()):
+    """The kept key for a station, if it may go to `host`.
+
+    Returns (key, held, tied): the key to use, or "" when there is none or
+    it was held back; why it was held back, `FOR_ANOTHER_HOST` or
+    `NOT_TIED`, or ""; and the server it is tied to, "" when it is not.
+
+    **A key goes only to the server it was kept for.** One kept before keys
+    were tied (3.10.1 and earlier) goes only to an address in `trusted`,
+    which is the platforms' own ingests, and the caller ties it there the
+    first time it is used. Anywhere else it is held back until the user
+    types it again for that server, because the board file asking is not
+    the user asking.
+
+    An empty station name is not a wildcard: it is one more name, and the
+    key kept under it is tied to its server like any other.
+    """
+    key = fetch(station, prefix)
+    if not key:
+        return "", "", ""
+    tied = tied_to(station, prefix)
+    if tied:
+        if same_host(tied, host):
+            return key, "", tied
+        return "", FOR_ANOTHER_HOST, tied
+    if any(same_host(host, place) for place in trusted):
+        return key, "", ""
+    return "", NOT_TIED, ""
+
+
+def forget(station, prefix=TARGET_PREFIX):
+    """Remove a station's key. True when there is no longer one there."""
+    if not _delete(target_for(station, prefix)):
+        return False
     # Deleting something that was never there is a success, not a failure:
-    # what was asked for was that no key is kept, and none is.
-    return not fetch(station)
+    # what was asked for was that no key is kept, and none is. Asked under
+    # the SAME prefix: this checked for a stream key whatever was being
+    # forgotten, so forgetting a vision key reported on something else.
+    return not fetch(station, prefix)
 
 
 def redact(key):
