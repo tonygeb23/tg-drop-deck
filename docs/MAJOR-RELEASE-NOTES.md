@@ -108,6 +108,23 @@ Plain sentences for the changelog and the release post, added by each step.
   used, and Drop Deck says which and why.
 - If Windows will not keep your AI provider key, Drop Deck now says so
   instead of dropping it without a word.
+- Going live to YouTube, Facebook or any rtmps server now checks that the
+  server really is who it says it is before your stream key is sent. Before,
+  anybody on the same network who could pretend to be YouTube could collect
+  your key. If the check fails, nothing is sent, Drop Deck does not go on
+  air, and it says "the server's certificate could not be checked, so
+  nothing was sent and your stream key never left this machine".
+- Check my stream key and Ctrl+B now use the same check, so a key that
+  passes is one that will go out, and a server whose certificate fails is
+  named as the problem rather than your key.
+- Secure connections trust the root certificates Windows has and also the
+  list Firefox uses, so a computer whose Windows has not yet fetched
+  YouTube's or Facebook's root is not refused at the top of a show. Update
+  checks use the same list.
+- A video server that takes the connection and then never answers, plain
+  rtmp such as Restream included, can no longer freeze Drop Deck. It is
+  given up on after ten seconds with "did not answer", and pressing Ctrl+B
+  again while it is connecting stops it at once.
 
 ## Sound
 

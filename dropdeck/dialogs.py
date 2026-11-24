@@ -2190,6 +2190,15 @@ class SettingsDialog(wx.Dialog):
             return ("Could not reach %s. Something on your network may be "
                     "blocking it. On a work or school network, that is the "
                     "usual reason." % label)
+        if answer.outcome == rtmpcheck.BAD_CERT:
+            # The same words going live uses (rtmpsrelay.CERT_REFUSED), so
+            # the button and Ctrl+B say one thing about one server. And it
+            # says the KEY is not the problem, because a refusal next to a
+            # stream key reads as a wrong key unless told otherwise.
+            return ("The server's certificate could not be checked, so your "
+                    "stream key was not sent and nothing was broadcast. The "
+                    "key may be fine: something on this network may be "
+                    "answering in place of %s." % label)
         if answer.outcome == rtmpcheck.NO_TLS:
             return ("Reached %s but the secure connection failed. Something "
                     "on your network may be blocking it." % label)

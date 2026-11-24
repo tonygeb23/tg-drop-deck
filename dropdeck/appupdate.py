@@ -29,7 +29,6 @@ import hashlib
 import json
 import os
 import shutil
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -37,6 +36,7 @@ import time
 import urllib.request
 
 from . import constants as C
+from . import rtmpcheck
 
 # Public half of the TG Studios installer-update key. Baked in; it must never
 # change once shipped or every installed copy silently stops seeing updates.
@@ -109,7 +109,7 @@ def _fetch(url, limit=MAX_BYTES, progress=None):
     req = urllib.request.Request(url, headers={
         "User-Agent": "%s/%s" % (C.APP_NAME.replace(" ", ""),
                                  C.APP_VERSION)})
-    ctx = ssl.create_default_context()
+    ctx = rtmpcheck.tls_context()        # Windows' roots and certifi's
     out = bytearray()
     with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
         try:

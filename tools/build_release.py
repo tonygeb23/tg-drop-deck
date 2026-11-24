@@ -140,6 +140,12 @@ def build_executable():
         # package, which PyInstaller finds only when told to collect the lot.
         # It is what plays an m4a; without it that whole family is refused.
         "--collect-all", "av",
+        # Mozilla's root authorities, which every secure connection trusts
+        # alongside the Windows store (rtmpcheck.tls_context): without the
+        # file, a machine whose store has not fetched YouTube's root yet is
+        # refused at Ctrl+B. The hook would collect it anyway; this says so,
+        # and the selftest fails a build without it.
+        "--collect-data", "certifi",
         "--collect-all", "mutagen",
         # The voice processing: JUCE DSP and the VST3 host, both
         # native code beside the package. Without it a built copy has

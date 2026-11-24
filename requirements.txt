@@ -23,3 +23,7 @@ opencv-python-headless
 # ships was built with no libfreetype, so drawtext is not there either.
 # Measured 8 September 2026. About 3 MB once _avif is excluded at build time.
 Pillow
+# Mozilla's root certificates, trusted alongside the Windows store for every
+# secure connection, because Windows fetches roots only when asked through
+# its own TLS, and Python cannot ask. See rtmpcheck.tls_context.
+certifi

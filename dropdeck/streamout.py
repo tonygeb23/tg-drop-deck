@@ -75,6 +75,9 @@ REFUSED = (
     "there is no server address",
     "not an rtmp one",
     "no sound ever reached",
+    # A server that cannot prove who it is will not prove it on the next
+    # attempt either. See rtmpsrelay.CERT_REFUSED.
+    "certificate could not be checked",
 )
 
 #: Errors that are a typo when Ctrl+B is pressed and a network when they turn
@@ -1089,19 +1092,30 @@ class RtmpDestination(Destination):
                 "sent. It has to start with rtmp or rtmps")
         return base.rstrip("/") + "/" + key
 
+    #: Set by the Streamer before `connect`, so a stop pressed while
+    #: connecting is noticed at once. A stand-in destination without it is
+    #: simply never asked.
+    stop_event = None
+    #: What PyAV writes into instead of opening the address itself, and for
+    #: an rtmps address the relay behind it. See dropdeck/rtmpsrelay.py.
+    _relay = None
+    _link = None
+
     # -------------------------------------------------------------- opening --
     def connect(self):
         url = self.url()
         parsed = urllib.parse.urlparse(self.settings.get("host", ""))
         if parsed.hostname:
             _resolve(parsed.hostname, parsed.port)
+        target = self._target(url)
         try:
             # No rtmp_live here: it is an INPUT option, for playing a stream
             # rather than publishing one, and FFmpeg says "Some options were
             # not used" if it is passed on the way out.
-            container = av.open(url, mode="w", format="flv",
+            container = av.open(target, mode="w", format="flv",
                                 timeout=C.STREAM_TIMEOUT)
         except Exception as exc:
+            self._close_link()
             raise SinkError(_explain_rtmp(exc, self.settings)) from exc
         try:
             video = self._add_video(container)
@@ -1114,6 +1128,7 @@ class RtmpDestination(Destination):
                 container.close()
             except Exception:
                 pass
+            self._close_link()
             raise EncoderError("the video encoder would not start: %s"
                                % exc) from exc
 
@@ -1134,14 +1149,86 @@ class RtmpDestination(Destination):
                 container.close()
             except Exception:
                 pass
-            raise SinkError(_explain_rtmp(exc, self.settings,
-                                          _server_error(log))) from exc
+            relay, link = self._relay, self._link
+            self._close_link()
+            # The relay's own reason first when it had one: a server that
+            # took the TLS connection and then never answered is "did not
+            # answer", which FFmpeg, seeing only its loopback close, would
+            # have reported as a refusal. And a deadline that ran out is
+            # said as one, because FFmpeg reports an interrupt as "Immediate
+            # exit requested", which _explain_rtmp hears as a refused key.
+            said = relay.fault if relay is not None and relay.fault else ""
+            if not said and link is not None and link.timed_out:
+                exc = TimeoutError("timed out")
+            raise SinkError(said or _explain_rtmp(
+                exc, self.settings, _server_error(log))) from exc
 
+        for part in (self._relay, self._link):
+            if part is not None:
+                part.established()
         self._container = container
         self._audio = audio
         self._video = video
         self.frame_size = int(audio.codec_context.frame_size or 1024)
         return self
+
+    def _target(self, url):
+        """What PyAV writes into: FFmpeg's own RTMP client, through ctypes.
+
+        **Never the address itself any more.** PyAV opens an address with
+        the GIL held for the whole of the handshake, so a server that took
+        the connection and said nothing froze every thread in the app, the
+        window included, with no timeout at all. Through `FFmpegLink` the GIL
+        is free and the attempt has a deadline and hears Stop. The server
+        receives the same bytes; tests/test_review_rtmps.py compares them.
+        """
+        from . import rtmpsrelay
+        if urllib.parse.urlparse(url).scheme.lower() == "rtmps":
+            # **The certificate is checked BEFORE FFmpeg is let near the
+            # server**, by Python, against the same trust Check my stream
+            # key uses. FFmpeg over rtmps checked nothing, and PyAV gives no
+            # way to make it. A refusal here has sent nothing past the TLS
+            # handshake, so the key never left the machine.
+            return self._secure(url)
+        self._link = rtmpsrelay.FFmpegLink(url, stop=self.stop_event)
+        return self._link
+
+    def _secure(self, url):
+        """The checked connection, and what PyAV should write into instead."""
+        from . import rtmpsrelay
+        try:
+            relay = rtmpsrelay.Relay(url, stop=self.stop_event)
+        except rtmpsrelay.RelayError as exc:
+            raise SinkError(exc.sentence) from None
+        self._relay = relay.start()
+        try:
+            relay.wait_ready()
+        except rtmpsrelay.RelayError as exc:
+            self._close_link()
+            raise SinkError(exc.sentence) from None
+        self._link = rtmpsrelay.FFmpegLink(relay.local_url,
+                                           stop=self.stop_event)
+        return self._link
+
+    def _let_out(self):
+        """A write stuck inside FFmpeg (the watchdog calls from another
+        thread): interrupt it, and drop the relay's sockets, rather than wait
+        for a lock behind a write that can never finish."""
+        link, relay = self._link, self._relay
+        if link is not None and link.busy:
+            link.abort()
+            if relay is not None:
+                relay.abort()
+
+    def _close_link(self):
+        """FFmpeg's side first, so its goodbye goes out, then the relay."""
+        self._let_out()
+        link, self._link = self._link, None
+        relay, self._relay = self._relay, None
+        if link is not None:
+            link.close()
+        if relay is not None:
+            relay.close()
 
     def _add_video(self, container):
         """The video stream, falling back if the chosen encoder will not open.
@@ -1359,7 +1446,11 @@ class RtmpDestination(Destination):
     def close(self):
         container, self._container = self._container, None
         if container is None:
+            self._close_link()
             return
+        # See _let_out: the trailer below would otherwise queue behind a
+        # write that is stuck for good.
+        self._let_out()
         try:
             if self._video is not None:
                 for packet in self._video.encode(None):
@@ -1373,6 +1464,7 @@ class RtmpDestination(Destination):
             container.close()
         except Exception:
             pass
+        self._close_link()
         self._audio = None
         self._video = None
 
@@ -1883,6 +1975,12 @@ class Streamer:
                                       overlay_=self.overlay,
                                       watcher=self.watcher,
                                       frame_tap=self.frame_tap)
+        # Handed over as an attribute rather than through destination_for,
+        # whose stand-ins in the tests take only what they take.
+        try:
+            destination.stop_event = self._stop
+        except Exception:
+            pass
         destination.connect()
         self._destination = destination
         self._resampler = _Resampler(self.bus.samplerate,
@@ -1923,6 +2021,11 @@ class Streamer:
             except (SinkError, EncoderError) as exc:
                 self.error = str(exc)
                 self._teardown()
+                if self._stop.is_set():
+                    # Stopped part way through connecting, which a secure
+                    # connection now notices at once. Coming off air is not
+                    # a failure to announce.
+                    break
                 # **Asked on EVERY attempt, not only the first.** The guard
                 # was written for a wrong password and then consulted once,
                 # so a key the platform refused on the way back from a

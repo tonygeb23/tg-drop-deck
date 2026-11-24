@@ -55,6 +55,7 @@ of a status bar.
 """
 from __future__ import annotations
 
+import os
 import random
 import socket
 import ssl
@@ -99,6 +100,57 @@ TIMEOUT = getattr(C, "STREAM_TIMEOUT", 10)
 #: which program is knocking.
 FLASH_VER = "FMLE/3.0 (compatible; %s/%s)" % (C.APP_NAME.replace(" ", ""),
                                               C.APP_VERSION)
+
+
+def certificate_bundle():
+    """certifi's list of root authorities, or "" if this copy has none."""
+    try:
+        import certifi
+        path = certifi.where()
+    except Exception:
+        return ""
+    return path if path and os.path.isfile(path) else ""
+
+
+def trust_context(system=True, bundle=""):
+    """A context that checks the chain and the name, from the Windows store,
+    a bundle file, or both: a root in EITHER is trusted.
+
+    Apart from `tls_context` so a test can build one with the Windows side
+    left out and prove the bundle alone is enough.
+    """
+    if not system:
+        if not bundle:
+            raise ValueError("there is nothing to take root authorities from")
+        return ssl.create_default_context(cafile=bundle)
+    context = ssl.create_default_context()
+    if bundle:
+        context.load_verify_locations(cafile=bundle)
+    return context
+
+
+def tls_context():
+    """What counts as a server we may hand a stream key to.
+
+    **One function, asked by this check, by going live** (`rtmpsrelay.Relay`)
+    **and by the update check**, so they can never disagree about a server:
+    a key this passes is a key Ctrl+B sends, and a certificate this refuses
+    is one Ctrl+B refuses too. Until the relay existed the live stream
+    checked nothing at all, so a check that passed said nothing about the
+    broadcast.
+
+    **The Windows store AND certifi.** Windows fills its store with roots on
+    demand, and only when something asks Windows itself to check a
+    certificate. Chrome and Firefox carry their own lists and never ask, so a
+    machine used only through them may simply not have YouTube's or
+    Facebook's root yet, and Python reads the store as it stands: it cannot
+    make Windows go and fetch one. That would be a refusal at the top of a
+    show, on a server that is perfectly genuine. certifi is Mozilla's list,
+    so a root in either is trusted. The Windows side stays because it holds
+    what a company or an antivirus program has added on purpose. The name is
+    still checked against the address either way.
+    """
+    return trust_context(system=True, bundle=certificate_bundle())
 
 
 # --------------------------------------------------------------------- AMF0
@@ -235,6 +287,11 @@ REFUSED = "refused"
 NO_SERVER = "no-server"
 NO_ROUTE = "no-route"
 NO_TLS = "no-tls"
+#: The secure connection was made and the server's certificate did not check
+#: out: not trusted, for another name, or expired. Apart from NO_TLS because
+#: it is not the network being in the way, it is something answering for the
+#: platform that cannot prove it is the platform, and the key was not sent.
+BAD_CERT = "bad-certificate"
 NO_ANSWER = "no-answer"
 BAD_ADDRESS = "bad-address"
 NO_KEY = "no-key"
@@ -298,7 +355,7 @@ class _Session:
                                              self.timeout)
         self.sock.settimeout(self.timeout)
         if self.scheme == "rtmps":
-            context = ssl.create_default_context()
+            context = tls_context()
             self.sock = context.wrap_socket(self.sock,
                                             server_hostname=self.host)
 
@@ -531,6 +588,8 @@ def verify(base_url, key, timeout=TIMEOUT):
     try:
         try:
             session.open()
+        except ssl.SSLCertVerificationError as exc:
+            return Result(BAD_CERT, detail=exc.verify_message or str(exc))
         except ssl.SSLError as exc:
             return Result(NO_TLS, detail=str(exc))
         except OSError as exc:

@@ -234,6 +234,16 @@ def selftest():  # noqa: C901
         problems.append("video recording does not work in this build: %r"
                         % exc)
     try:
+        # Going live over rtmps drives FFmpeg's own DLL through ctypes, found
+        # by asking Windows which one PyAV loaded, and checks certificates
+        # against the Windows store. Both are things a frozen build can lose
+        # with nothing raised until somebody presses Ctrl+B on YouTube.
+        from dropdeck import rtmpsrelay as _relay
+        notes.append(_relay.selftest())
+    except Exception as exc:
+        problems.append("secure streaming cannot work in this build, so "
+                        "YouTube and Facebook would be refused: %r" % exc)
+    try:
         from dropdeck import overlay as _overlay
         if not _overlay.available():
             problems.append("text cannot be drawn in this build: %s"

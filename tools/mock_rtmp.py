@@ -43,6 +43,18 @@ Use `MockRTMP.spawn()`, which handles the subprocess:
 Run it on its own to watch a real encoder connect:
 
     python tools/mock_rtmp.py
+
+**It can be an RTMPS server too**, for `tests/test_review_rtmps.py`: give
+`spawn` a certificate and a key and every connection is TLS first. It keeps a
+note of whether the handshake completed and how many bytes arrived after it,
+which is how a test proves that a certificate the app refused got nothing,
+not even the RTMP handshake. The certificate comes from a throwaway authority
+the test makes in a temp folder, and that authority is trusted only by the
+test's own SSL context, never by Windows.
+
+It also keeps every command whole (`calls`, the decoded AMF0 values), not
+just its name, so the same stream sent two ways can be compared field by
+field: tcUrl, app, flashVer, the publish name.
 """
 from __future__ import annotations
 
@@ -52,6 +64,7 @@ import json
 import os
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -179,13 +192,15 @@ class _Message:
 class _Connection:
     """Parses one publisher, and keeps what it sends."""
 
-    def __init__(self, sock, server):
+    def __init__(self, sock, server, record=None):
         self.sock = sock
         self.server = server
         self.in_chunk_size = DEFAULT_CHUNK_SIZE
         self._partial = {}          # chunk stream id -> _Message being built
         self._previous = {}         # chunk stream id -> last header, for type 1/2/3
         self._buf = b""
+        #: What this one connection saw. See MockRTMP._new_record.
+        self.record = record if record is not None else server._new_record()
 
     # ------------------------------------------------------------ plumbing --
     def _recv(self, n):
@@ -193,9 +208,35 @@ class _Connection:
             chunk = self.sock.recv(65536)
             if not chunk:
                 raise ConnectionError("publisher went away")
+            self.record["received"] += len(chunk)
             self._buf += chunk
         out, self._buf = self._buf[:n], self._buf[n:]
+        if self._digest is not None:
+            self._note(out)
         return out
+
+    #: Every byte the client sent after its handshake, as a fingerprint and
+    #: the first few kilobytes, so two ways of sending the same stream can be
+    #: compared byte for byte. The handshake itself is random by design.
+    #: Bytes PARSED, not bytes received: this stops reading at FCUnpublish,
+    #: and how much of what came after it one recv happened to pick up is
+    #: timing, not the stream.
+    _digest = None
+    HEAD = 8192
+
+    def _note(self, data):
+        self._digest.update(data)
+        self.record["stream_bytes"] += len(data)
+        head = self.record["stream_head"]
+        if len(head) < 2 * self.HEAD:
+            self.record["stream_head"] = head + data[:self.HEAD
+                                                     - len(head) // 2].hex()
+        self.record["stream_sha256"] = self._digest.hexdigest()
+
+    def _start_noting(self):
+        import hashlib
+        self._digest = hashlib.sha256()
+        self.record.update(stream_bytes=0, stream_head="", stream_sha256="")
 
     def _send(self, data):
         self.sock.sendall(data)
@@ -298,6 +339,7 @@ class _Connection:
     # -------------------------------------------------------------- serving --
     def serve(self):
         self.handshake()
+        self._start_noting()
         while True:
             message = self.read_chunk()
             if message is None:
@@ -311,6 +353,15 @@ class _Connection:
             return True
         if message.type_id in (AUDIO, VIDEO, DATA_AMF0):
             self.server.on_media(message)
+            kind = {AUDIO: "audio", VIDEO: "video", DATA_AMF0: "data"}
+            self.record["counts"][kind[message.type_id]] += 1
+            drop = self.server.drop_after
+            if (drop and self.record["index"] == 0
+                    and self.record["counts"]["audio"]
+                    + self.record["counts"]["video"] >= drop):
+                # The connection going away mid show, for the reconnect.
+                self.record["dropped"] = True
+                return False
             return True
         if message.type_id == COMMAND_AMF0:
             return self._command(message)
@@ -323,6 +374,23 @@ class _Connection:
         except Exception:
             return True
         self.server.commands.append(name)
+        # The whole command, decoded, and its length, so a test can compare
+        # one stream sent two ways field by field.
+        values = [name, txn]
+        try:
+            while offset < len(message.data):
+                value, offset = amf0_decode(message.data, offset)
+                values.append(value)
+        except Exception:
+            values.append("<undecodable>")
+        self.server.calls.append(values)
+        self.record["calls"].append(values)
+        self.record["lengths"].append([name, message.length])
+
+        if name == "publish" and self.server.close_after == "publish":
+            # What YouTube does with a key it will not take: says nothing
+            # at all and hangs up. Measured 20 September 2026.
+            return False
 
         if name == "connect":
             self._send_message(WINDOW_ACK_SIZE, struct.pack(">I", 2500000), 2)
@@ -347,6 +415,7 @@ class _Connection:
 
         if name == "publish":
             self.server.publishing = True
+            self.record["publishing"] = True
             self._send_message(COMMAND_AMF0, (
                 amf0_string("onStatus") + amf0_number(0) + amf0_null()
                 + amf0_object({"level": "status",
@@ -382,7 +451,9 @@ class MockRTMP:
         container = av.open(io.BytesIO(server.flv()))
     """
 
-    def __init__(self, host="127.0.0.1", port=0, app="live", key="test"):
+    def __init__(self, host="127.0.0.1", port=0, app="live", key="test",
+                 tls=None, connections=1, close_after="", drop_after=0,
+                 stall=False):
         self.host = host
         self.app = app
         self.key = key
@@ -395,10 +466,43 @@ class MockRTMP:
         self._lock = threading.Lock()
         self._tags = []
         self.commands = []
+        self.calls = []
         self.publishing = False
         self.error = ""
         self._thread = None
         self._stop = threading.Event()
+        #: A server side SSLContext, or None for plain RTMP.
+        self.tls = tls
+        #: How many publishers to take, one after another. More than one is
+        #: for a reconnect: `drop_after` media tags into the FIRST, it hangs
+        #: up, and the second is the same client coming back.
+        self.connections = max(1, int(connections))
+        self.close_after = close_after
+        self.drop_after = int(drop_after or 0)
+        #: Take the connection and then say nothing at all, ever: a server
+        #: that never finishes a handshake.
+        self.stall = stall
+        self.records = []
+
+    def _say_nothing(self, conn, record):
+        """Read and ignore, until the client gives up or we are told to."""
+        while not self._stop.is_set():
+            try:
+                data = conn.recv(4096)
+            except socket.timeout:
+                continue
+            if not data:
+                break
+            record["received"] += len(data)
+
+    def _new_record(self):
+        record = {"index": len(self.records), "tls": "none", "received": 0,
+                  "calls": [], "lengths": [], "publishing": False,
+                  "dropped": False, "stream_bytes": 0, "stream_head": "",
+                  "stream_sha256": "",
+                  "counts": {"audio": 0, "video": 0, "data": 0}}
+        self.records.append(record)
+        return record
 
     @property
     def url(self):
@@ -429,13 +533,37 @@ class MockRTMP:
             self._thread.join(timeout=3)
 
     def _accept(self):
-        try:
-            conn, _addr = self._sock.accept()
-        except Exception:
-            return
+        for _ in range(self.connections):
+            try:
+                conn, _addr = self._sock.accept()
+            except Exception:
+                return
+            self._serve_one(conn)
+
+    def _serve_one(self, conn):
+        record = self._new_record()
         conn.settimeout(15)
         try:
-            _Connection(conn, self).serve()
+            if self.stall and self.tls is None:
+                record["tls"] = "stalled"
+                self._say_nothing(conn, record)
+                return
+            if self.tls is not None:
+                try:
+                    conn = self.tls.wrap_socket(conn, server_side=True)
+                except (ssl.SSLError, OSError) as exc:
+                    # The client refused us, which is the point of the test
+                    # that sets this up. Nothing past here was received.
+                    record["tls"] = "refused: %s" % (
+                        getattr(exc, "reason", "") or exc)
+                    return
+                record["tls"] = "completed"
+                if self.stall:
+                    # The secure connection is made and then the RTMP
+                    # handshake is never answered.
+                    self._say_nothing(conn, record)
+                    return
+            _Connection(conn, self, record).serve()
         except (ConnectionError, OSError, socket.timeout):
             pass                      # a publisher hanging up is the normal end
         except Exception as exc:      # a parser fault is worth reporting
@@ -502,12 +630,23 @@ class Result:
 
     def __init__(self, payload, flv):
         self.commands = payload.get("commands", [])
+        self.calls = payload.get("calls", [])
         self.publishing = bool(payload.get("publishing"))
         self.counts = payload.get("counts", {})
         self.error = payload.get("error", "")
         self.audio_timestamps = payload.get("audio_timestamps", [])
         self.video_timestamps = payload.get("video_timestamps", [])
+        self.video_arrivals = payload.get("video_arrivals", [])
+        #: One record per connection: "tls" ("none", "completed",
+        #: "refused: ...", "stalled"), "received" bytes after any handshake,
+        #: "calls", "lengths", "counts", "publishing", "dropped".
+        self.connections = payload.get("connections", [])
         self.flv = flv
+
+    @property
+    def tls(self):
+        """How the first connection's TLS went, or "" if nobody connected."""
+        return self.connections[0]["tls"] if self.connections else ""
 
     @property
     def audio(self):
@@ -526,9 +665,15 @@ class Result:
 class _Spawned:
     """A `MockRTMP` running in its own interpreter."""
 
-    def __init__(self, port, seconds):
+    def __init__(self, port, seconds, cert=None, key=None, connections=1,
+                 close_after="", drop_after=0, stall=False):
         self.port = port
         self.seconds = seconds
+        self.cert, self.key = cert, key
+        self.connections = connections
+        self.close_after = close_after
+        self.drop_after = drop_after
+        self.stall = stall
         self._proc = None
         self._dir = None
         self._result = None
@@ -541,10 +686,21 @@ class _Spawned:
         self._dir = tempfile.mkdtemp(prefix="mock-rtmp-")
         self._flv = os.path.join(self._dir, "capture.flv")
         self._json = os.path.join(self._dir, "summary.json")
+        extra = []
+        if self.cert and self.key:
+            extra += ["--cert", self.cert, "--key", self.key]
+        if self.connections != 1:
+            extra += ["--connections", str(self.connections)]
+        if self.close_after:
+            extra += ["--close-after", self.close_after]
+        if self.drop_after:
+            extra += ["--drop-after", str(self.drop_after)]
+        if self.stall:
+            extra += ["--stall"]
         self._proc = subprocess.Popen(
             [sys.executable, "-u", os.path.abspath(__file__), "--serve",
              "--port", str(self.port), "--seconds", str(self.seconds),
-             "--flv", self._flv, "--summary", self._json],
+             "--flv", self._flv, "--summary", self._json] + extra,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         line = self._proc.stdout.readline().strip()
         if line != "READY":
@@ -592,35 +748,65 @@ def _free_port():
     return port
 
 
-def spawn(port=None, seconds=20):
-    """A mock RTMP server in its own process. See the note at the top."""
-    return _Spawned(port or _free_port(), seconds)
+def spawn(port=None, seconds=20, cert=None, key=None, connections=1,
+          close_after="", drop_after=0, stall=False):
+    """A mock RTMP server in its own process. See the note at the top.
+
+    With `cert` and `key` (PEM files) it is an RTMPS server. `connections`,
+    `close_after` ("publish": hang up without answering, the way YouTube
+    refuses a key), `drop_after` (media tags into the first connection) and
+    `stall` (take the connection and never answer) are for the failure paths.
+    """
+    return _Spawned(port or _free_port(), seconds, cert=cert, key=key,
+                    connections=connections, close_after=close_after,
+                    drop_after=drop_after, stall=stall)
 
 
 MockRTMP.spawn = staticmethod(spawn)
 
 
-def _serve(port, seconds, flv_path, summary_path):   # pragma: no cover - child
-    server = MockRTMP(port=port)
+def _serve(port, seconds, flv_path, summary_path, cert=None, key=None,
+           connections=1, close_after="", drop_after=0,
+           stall=False):                               # pragma: no cover - child
+    tls = None
+    if cert and key:
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(cert, key)
+    server = MockRTMP(port=port, tls=tls, connections=connections,
+                      close_after=close_after, drop_after=drop_after,
+                      stall=stall)
+    arrivals = []
+    keep = server.on_media
+
+    def on_media(message):
+        # When each video message arrived, by this clock, which is what a
+        # viewer's player would see: a perfect average with bursts in it is
+        # still a choppy picture.
+        if message.type_id == VIDEO:
+            arrivals.append(time.monotonic())
+        keep(message)
+
+    server.on_media = on_media
     server.start()
     print("READY", flush=True)
     deadline = time.time() + seconds
-    # Finish early once a publisher has been and gone, so a test is not held
-    # up by the whole timeout after the stream has closed.
-    seen = False
+    # Finish early once every connection it was told to take has been and
+    # gone, so a test is not held up by the whole timeout after the stream
+    # has closed, or after a client refused the certificate.
     while time.time() < deadline:
         time.sleep(0.1)
-        if server.publishing:
-            seen = True
-        if seen and not server._thread.is_alive():
+        if not server._thread.is_alive():
             break
     with open(flv_path, "wb") as handle:
         handle.write(server.flv())
     with open(summary_path, "w", encoding="utf-8") as handle:
         json.dump({"commands": server.commands,
+                   "calls": server.calls,
                    "publishing": server.publishing,
                    "counts": server.counts(),
                    "error": server.error,
+                   "connections": server.records,
+                   "video_arrivals": arrivals,
                    "audio_timestamps": server.timestamps(AUDIO),
                    "video_timestamps": server.timestamps(VIDEO)}, handle)
     server.stop()
@@ -634,10 +820,19 @@ def main():                                    # pragma: no cover - by hand
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--flv", default="")
     parser.add_argument("--summary", default="")
+    parser.add_argument("--cert", default="", help="PEM certificate: RTMPS")
+    parser.add_argument("--key", default="", help="PEM private key: RTMPS")
+    parser.add_argument("--connections", type=int, default=1)
+    parser.add_argument("--close-after", default="")
+    parser.add_argument("--drop-after", type=int, default=0)
+    parser.add_argument("--stall", action="store_true")
     args = parser.parse_args()
 
     if args.serve:
-        _serve(args.port, args.seconds, args.flv, args.summary)
+        _serve(args.port, args.seconds, args.flv, args.summary,
+               cert=args.cert, key=args.key, connections=args.connections,
+               close_after=args.close_after, drop_after=args.drop_after,
+               stall=args.stall)
         return
 
     with MockRTMP(port=args.port) as server:
