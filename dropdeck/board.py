@@ -1441,8 +1441,14 @@ class Board:
     # ------------------------------------------------------------------- io --
     # ------------------------------------------------------------ stations --
     def station_settings(self):
-        """The station that is set up right now, as a saved station would be."""
-        return {field: getattr(self, field) for field in STATION_FIELDS}
+        """The station that is set up right now, as a saved station would be.
+
+        Copies. `text_places` is a dict of dicts, so a station saved by
+        reference went on changing every time the words on the picture were
+        edited, and the board changed with it whenever the station did.
+        """
+        return {field: copy.deepcopy(getattr(self, field))
+                for field in STATION_FIELDS}
 
     def station_names(self):
         return [s.get("stream_name", "") for s in self.stream_stations]
@@ -1463,7 +1469,8 @@ class Board:
                     # behaved as audio whatever the user had chosen.
                     if value is None:
                         continue
-                    setattr(self, field, value)
+                    # A copy, for the reason in station_settings.
+                    setattr(self, field, copy.deepcopy(value))
                 self.stream_port = _stream_port(self.stream_port)
                 self.stream_bitrate = _stream_bitrate(self.stream_bitrate)
                 if self.live_to not in C.LIVE_TO:

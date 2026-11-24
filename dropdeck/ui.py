@@ -7,6 +7,7 @@ everything that happens says so out loud.
 
 from __future__ import annotations
 
+import copy
 import ctypes
 import datetime
 import os
@@ -56,7 +57,7 @@ from .dialogs import (ColoursDialog, CueSheetDialog, GoLiveDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
                       StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
-                      audio_file_dialog, key_label)
+                      audio_file_dialog, key_label, AppKey)
 from .engine import probe
 from . import micdiag
 from . import micinput
@@ -503,6 +504,41 @@ def _folder_words(path):
     """The folder a file is in, by its own name only."""
     folder = os.path.basename(os.path.dirname(os.path.abspath(path or "")))
     return folder or "its folder"
+
+
+#: What belongs to the studio rather than to a board: the sound cards, the
+#: microphone, the send and the sources. Since opening a board moves the app
+#: onto ITS cards and its send, a board that brings none of its own (File,
+#: New, the demo pack, an old bank being imported) takes these over from the
+#: board it replaces. Otherwise Ctrl+N would move the show onto the Windows
+#: default card and drop a call going out of the send.
+STUDIO_FIELDS = (
+    "device_name", "device_hostapi", "bank_devices",
+    "mic_device_name", "mic_device_hostapi", "mic_channel", "mic_gain_db",
+    "mic_monitor", "mic_output_name", "mic_output_hostapi",
+    "send_on", "send_device_name", "send_device_hostapi", "send_gain_db",
+    "send_minus", "send_monitor", "sources",
+)
+
+
+def _carry_studio(before, after):
+    """Give `after` the studio `before` was using. Copies, never shares."""
+    for field in STUDIO_FIELDS:
+        setattr(after, field, copy.deepcopy(getattr(before, field)))
+
+
+#: Keys in the window's table that no menu item names, as `_hotkey_map`
+#: describes them. Each completes a sentence after the key's name.
+_KEYS_OFF_THE_MENUS = {
+    ID_VOL_SFX_DOWN: "turns the sounds down",
+    ID_VOL_SFX_UP: "turns the sounds up",
+    ID_VOL_BED_DOWN: "turns the beds down",
+    ID_VOL_BED_UP: "turns the beds up",
+    ID_VOL_PL_DOWN: "turns the playlist down",
+    ID_VOL_PL_UP: "turns the playlist up",
+    ID_CUE_SHEET: "opens the cue sheet",
+    ID_STOP_ALL_KEY: "stops everything",
+}
 
 
 def _is_typed_key(code):
@@ -3440,8 +3476,16 @@ class DropDeckFrame(wx.Frame):
         # The title is pushed from here rather than from a track change hook,
         # because set_title only sends when it differs. Saying it every tick
         # costs nothing and cannot miss a change.
-        self._push_stream_title()
-        self._keep_beds_off_the_playlist()
+        #
+        # Each in a try of its own. A timer swallows whatever its callback
+        # raises, and a raise here came BEFORE the tick, so the next track
+        # would never have been cued and nothing would have said why.
+        for step in (self._push_stream_title,
+                     self._keep_beds_off_the_playlist):
+            try:
+                step()
+            except Exception:
+                errorlog.record_current()
         try:
             self.player.tick()
         except Exception as exc:              # pragma: no cover
@@ -4260,7 +4304,10 @@ class DropDeckFrame(wx.Frame):
         self._on_settings(page=SettingsDialog.PAGE_MIC)
 
     def _apply_mic_settings(self, dialog):
-        """Move what the Microphone tab says onto the board and the mic."""
+        """Move what the Microphone tab says onto the board and the mic.
+
+        Returns (what to confirm, what went wrong or "").
+        """
         index, name, hostapi = dialog.chosen_mic_device
         out_index, out_name, out_hostapi = dialog.chosen_monitor_output
         gain_db = dialog.mic_gain_db
@@ -4292,14 +4339,24 @@ class DropDeckFrame(wx.Frame):
             self.mixer.set_monitor_device(out_index)
             self.mixer.monitor_source = getattr(self, "source_group", self.mic)
             self.warm_cache()
+        trouble = ""
         if changed_input and self._mic_open():
-            self.mic.start(device=index)
+            if self.mic.start(device=index):
+                # Opened is not yet working. See _check_mic_signal.
+                wx.CallLater(C.MIC_SIGNAL_CHECK_MS, self._check_mic_signal,
+                             self.mic.openings)
+            else:
+                # Ctrl+M's answer. It used to close the microphone that was
+                # working, leave Microphone on ticked and say "Preferences
+                # saved", so the presenter went on talking into nothing.
+                self.mic_item.Check(False)
+                trouble = self._mic_failure_line()
 
-        return ("Microphone %s, gain %+.0f decibels, monitoring %s%s"
-                % (describe_input(index), gain_db,
-                   "on" if monitoring else "off",
-                   ", through " + describe_device(out_index)
-                   if monitoring else ""))
+        return (("Microphone %s, gain %+.0f decibels, monitoring %s%s"
+                 % (describe_input(index), gain_db,
+                    "on" if monitoring else "off",
+                    ", through " + describe_device(out_index)
+                    if monitoring else "")), trouble)
 
     def segue_playlist(self, index):
         """Bring one track up and take what is on air down under it.
@@ -4414,7 +4471,13 @@ class DropDeckFrame(wx.Frame):
         self._touch()
 
     def _hotkey_map(self, exclude=None):
-        """Every key already spoken for, so the dialog can warn about clashes."""
+        """Every key already spoken for, so the dialog can warn about clashes.
+
+        The app's own keys too, as `AppKey`, which the dialog REFUSES rather
+        than warns about. They were left out, so a bank four pad could take
+        Ctrl+S, Ctrl+D, Ctrl+M or F5 with not a word said, and one of the two
+        then never worked again.
+        """
         taken = {}
         for modifiers, key_code, index in fixed_accelerators():
             slot = self.board[index]
@@ -4422,7 +4485,55 @@ class DropDeckFrame(wx.Frame):
         for slot in self.board.bank_slots(C.BANK_MISC):
             if slot.key_code and slot.index != exclude:
                 taken[(slot.key_code, slot.modifiers or 0)] = slot.display_name
+        # Last, so an app key a pad already sits on (a board from before
+        # this) is refused rather than merely warned about.
+        taken.update(self._app_key_uses())
         return taken
+
+    def _app_key_uses(self):
+        """{(key_code, modifiers): AppKey} for every key this window answers.
+
+        From the menu bar's labels and from the accelerator table, the two
+        places a key can be bound, so a key added later is covered without
+        anybody remembering to list it. The pads are not in it: they are
+        `_hotkey_map`'s own business.
+        """
+        pads = range(ID_SLOT_BASE, ID_SLOT_BASE + C.TOTAL_SLOTS)
+        uses = {}
+        named = {}
+        bar = self.GetMenuBar()
+
+        def walk(menu, title):
+            for item in menu.GetMenuItems():
+                if item.IsSeparator():
+                    continue
+                if item.GetSubMenu() is not None:
+                    walk(item.GetSubMenu(), title)
+                    continue
+                if item.GetId() in pads:
+                    continue
+                # Without its trailing dots, which a screen reader can read
+                # out one by one.
+                words = "is %s, on the %s menu" % (
+                    item.GetItemLabelText().rstrip(". "), title)
+                named.setdefault(item.GetId(), words)
+                accel = item.GetAccel()
+                if accel is not None and accel.GetKeyCode():
+                    uses.setdefault((accel.GetKeyCode(), accel.GetFlags()),
+                                    AppKey(words))
+
+        if bar is not None:
+            for position in range(bar.GetMenuCount()):
+                walk(bar.GetMenu(position), bar.GetMenuLabelText(position))
+        for entry in getattr(self, "_accelerators", None) or []:
+            command = entry.GetCommand()
+            if command in pads:
+                continue
+            uses.setdefault(
+                (entry.GetKeyCode(), entry.GetFlags()),
+                AppKey(named.get(command) or _KEYS_OFF_THE_MENUS.get(
+                    command, "is one of Drop Deck's own keys")))
+        return uses
 
     def show_slot_menu(self, slot, button, position=None):
         menu = wx.Menu()
@@ -4499,9 +4610,9 @@ class DropDeckFrame(wx.Frame):
         try:
             saved = self.board.save(path)
         except Exception as exc:
-            wx.MessageBox(f"The board could not be saved.\n\n{exc}",
-                          "Save failed", wx.OK | wx.ICON_ERROR, self)
+            self._save_failed(exc, quiet)
             return None
+        self._save_failure_said = False
         if path is not None:
             # A place somebody chose. It is the board from now on.
             self._pinned_board = None
@@ -4509,6 +4620,32 @@ class DropDeckFrame(wx.Frame):
         if not quiet:
             self.announce_help(f"Saved to {os.path.basename(saved)}")
         return saved
+
+    def _save_failed(self, exc, quiet):
+        """A save that did not work. A box when asked for, a sentence if not.
+
+        The save timer is `quiet`, and it fires in the middle of a show. A
+        box there takes the keyboard off the pads until somebody finds it and
+        closes it, so the timer SAYS it instead, once until a save works
+        again. The board stays marked as changed, so the next change tries
+        again, and nothing in it is lost while it is open.
+        """
+        if not quiet:
+            wx.MessageBox(f"The board could not be saved.\n\n{exc}",
+                          "Save failed", wx.OK | wx.ICON_ERROR, self)
+            return
+        if getattr(self, "_save_failure_said", False):
+            return
+        self._save_failure_said = True
+        # The reason, never the path: an OSError's own text carries the whole
+        # file name, which is a run of backslashes read aloud.
+        reason = ("Windows would not let Drop Deck write to it"
+                  if isinstance(exc, PermissionError)
+                  else getattr(exc, "strerror", None)
+                  or "the file could not be written")
+        self.announce("%s could not be saved: %s. Your changes are still "
+                      "here, and Ctrl+S tries again"
+                      % (self._board_said(self.board.path), reason))
 
     def _remember(self, saved):
         """Write down which board opens next time.
@@ -4546,9 +4683,9 @@ class DropDeckFrame(wx.Frame):
         try:
             saved = board.save(board.sidecar_path())
         except Exception as exc:
-            wx.MessageBox(f"The board could not be saved.\n\n{exc}",
-                          "Save failed", wx.OK | wx.ICON_ERROR, self)
+            self._save_failed(exc, quiet)
             return None
+        self._save_failure_said = False
         self._pinned_board = original
         self._remember(saved)
         self.announce("%s was changed outside Drop Deck, so it was not saved "
@@ -4724,7 +4861,11 @@ class DropDeckFrame(wx.Frame):
         fired on whichever board had taken its place. So every replacement
         comes through here: the timer is stopped, and anything not yet
         written is written to the board's OWN file now.
+
+        And none while on air, which is the same rule as changing station.
         """
+        if self._refused_on_air():
+            return False
         self._save_timer.Stop()
         board = self.board
         if not board.dirty:
@@ -4741,6 +4882,24 @@ class DropDeckFrame(wx.Frame):
             "Not saved", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING, self)
         self._window_came_back()
         return answer == wx.YES
+
+    def _refused_on_air(self):
+        """Another board while ON AIR: refused, and said. True when refused.
+
+        A board carries its own streaming setup, and the keys that take the
+        show off air ask the board where it went. Since a board now takes
+        over everything it holds, opening one mid broadcast would swap the
+        destination under a live stream, which is what Streaming location
+        refuses with these same words. A recording or a send is NOT a reason:
+        neither belongs to a destination, both are carried across a change of
+        sound cards, and a send is often running all day.
+        """
+        if not self.streaming():
+            return False
+        self.announce("You are on air. Come off air first, %s, then open "
+                      "another board"
+                      % self._destination_key(self.board.live_to))
+        return True
 
     @staticmethod
     def _new_home(name="New board"):
@@ -4815,6 +4974,8 @@ class DropDeckFrame(wx.Frame):
         return _board_words(path)
 
     def _on_new(self, _event):
+        if self._refused_on_air():
+            return
         before = self.board
         had = self._board_said(before.path)
         kept = self._has_a_file(before)
@@ -4831,10 +4992,11 @@ class DropDeckFrame(wx.Frame):
             return
         self.mixer.stop_all(fade_out=0.05)
         fresh = Board()
-        fresh.device_name = before.device_name
-        fresh.device_hostapi = before.device_hostapi
+        # The same sound cards, microphone, send and sources: an empty board
+        # is empty of SOUNDS, and the studio around it has not changed.
+        _carry_studio(before, fresh)
         home = self._give_new_home(fresh)
-        self._adopt(fresh)
+        notes = self._adopt(fresh)
         # What became of the board you had comes BEFORE the description of
         # the new one, because it is the half somebody is waiting to hear.
         said = _board_words(home)
@@ -4842,10 +5004,12 @@ class DropDeckFrame(wx.Frame):
             said += ". %s is saved and untouched" % had
         # Essential, not a pleasantry: it is the answer to "is the board I
         # had still there", and that question is why this was rewritten.
-        self.announce(said + ". Eighty empty slots. Ctrl+F12 gives this one "
-                      "a name")
+        self.announce(". ".join([said + ". Eighty empty slots. Ctrl+F12 "
+                                 "gives this one a name"] + notes))
 
     def _on_load_demo(self, _event):
+        if self._refused_on_air():
+            return
         demo = demo_board_path()
         if not os.path.exists(demo):
             wx.MessageBox("The demo pack is not installed alongside the app.",
@@ -4860,10 +5024,12 @@ class DropDeckFrame(wx.Frame):
                 return
         if not self._put_away():
             return
-        if self._load_into(demo, keep_path=False):
+        if self._load_into(demo, keep_path=False, studio_from=self.board):
             self._give_new_home(self.board, "Demo board")
 
     def _on_open(self, _event):
+        if self._refused_on_air():
+            return
         with wx.FileDialog(self, "Open board", wildcard="Boards (*.json)|*.json",
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
@@ -4884,6 +5050,8 @@ class DropDeckFrame(wx.Frame):
         return True
 
     def _on_import(self, _event):
+        if self._refused_on_air():
+            return
         with wx.FileDialog(self, "Import an old soundboard bank",
                            wildcard="Soundboard banks (*.json)|*.json",
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
@@ -4902,7 +5070,11 @@ class DropDeckFrame(wx.Frame):
             return False
         if not self._put_away():
             return False
-        if not self._load_into(path, keep_path=False):
+        # An old bank knows nothing about sound cards, so it keeps the ones
+        # in use rather than moving the show onto the Windows default. A
+        # Drop Deck board brings its own, as File, Open board does.
+        studio = self.board if kind != "drop deck" else None
+        if not self._load_into(path, keep_path=False, studio_from=studio):
             return False
         # Under the bank's own name, in a file of its own. It used to have
         # no file at all, which meant board.json, whatever was in it.
@@ -5027,14 +5199,33 @@ class DropDeckFrame(wx.Frame):
         self.announce(said)
 
     def _adopt(self, board):
-        """Make ``board`` the live one: rewire every button and every hotkey."""
+        """Make ``board`` the live one: EVERYTHING it says, not only its pads.
+
+        Through 3.10.1 this rewired the pads, the levels and the running
+        order and nothing else. The old board's sound cards, monitor card, sources,
+        send and global hotkeys went on running under the new one, its folder
+        pads were never counted (feedback 42: "it's as if the soundboard
+        forgets where the sounds are"), and the tabs, hidden pads and
+        Streaming location menu stayed as they were. Preferences then
+        compared against the board rather than the mixer, so OK changed
+        nothing. Everything a board holds is applied here now.
+
+        Nothing here opens the microphone or goes live: a board's sources and
+        send are opened the way a start opens them, and the microphone is
+        only ever opened by its key. Opening a board while ON AIR is refused
+        before this is reached (`_put_away`).
+
+        Returns the sentences worth adding to whatever announces the board.
+        """
         # A save still waiting was for the board that is leaving, and whoever
         # sent it away has dealt with that (`_put_away`). Left running, it
         # fires on the board arriving.
         timer = getattr(self, "_save_timer", None)
         if timer is not None:
             timer.Stop()
+        before = getattr(self, "board", None)
         self.board = board
+        notes = self._follow_board_cards()
         self.mixer.set_sfx_gain(board.sfx_volume)
         self.mixer.set_bed_gain(board.bed_volume)
         self.mixer.ducking = board.ducking
@@ -5054,9 +5245,89 @@ class DropDeckFrame(wx.Frame):
         self._apply_board_voice(board)
         self._playing = set()
         self._build_accelerators()
+        self.apply_sources(board.sources or [], touch=False)
+        self._follow_board_send(before)
+        if board.send_on and self.send_failed:
+            notes.append(self.send_failed)
+        self._follow_board_hotkeys()
+        # Folder pads counted and short sounds decoded, as at startup. A
+        # folder pad that was never counted said "is an empty folder".
+        self.warm_cache()
+        self._refresh_tab_titles()
+        for page in self.pages.values():
+            page.refresh_visibility()
+        self._rebuild_station_menu()
         if getattr(self, "playlist_panel", None) is not None:
             self.playlist_panel.refresh(keep=0)
         self._update_status()
+        return notes
+
+    def _follow_board_cards(self):
+        """The board's own sound cards and monitor card, if they differ.
+
+        The same calls Preferences makes, and only when something really
+        moves, because moving stops every sound and reopens the cards. The
+        stream and the send are carried across by `set_bank_devices`.
+        """
+        moved = False
+        banks = self._resolve_bank_devices()
+        if banks != self.mixer.bank_devices:
+            self.mixer.set_bank_devices(banks)
+            moved = True
+        if self.mixer.set_monitor_device(self._resolve_monitor_device()):
+            moved = True
+        if not moved:
+            return []
+        mic = getattr(self, "mic", None)
+        if mic is not None:
+            # After the move, for the reason `_on_settings` gives.
+            mic.set_output_rate(self.mixer.samplerate)
+        # A card that would not open is said, never a box: this runs inside
+        # Open, New and a reload.
+        return list(self.mixer.problems)
+
+    def _follow_board_send(self, before):
+        """The send as the board now open asks for it, on or off.
+
+        A send already going out of the same card at the same level is left
+        running, so a call carried by it does not drop for a change of board.
+        """
+        board = self.board
+        if not board.send_on:
+            self.send_failed = ""
+            self._stop_send(quiet=True)
+            return
+        send = getattr(self, "send", None)
+        if (send is not None and send.is_running and before is not None
+                and (before.send_device_name, before.send_device_hostapi,
+                     before.send_gain_db)
+                == (board.send_device_name, board.send_device_hostapi,
+                    board.send_gain_db)):
+            if board.send_monitor:
+                send.confidence.start()
+            else:
+                send.confidence.stop()
+            # What it leaves out is found by name among THIS board's sources.
+            self._sync_air_taps()
+            self._sync_send_menu()
+            return
+        self._start_send(quiet=True)
+
+    def _follow_board_hotkeys(self):
+        """This board's global hotkeys, on or off as it was saved."""
+        hotkeys = getattr(self, "hotkeys", None)
+        if hotkeys is None:
+            return
+        # The old board's combinations went on firing whatever now sat at
+        # those slots, and the new board's never registered at all.
+        self._sync_global_hotkeys()
+        if self.board.global_hotkeys_on:
+            hotkeys.start()
+        else:
+            hotkeys.stop()
+        item = getattr(self, "global_item", None)
+        if item is not None:
+            item.Check(bool(hotkeys.enabled))
 
     # ------------------------------------------------------------- sources --
     def source_rows(self):
@@ -5131,7 +5402,15 @@ class DropDeckFrame(wx.Frame):
         """
         missing = []
         for source in getattr(self, "sources", []):
-            if not source.start(self.mixer.samplerate):
+            try:
+                opened = source.start(self.mixer.samplerate)
+            except Exception:
+                # One source that raises must not cost the others, nor the
+                # watcher that brings sources back: this runs on a timer at
+                # startup, where a raise vanishes without a word.
+                errorlog.record_current()
+                opened = False
+            if not opened:
                 if source.wanted_on_air or source.wanted_monitor:
                     missing.append(source.name)
             # What the program watcher compares against, so a source that
@@ -5152,8 +5431,12 @@ class DropDeckFrame(wx.Frame):
             except Exception:
                 pass
 
-    def apply_sources(self, entries):
-        """Replace the list of sources with what the dialog came back with."""
+    def apply_sources(self, entries, touch=True):
+        """Replace the list of sources with what the dialog came back with.
+
+        `touch` False is for a board being opened, which has not changed
+        just because its own sources were put back on.
+        """
         self.stop_sources()
         self.board.sources = [dict(entry) for entry in entries]
         self.sources = [sources.Source.from_dict(entry, self.mixer.samplerate)
@@ -5166,7 +5449,8 @@ class DropDeckFrame(wx.Frame):
             group.sources = self.sources
         self.mixer.monitor_source = group
         self.start_sources()
-        self._touch()
+        if touch:
+            self._touch()
 
     def _on_source_control(self, _event=None):
         """The live one. Opens whether or not anything is set up, because
@@ -5266,9 +5550,11 @@ class DropDeckFrame(wx.Frame):
         self.announce_help("The plugin %s could not be loaded: %s"
                            % (os.path.basename(path), exc))
 
-    def _load_into(self, path, keep_path=True, board=None):
+    def _load_into(self, path, keep_path=True, board=None, studio_from=None):
         """Make the board at `path` the live one. `board` if already read.
 
+        `studio_from` is a board whose sound cards, microphone, send and
+        sources this one takes over, for a board that has none of its own.
         True if it is now the live one.
         """
         if board is None:
@@ -5281,7 +5567,9 @@ class DropDeckFrame(wx.Frame):
         self.mixer.stop_all(fade_out=0.05)
         if not keep_path:
             board.path = None
-        self._adopt(board)
+        if studio_from is not None:
+            _carry_studio(studio_from, board)
+        notes = self._adopt(board)
         # Whatever was known about a not yet named board was about the one
         # that just left. A board copied in over "New board" and reloaded
         # from disk used to be taken for ours, and Save board as removed it.
@@ -5305,6 +5593,8 @@ class DropDeckFrame(wx.Frame):
         if missing:
             tail += (". %s still missing: File, Relink missing sounds"
                      % _count(missing, "sound"))
+        for note in notes:
+            tail += ". " + note
         # The name without ".json", which is read aloud as "dot json".
         self.announce("Loaded %s, %s%s"
                       % (os.path.splitext(os.path.basename(path))[0],
@@ -7764,6 +8054,13 @@ class DropDeckFrame(wx.Frame):
         you were looking at, because a settings window that only saves the
         page you happen to be on is a settings window that loses your work.
         """
+        #: The picture as it was, so a change that has to reach a picture
+        #: already going out can be told from one that does not.
+        picture_was = self._picture_settings()
+        bitrate_was = self.board.video_bitrate
+        #: What has to be said whatever the speech level, after everything
+        #: else, so the confirmation cannot cut it off.
+        heard = []
         with SettingsDialog(self, self.board, self.mixer, mic=self.mic,
                             page=page) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
@@ -7773,13 +8070,17 @@ class DropDeckFrame(wx.Frame):
                 dialog.restore_stream()
                 self.announce_help("Voice settings put back"
                                    if undone else "Nothing changed")
-                # A station saved on the Streaming tab is a deliberate act and
-                # survives Cancel, so the board still has to reach the disk.
+                # A station saved or forgotten on the Streaming tab is a
+                # deliberate act and survives Cancel, so the menu has to show
+                # it and the board still has to reach the disk.
+                self._rebuild_station_menu()
                 if self.board.dirty:
                     self._save_timer.Start(2000, oneShot=True)
                 return
             index, name, hostapi = dialog.chosen_device
-            mic_said = self._apply_mic_settings(dialog)
+            mic_said, mic_trouble = self._apply_mic_settings(dialog)
+            if mic_trouble:
+                heard.append(mic_trouble)
             bank_devices = dialog.chosen_bank_devices
             self.board.ducking = dialog.duck_on.GetValue()
             self.board.duck_db = float(dialog.duck_db.GetValue())
@@ -7832,8 +8133,16 @@ class DropDeckFrame(wx.Frame):
             self.board.video_server = video["server"]
             self.board.video_name = video["name"]
             self.board.video_host = video["host"]
-            self.board.live_to = (C.LIVE_TO_VIDEO if video["live"]
-                                  else C.LIVE_TO_AUDIO)
+            wanted_to = C.LIVE_TO_VIDEO if video["live"] else C.LIVE_TO_AUDIO
+            if wanted_to != self.board.live_to and self.streaming():
+                # The page refuses this as it happens; this is the backstop.
+                # `live_to` is how the keys know which destination is on air,
+                # so it does not move until the show comes off.
+                heard.append("You are on air, so where the show goes did not "
+                             "change. Come off air first, %s, then change it"
+                             % self._destination_key(self.board.live_to))
+            else:
+                self.board.live_to = wanted_to
             # The stream key goes to the credential store, never to the board.
             # Only when it CANNOT be stored does it fall back to the board
             # file, and the dialog has already said so out loud by then.
@@ -7920,8 +8229,63 @@ class DropDeckFrame(wx.Frame):
         else:
             self.warm_cache()
             self.announce_help("Preferences saved. " + mic_said)
+        # "Put the microphone on air" and the microphone's own settings reach
+        # a show that is already going out. Nothing else calls these when a
+        # setting changes, so a change mid show used to wait for the next
+        # mute, solo or stream to be noticed. After the cards have moved,
+        # because moving them is what the taps have to follow.
+        self._sync_air_taps()
+        self.apply_source_mixing()
+        heard.extend(self._picture_after_settings(picture_was, bitrate_was))
+        if heard:
+            self.announce(". ".join(heard))
         self._update_status()
         self._touch()
+
+    #: The picture settings that only take effect when a picture STARTS: the
+    #: size and the frame rate are fixed on the encoder at connect.
+    _PICTURE_SIZE_KEYS = ("video_width", "video_height", "video_fps")
+
+    def _picture_after_settings(self, was, bitrate_was):
+        """Put a changed picture on the air, if one is going out. What to say.
+
+        Preferences wrote the picture to the board and stopped there, so a
+        presenter changing the camera or the card mid show changed nothing
+        going out, and nothing said so. The rebuild is the one Alt+Shift+V
+        and the colours window use, and it is safe live for the reasons in
+        CLAUDE.md: the source is told its size, the timestamps follow the
+        audio clock, and the new source is on before the old one closes.
+        """
+        if not self._picture_live():
+            return []
+        now = self._picture_settings()
+        said = []
+        look = [key for key in now if key not in self._PICTURE_SIZE_KEYS]
+        if any(now.get(key) != was.get(key) for key in look):
+            feed = self.feed()
+            try:
+                feed.rebuild()
+                feed.set_title(self._now_playing_title())
+            except Exception:
+                errorlog.record_current()
+            self._stop_framing()
+            self._start_framing()
+            kind = self.board.picture
+            label = C.PICTURE_LABELS.get(kind, kind).lower()
+            # Said off the RESULT, as set_video_source does: a camera that
+            # will not open is a card, and saying "a camera" would be untrue.
+            if feed.fallen_back or (feed.kind and feed.kind != kind):
+                said.append("Asked for %s, and a card is showing instead%s"
+                            % (label, (": %s" % feed.reason)
+                               if feed.reason else ""))
+            else:
+                said.append("%s %s" % (self._picture_verb(), label))
+        if (any(now.get(key) != was.get(key)
+                for key in self._PICTURE_SIZE_KEYS)
+                or self.board.video_bitrate != bitrate_was):
+            said.append("The new picture size and quality start the next time "
+                        "you go live or record the picture")
+        return said
 
     def _routing_summary(self):
         """What the outputs are now, in one spoken sentence."""

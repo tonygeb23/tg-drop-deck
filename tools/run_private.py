@@ -84,7 +84,53 @@ def _stub_dir():
     return base, wrapper
 
 
+def _clipboard_text():
+    """The user's clipboard text, or None. A private desktop shares the
+    clipboard with the user's own desktop (one window station), and some
+    suites copy and paste for real, so it is put back after every file."""
+    try:
+        import win32clipboard
+        win32clipboard.OpenClipboard()
+        try:
+            if win32clipboard.IsClipboardFormatAvailable(
+                    win32clipboard.CF_UNICODETEXT):
+                return win32clipboard.GetClipboardData(
+                    win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception:
+        pass
+    return None
+
+
+def _put_clipboard_back(text):
+    if text is None:
+        return
+    try:
+        import win32clipboard
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception:
+        pass
+
+
 def run_one(path, desktop, stub, wrapper, timeout):
+    import win32event
+    import win32process
+
+    saved = _clipboard_text()
+    try:
+        return _run_one(path, desktop, stub, wrapper, timeout)
+    finally:
+        if saved is not None and _clipboard_text() != saved:
+            _put_clipboard_back(saved)
+
+
+def _run_one(path, desktop, stub, wrapper, timeout):
     import win32event
     import win32process
 

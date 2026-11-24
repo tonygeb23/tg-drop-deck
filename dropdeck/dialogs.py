@@ -6,6 +6,7 @@ dialog you cannot get out of without a mouse is worse than no dialog.
 
 from __future__ import annotations
 
+import copy
 import ctypes
 import os
 import threading
@@ -37,6 +38,7 @@ from . import streamhelp
 from . import streamout
 from . import streamstats
 from . import vst
+from .board import STATION_FIELDS
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
@@ -45,6 +47,18 @@ from .slot import format_duration
 MOD_ALT = wx.ACCEL_ALT
 MOD_CTRL = wx.ACCEL_CTRL
 MOD_SHIFT = wx.ACCEL_SHIFT
+
+
+class AppKey(str):
+    """What one of the window's own keys does, as `_hotkey_map` hands it over.
+
+    A pad sharing a key with another pad is a warning, because both are the
+    user's and they may mean it. A pad on Ctrl+S, Ctrl+M or F5 is refused,
+    because one of the two then stops working and nothing says which. This type
+    is how the hotkey dialog tells the two apart. The text completes a
+    sentence after the key's name: "is Save board, on the File menu".
+    """
+
 
 _MODIFIER_KEYS = {wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT,
                   wx.WXK_RAW_CONTROL, wx.WXK_WINDOWS_LEFT, wx.WXK_WINDOWS_RIGHT}
@@ -282,6 +296,15 @@ class AssignHotkeyDialog(wx.Dialog):
             self.warning.SetLabel(
                 "%s on its own is needed to work the app. Add Ctrl, Alt or "
                 "Shift." % key_label(code, 0))
+            self._say(self.warning.GetLabel())
+            return
+        # One of the app's own keys. Refused, the way Alt+F4 is: a bank four
+        # pad on Ctrl+S took Save board away with nothing to say so.
+        used = self._taken.get((code, modifiers))
+        if not self.global_mode and isinstance(used, AppKey):
+            self.warning.SetLabel(
+                "%s %s. Pick another combination, or press Escape to leave "
+                "this one alone." % (key_label(code, modifiers), used))
             self._say(self.warning.GetLabel())
             return
 
@@ -1547,15 +1570,12 @@ class SettingsDialog(wx.Dialog):
         # STATION_FIELDS: without them, clicking a station and then Cancel
         # said "Nothing changed" and left the board pointing at another
         # station's camera, which the next Ctrl+B would then open.
-        self._stream_before = {field: getattr(self.board, field)
-                               for field in self._stream_controls()}
-        self._stream_before.update({
-            field: getattr(self.board, field)
-            for field in ("picture", "picture_file", "picture_clock",
-                          "camera", "video_width", "video_height",
-                          "video_fps", "video_bitrate", "video_server",
-                          "video_name", "video_host", "video_key",
-                          "live_to")})
+        # EVERY field a station carries, copied rather than shared. A list
+        # written out here missed the screen, the camera corner, the words on
+        # the picture and the colours, so Cancel put back half a station.
+        self._stream_before = {
+            field: copy.deepcopy(getattr(self.board, field))
+            for field in (set(STATION_FIELDS) | set(self._stream_controls()))}
         sizer.Add(self.stream_result, 0, wx.EXPAND | wx.LEFT | wx.RIGHT
                   | wx.BOTTOM, 10)
         self._refresh_stations()
@@ -1753,8 +1773,34 @@ class SettingsDialog(wx.Dialog):
                 control.SetSelection(order.index(value) if value in order
                                      else len(order) // 2)
 
+    def _on_air(self):
+        """Is the show going out to a stream right now. Asked of the frame."""
+        streaming = getattr(self.GetParent(), "streaming", None)
+        try:
+            return bool(streaming()) if callable(streaming) else False
+        except Exception:
+            return False
+
+    def _off_air_first(self, change):
+        """The sentence the On air menu says, for the same change made here."""
+        key = getattr(self.GetParent(), "_destination_key", None)
+        try:
+            key = key(self.board.live_to) if callable(key) else "Ctrl+B"
+        except Exception:
+            key = "Ctrl+B"
+        return "Come off air first, %s, then %s." % (key, change)
+
     def _on_pick_station(self, _event):
         name = self.stream_picker.GetStringSelection()
+        if self._on_air():
+            # The rule `_on_pick_station` on the frame keeps. A station loads
+            # into the board at once, so picking one here swapped the server
+            # and the destination under a live stream. The one in use is
+            # left as it is, not reloaded over what is in the boxes.
+            if name != self.board.stream_name:
+                self._refresh_stations(self.board.stream_name)
+                self._say_test(self._off_air_first("change station"))
+            return
         if not self.board.load_station(name):
             return
         self._fill_stream_fields()
@@ -2304,6 +2350,7 @@ class SettingsDialog(wx.Dialog):
             "send it here instead of to your radio station. The same choice "
             "is on the On air menu under Streaming location, where you can "
             "see which one is ticked without opening this window.")
+        self.live_to_video.Bind(wx.EVT_CHECKBOX, self._on_live_to_video)
         sizer.Add(self.live_to_video, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.picture_clock = wx.CheckBox(
@@ -2377,6 +2424,19 @@ class SettingsDialog(wx.Dialog):
         self.video_bitrate.Bind(wx.EVT_CHOICE,
                                 lambda _e: self._say_bitrate_advice())
         self._apply_platform()
+
+    def _on_live_to_video(self, event):
+        """Refused at once while on air, the way Streaming location is.
+
+        The board's `live_to` is how the keys know which destination is on
+        air, so changing it under a live stream made Ctrl+B take the radio
+        station off and Alt+Shift+B claim the video platform was live.
+        """
+        event.Skip()
+        wanted = bool(self.live_to_video.GetValue())
+        if wanted != (self.board.live_to == C.LIVE_TO_VIDEO) and self._on_air():
+            self.live_to_video.SetValue(not wanted)
+            self._say_video(self._off_air_first("change where it goes"))
 
     def _fill_picture_fields(self):
         """Put the board's picture settings into the boxes.
@@ -2492,7 +2552,9 @@ class SettingsDialog(wx.Dialog):
         # air permanently and the app would blame another program for it.
         # Preferences is exactly where somebody goes mid show, so this is
         # the one that had to be guarded rather than rewritten.
-        feed = getattr(self.frame, "picture_feed", None)
+        # GetParent: this window has no `frame`, so the guard raised and the
+        # button did nothing at all.
+        feed = getattr(self.GetParent(), "picture_feed", None)
         if feed is not None and feed.running:
             who = (feed.describe_holders() or "something").capitalize()
             self._say_picture("%s already has the camera, so it cannot be "
@@ -2809,19 +2871,26 @@ class SettingsDialog(wx.Dialog):
     def _on_vision_models(self, _event=None):
         """Ask the service what it really has, rather than trusting a list.
 
-        On the UI thread on purpose: it is one small request, the button is
-        disabled while it runs, and a Preferences page is not carrying audio.
+        On the UI thread on purpose: it is one small request, and a
+        Preferences page is not carrying audio. A flag refuses a second press
+        rather than disabling the button, because disabling the focused
+        button moves focus to the next control. See CLAUDE.md.
         """
         who = self._vision_chosen()
+        if getattr(self, "_asking_models", False):
+            self._say_line("Still asking %s for its list."
+                           % vision.PROVIDER_NAMES[who])
+            return
         key = secrets.fetch(who, secrets.VISION_PREFIX)
-        self.vision_models_get.Enable(False)
+        self._asking_models = True
         self.vision_model_note.SetLabel("Asking %s what it has..."
                                         % vision.PROVIDER_NAMES[who])
+        self._say_line(self.vision_model_note.GetLabel())
         wx.SafeYield()
         try:
             ok, got = vision.list_models(who, key)
         finally:
-            self.vision_models_get.Enable(True)
+            self._asking_models = False
         if not ok:
             self.vision_model_note.SetLabel(got)
             return
@@ -2831,6 +2900,12 @@ class SettingsDialog(wx.Dialog):
         self.vision_model_note.SetLabel(
             "%d models. Arrow through the list, or leave it empty for %s."
             % (len(got), vision.DEFAULT_MODELS.get(who, "the usual one")))
+
+    def _say_line(self, text):
+        """Speak a line through the frame, at every speech level."""
+        speak = getattr(self.GetParent(), "announce_answer", None)
+        if speak is not None:
+            speak(text)
 
     def _on_vision_forget(self, _event=None):
         who = self._vision_chosen()
@@ -3205,6 +3280,24 @@ class TrackCrossfadeDialog(wx.Dialog):
         return round(float(self.seconds.GetValue()), 2)
 
 
+def _say_through(frame, text):
+    """A line said through the frame at every speech level, if there is one."""
+    speak = getattr(frame, "announce_answer", None)
+    if callable(speak):
+        speak(text)
+
+
+def _board_changed(frame):
+    """Tell the frame the board changed, so it is saved like any other edit.
+
+    Preview sounds was written to the board and never marked, so it was
+    saved only if something else happened to change in the same session.
+    """
+    touch = getattr(frame, "_touch", None)
+    if callable(touch):
+        touch()
+
+
 def ask_text(parent, prompt, title, value=""):
     """A text prompt whose existing text is selected, ready to be typed over.
 
@@ -3442,6 +3535,7 @@ class NativePreview:
         self.on = not self.on
         if self.board is not None:
             self.board.preview_sounds = self.on
+            _board_changed(self.frame)
         if not self.on:
             self._silence()
         else:
@@ -3667,6 +3761,7 @@ class SoundBrowserDialog(wx.Dialog):
         event.Skip()
         if self.board is not None:
             self.board.preview_sounds = bool(self.preview.GetValue())
+            _board_changed(self.frame)
         if self.preview.GetValue():
             self._on_moved(_Dummy())
         else:
@@ -4151,12 +4246,14 @@ class SourceControlDialog(wx.Dialog):
         event.Skip()
 
     def _rename(self, source):
-        name = ask_text(self, "What should this source be called?",
-                        "Rename a source", source.name)
-        if name is None:
-            self._speak("Left as %s" % source.name)
-            return
-        name = name.strip()
+        # `ask_text` hands back the DIALOG, not the words. Treated as a
+        # string it raised, so F2 and the Rename button did nothing at all.
+        with ask_text(self, "What should this source be called?",
+                      "Rename a source", source.name) as asked:
+            if asked.ShowModal() != wx.ID_OK:
+                self._speak("Left as %s" % source.name)
+                return
+            name = asked.GetValue().strip()
         if not name or name == source.name:
             return
         source.name = name
@@ -5516,6 +5613,9 @@ class AskPanel(wx.Panel):
 
     def _on_ask(self, _event=None):
         if self._busy:
+            # Said, and the button left alone: disabling it moved focus to
+            # the next control. See CLAUDE.md.
+            _say_through(self.frame, "Still waiting for the answer.")
             return
         asked = self.question.GetValue().strip()
         if not asked:
@@ -5533,7 +5633,6 @@ class AskPanel(wx.Panel):
         getter = self.get_picture
         kind = self.kind
         self._busy = True
-        self.send.Enable(False)
         self._show("Asking...")
 
         def work():
@@ -5557,7 +5656,6 @@ class AskPanel(wx.Panel):
     def _done(self, asked, ok, text):
         self._busy = False
         try:
-            self.send.Enable(True)
             self._show(text)
             if ok:
                 self.history.append((asked, text))
@@ -5697,6 +5795,9 @@ class ShotCheckDialog(wx.Dialog):
 
     def _on_go(self, _event=None):
         if self._busy:
+            # Check the shot is the DEFAULT button, so disabling it handed
+            # focus and Enter to Close. A flag and a line instead.
+            _say_through(self.frame, "Still looking at the picture.")
             return
         board = self.frame.board
         key = secrets.fetch(board.vision_provider, secrets.VISION_PREFIX)
@@ -5718,7 +5819,6 @@ class ShotCheckDialog(wx.Dialog):
                 self._show("Nothing was sent.")
                 return
         self._busy = True
-        self.go.Enable(False)
         self._show("Looking at the picture. This usually takes a second or "
                    "two.")
         provider, model = board.vision_provider, board.vision_model
@@ -5755,7 +5855,6 @@ class ShotCheckDialog(wx.Dialog):
     def _done(self, ok, text):
         self._busy = False
         try:
-            self.go.Enable(True)
             self._show(text)
             self.frame.announce("Shot check: " + text.splitlines()[0]
                                 if text else "Shot check finished")
@@ -6005,6 +6104,10 @@ class ColoursDialog(wx.Dialog):
 
     def _on_describe_brand(self, _event=None):
         """Ask for a full opinion of the look, on a thread of its own."""
+        if getattr(self, "_describing", False):
+            # A flag and a line, never Disable: see CLAUDE.md on focus.
+            _say_through(self.frame, "Still looking at these colours.")
+            return
         key = secrets.fetch(self.board.vision_provider,
                             secrets.VISION_PREFIX)
         if not key:
@@ -6012,7 +6115,7 @@ class ColoursDialog(wx.Dialog):
                            "AI Provider, and put one in.")
             return
         provider, model = self.board.vision_provider, self.board.vision_model
-        self.describe_button.Enable(False)
+        self._describing = True
         self.ask._show("Looking at these colours...")
 
         def work():
@@ -6029,8 +6132,8 @@ class ColoursDialog(wx.Dialog):
                          daemon=True).start()
 
     def _brand_done(self, ok, text):
+        self._describing = False
         try:
-            self.describe_button.Enable(True)
             self.ask._show(text)
             if ok:
                 # Remembered, so a follow-up question knows what was said.
@@ -6476,6 +6579,10 @@ class SendDialog(wx.Dialog):
         very probably carrying a live call.
         """
         frame = self.frame
+        if getattr(self, "_testing", False):
+            # A flag and a line, never Disable: see CLAUDE.md on focus.
+            self._say("Still testing. It takes two seconds.")
+            return
         if getattr(frame, "streaming", lambda: False)() or \
                 getattr(frame, "recording", lambda: False)():
             self._say("Not while you are on air or recording. This puts a "
@@ -6489,7 +6596,7 @@ class SendDialog(wx.Dialog):
             self._say("Choose an output first, and then I can test it.")
             return
 
-        self.test.Enable(False)
+        self._testing = True
         self._say("Testing %s. Two seconds." % dev["name"])
         name = dev["name"]
 
@@ -6508,7 +6615,7 @@ class SendDialog(wx.Dialog):
         """Back on the UI thread with a verdict."""
         if not self:                                   # dialog already closed
             return
-        self.test.Enable(True)
+        self._testing = False
         self._say(said)
 
     def _say(self, words):
@@ -6589,6 +6696,8 @@ class CueSheetDialog(wx.Dialog):
         self.frame = parent
         self._rows = []
         self._closing = False
+        #: The keyboard map this window carries. See adopt_accelerators.
+        self.keys = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
         self.clock = wx.StaticText(self, label="")
@@ -6654,13 +6763,25 @@ class CueSheetDialog(wx.Dialog):
         Without this the pads do nothing while this window has focus, which
         would make the cue sheet the one place in the app where a key between
         you and a sound does not work.
+
+        The table raises menu events on THIS window, and nothing here was
+        bound to them, so every pad and every key was dead while the list had
+        focus. They are handed to the frame now. Escape is left out: it
+        closes this window, and forwarded it would also count towards
+        stopping everything, so closing the cue sheet and pressing Escape
+        once more would silence the show.
         """
         try:
-            entries = list(getattr(self.frame, "_accelerators", []) or [])
+            entries = [entry for entry in
+                       (getattr(self.frame, "_accelerators", []) or [])
+                       if not (entry.GetKeyCode() == wx.WXK_ESCAPE
+                               and entry.GetFlags() == wx.ACCEL_NORMAL)]
+            self.keys = entries
             if entries:
                 self.SetAcceleratorTable(wx.AcceleratorTable(entries))
         except Exception:
             pass
+        self.Bind(wx.EVT_MENU, self._forward)
 
     def _forward(self, event):
         handler = getattr(self.frame, "ProcessEvent", None)
