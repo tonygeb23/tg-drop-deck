@@ -7,6 +7,7 @@ everything that happens says so out loud.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import ctypes
 import datetime
@@ -518,6 +519,9 @@ STUDIO_FIELDS = (
     "mic_monitor", "mic_output_name", "mic_output_hostapi",
     "send_on", "send_device_name", "send_device_hostapi", "send_gain_db",
     "send_minus", "send_monitor", "sources",
+    # Whether the microphone goes out at all, which a board that kept it out
+    # of a call must not lose to Ctrl+N.
+    "stream_mic",
 )
 
 
@@ -525,6 +529,17 @@ def _carry_studio(before, after):
     """Give `after` the studio `before` was using. Copies, never shares."""
     for field in STUDIO_FIELDS:
         setattr(after, field, copy.deepcopy(getattr(before, field)))
+
+
+def _source_settings(entries):
+    """A board's sources as a running Source would describe itself.
+
+    So a board's list and the live list compare equal when they describe the
+    same sources, whatever keys the board file happened to leave out. Builds
+    the objects and opens nothing.
+    """
+    return [sources.Source.from_dict(entry).to_dict()
+            for entry in (entries or [])]
 
 
 #: Keys in the window's table that no menu item names, as `_hotkey_map`
@@ -539,6 +554,34 @@ _KEYS_OFF_THE_MENUS = {
     ID_CUE_SHEET: "opens the cue sheet",
     ID_STOP_ALL_KEY: "stops everything",
 }
+
+
+#: Keys this window answers that are in no table and on no menu, because
+#: Windows or the controls handle them: the menu bar, the menu for the pad
+#: you are on, and moving between the bank tabs. A bank four pad on one of
+#: them took it away. Each completes a sentence after the key's name.
+_KEYS_WINDOWS_ANSWERS = {
+    (wx.WXK_F10, wx.ACCEL_NORMAL): "opens the menu bar",
+    (wx.WXK_F10, wx.ACCEL_SHIFT): "opens the menu for the pad you are on",
+    (wx.WXK_WINDOWS_MENU, wx.ACCEL_NORMAL):
+        "opens the menu for the pad you are on",
+    (wx.WXK_PAGEDOWN, wx.ACCEL_CTRL): "moves to the next bank",
+    (wx.WXK_PAGEUP, wx.ACCEL_CTRL): "moves to the previous bank",
+    (wx.WXK_SPACE, wx.ACCEL_ALT): "opens the window's own menu",
+}
+
+
+def _mnemonic(label):
+    """The letter after a single & in a menu title, or "" if there is none."""
+    at = 0
+    while True:
+        at = label.find("&", at)
+        if at < 0 or at + 1 >= len(label):
+            return ""
+        if label[at + 1] == "&":
+            at += 2
+            continue
+        return label[at + 1] if label[at + 1].isalnum() else ""
 
 
 def _is_typed_key(code):
@@ -1022,7 +1065,7 @@ class DropDeckFrame(wx.Frame):
         # System-wide hotkeys. Off until the user turns them on, because while
         # they are on this app owns those combinations across the whole machine.
         self.hotkeys = globalhotkeys.GlobalHotkeys(
-            on_fire=self.trigger, on_problem=self._on_hotkey_problem)
+            on_fire=self.trigger, on_problem=self._on_hotkeys_refused)
         self._sync_global_hotkeys()
         if self.board.global_hotkeys_on:
             self.hotkeys.start()
@@ -2224,6 +2267,13 @@ class DropDeckFrame(wx.Frame):
         # rather than skipped because the last one was the same shape.
         self._accelerators_typing = None
         self._apply_accelerators()
+        # The cue sheet carries a copy of this map, so it takes the new one.
+        cue = getattr(self, "cue_window", None)
+        if cue:
+            try:
+                cue.adopt_accelerators()
+            except RuntimeError:
+                pass                     # closed in the meantime
 
         self.Bind(wx.EVT_MENU, self._on_slot_hotkey,
                   id=ID_SLOT_BASE, id2=ID_SLOT_BASE + C.TOTAL_SLOTS)
@@ -4524,7 +4574,17 @@ class DropDeckFrame(wx.Frame):
 
         if bar is not None:
             for position in range(bar.GetMenuCount()):
-                walk(bar.GetMenu(position), bar.GetMenuLabelText(position))
+                title = bar.GetMenuLabelText(position)
+                walk(bar.GetMenu(position), title)
+                # Alt plus a menu's own letter opens it. Read from the titles
+                # as they are, so a menu added or renamed is covered too.
+                letter = _mnemonic(bar.GetMenuLabel(position))
+                if letter:
+                    uses.setdefault((ord(letter.upper()), wx.ACCEL_ALT),
+                                    AppKey("opens the %s menu" % title))
+        # Keys Windows and the controls answer before any table does.
+        for key, words in _KEYS_WINDOWS_ANSWERS.items():
+            uses.setdefault(key, AppKey(words))
         for entry in getattr(self, "_accelerators", None) or []:
             command = entry.GetCommand()
             if command in pads:
@@ -4792,6 +4852,12 @@ class DropDeckFrame(wx.Frame):
             version = now or (UNREADABLE_VERSION, path)
             if version == getattr(self, "_seen_board_version", None):
                 return
+            if self._modal_open():
+                # Preferences, or another window over this board, writes its
+                # values onto whichever board is open when it closes. Not
+                # marked as seen: it is looked at again once that closes.
+                self._board_check_waiting = True
+                return
             self._seen_board_version = version
             quiet = (not board.dirty and not self.going_anywhere()
                      and not self.streaming() and not self._mic_open()
@@ -4812,6 +4878,16 @@ class DropDeckFrame(wx.Frame):
             self._load_into(path, board=fresh)
         except Exception:
             errorlog.record_current()
+
+    def _modal_open(self):
+        """Is a window open over the board that will write to it on OK."""
+        if getattr(self, "_settings_open", False):
+            return True
+        try:
+            return any(isinstance(window, wx.Dialog) and window.IsModal()
+                       for window in wx.GetTopLevelWindows())
+        except Exception:
+            return False
 
     def _on_save_as(self, _event):
         with wx.FileDialog(self, "Save board as", wildcard="Boards (*.json)|*.json",
@@ -5213,9 +5289,11 @@ class DropDeckFrame(wx.Frame):
         Nothing here opens the microphone or goes live: a board's sources and
         send are opened the way a start opens them, and the microphone is
         only ever opened by its key. Opening a board while ON AIR is refused
-        before this is reached (`_put_away`).
+        before this is reached (`_put_away`). A send that is running is never
+        stopped by a change of board, and mute and solo are carried across.
 
-        Returns the sentences worth adding to whatever announces the board.
+        Returns the sentences worth adding to whatever announces the board,
+        so that nothing said here is cut off by the "Loaded" line after it.
         """
         # A save still waiting was for the board that is leaving, and whoever
         # sent it away has dealt with that (`_put_away`). Left running, it
@@ -5223,8 +5301,10 @@ class DropDeckFrame(wx.Frame):
         timer = getattr(self, "_save_timer", None)
         if timer is not None:
             timer.Stop()
-        before = getattr(self, "board", None)
         self.board = board
+        # A save failure said about the last board says nothing about this
+        # one, and its own first failure must be heard.
+        self._save_failure_said = False
         notes = self._follow_board_cards()
         self.mixer.set_sfx_gain(board.sfx_volume)
         self.mixer.set_bed_gain(board.bed_volume)
@@ -5245,11 +5325,13 @@ class DropDeckFrame(wx.Frame):
         self._apply_board_voice(board)
         self._playing = set()
         self._build_accelerators()
-        self.apply_sources(board.sources or [], touch=False)
-        self._follow_board_send(before)
-        if board.send_on and self.send_failed:
-            notes.append(self.send_failed)
-        self._follow_board_hotkeys()
+        notes.extend(self._follow_board_sources())
+        notes.extend(self._follow_board_send())
+        # With the sources and the send in place, so mute, solo and this
+        # board's "Put the microphone on air" decide what goes out.
+        self._sync_air_taps()
+        self.apply_source_mixing()
+        notes.extend(self._follow_board_hotkeys())
         # Folder pads counted and short sounds decoded, as at startup. A
         # folder pad that was never counted said "is an empty folder".
         self.warm_cache()
@@ -5269,6 +5351,11 @@ class DropDeckFrame(wx.Frame):
         moves, because moving stops every sound and reopens the cards. The
         stream and the send are carried across by `set_bank_devices`.
         """
+        # A card the board names and this machine does not have resolves to
+        # None, which is the Windows default, and nothing used to say so: a
+        # board from a co-host's machine moved the sound and the monitor with
+        # not a word. Said here, for the Loaded line to carry.
+        notes = self._cards_not_here()
         moved = False
         banks = self._resolve_bank_devices()
         if banks != self.mixer.bank_devices:
@@ -5277,47 +5364,94 @@ class DropDeckFrame(wx.Frame):
         if self.mixer.set_monitor_device(self._resolve_monitor_device()):
             moved = True
         if not moved:
-            return []
+            return notes
         mic = getattr(self, "mic", None)
         if mic is not None:
             # After the move, for the reason `_on_settings` gives.
             mic.set_output_rate(self.mixer.samplerate)
         # A card that would not open is said, never a box: this runs inside
         # Open, New and a reload.
-        return list(self.mixer.problems)
+        return notes + list(self.mixer.problems)
 
-    def _follow_board_send(self, before):
-        """The send as the board now open asks for it, on or off.
+    def _cards_not_here(self):
+        """A sentence for each card the board names that is not plugged in."""
+        board = self.board
+        said = []
+        if board.device_name and self._resolve_device() is None:
+            said.append("This board plays through %s, which is not here, so "
+                        "it is playing through the Windows default"
+                        % board.device_name)
+        for bank, spec in sorted((board.bank_devices or {}).items()):
+            name = (spec or {}).get("name")
+            if name and resolve_device(spec) is None:
+                said.append("%s goes to %s, which is not here, so it is on the "
+                            "main output" % (board.bank_name(bank), name))
+        if board.mic_output_name and self._resolve_monitor_device() is None:
+            said.append("What you hear was set to %s, which is not here, so "
+                        "it is the same as the soundboard"
+                        % board.mic_output_name)
+        return said
 
-        A send already going out of the same card at the same level is left
-        running, so a call carried by it does not drop for a change of board.
+    def _follow_board_sources(self):
+        """This board's sources, opened once, keeping mute and solo.
+
+        A list that matches the one running is left running: rebuilding it
+        dropped every capture for a moment and lost mute and solo, which live
+        on the source objects, so a source muted on a call came back on the
+        air after Ctrl+N. A different list is built afresh, and any source
+        with the same NAME as one running keeps its mute and solo.
+
+        Returns what to say about the ones that would not open.
+        """
+        wanted = self.board.sources or []
+        running = getattr(self, "sources", None)
+        if running is not None and _source_settings(wanted) == [
+                source.to_dict() for source in running]:
+            return []
+        self.apply_sources(wanted, touch=False, quiet=True,
+                           keep_from=running or [])
+        said = getattr(self, "_sources_trouble", "")
+        return [said] if said else []
+
+    def _follow_board_send(self):
+        """The send, across a change of board. What to say about it.
+
+        **A running send is never stopped by a board change.** It is very
+        often carrying a call, and a board is not a reason to drop one, so it
+        carries on as it is and the Loaded line says so. With none running
+        and the board's send on, it starts exactly as it does at startup,
+        and says the startup line's sentence.
         """
         board = self.board
-        if not board.send_on:
-            self.send_failed = ""
-            self._stop_send(quiet=True)
-            return
         send = getattr(self, "send", None)
-        if (send is not None and send.is_running and before is not None
-                and (before.send_device_name, before.send_device_hostapi,
-                     before.send_gain_db)
-                == (board.send_device_name, board.send_device_hostapi,
-                    board.send_gain_db)):
-            if board.send_monitor:
-                send.confidence.start()
-            else:
-                send.confidence.stop()
+        if send is not None and send.is_running:
             # What it leaves out is found by name among THIS board's sources.
             self._sync_air_taps()
             self._sync_send_menu()
-            return
-        self._start_send(quiet=True)
+            return ["Still sending your whole show to %s, as before"
+                    % send.describe()]
+        if not board.send_on:
+            self.send_failed = ""
+            return []
+        # The sources were opened a moment ago, so not again: twice said
+        # "these sources would not open" twice.
+        if self._start_send(quiet=True, open_sources=False):
+            return ["Sending your whole show to %s for another program to "
+                    "pick up" % self.send.describe()]
+        return [self.send_failed] if self.send_failed else []
 
     def _follow_board_hotkeys(self):
-        """This board's global hotkeys, on or off as it was saved."""
+        """This board's global hotkeys, on or off as it was saved.
+
+        What to say about them. A board file switching on keys for the whole
+        machine is not something to find out about later, so it is said in
+        the Loaded line, and Windows refusing one is said there too, never in
+        a box: this runs on a reload from disk, where a box is forbidden.
+        """
         hotkeys = getattr(self, "hotkeys", None)
         if hotkeys is None:
-            return
+            return []
+        was_on = bool(hotkeys.enabled)
         # The old board's combinations went on firing whatever now sat at
         # those slots, and the new board's never registered at all.
         self._sync_global_hotkeys()
@@ -5328,6 +5462,79 @@ class DropDeckFrame(wx.Frame):
         item = getattr(self, "global_item", None)
         if item is not None:
             item.Check(bool(hotkeys.enabled))
+        if not hotkeys.enabled:
+            return ["Global hotkeys off"] if was_on else []
+        count = hotkeys.count()
+        clashes = self._own_key_clashes()
+        said = ["Global hotkeys on, %d active" % count
+                if count else "Global hotkeys on, none assigned"]
+        if count and not clashes:
+            # A clash line ends with the same advice, so it is said once.
+            said[0] += ". Ctrl+G turns them off"
+        said.extend(self._hotkey_refusals())
+        said.extend(clashes)
+        # The listener reports the same refusals to the UI thread with a box.
+        # They have just been said, so that one report is dropped.
+        failures = dict(getattr(hotkeys, "failures", {}) or {})
+        self._hotkey_failures_said = failures or None
+        return said
+
+    def _hotkey_refusals(self):
+        """Why each global hotkey Windows refused did not register.
+
+        Two pads on one board with the same combination is the board's own
+        doing: the first registers and the second is refused exactly as if
+        another program held it. Blaming another program for that sends
+        somebody hunting for a program that does not exist.
+        """
+        hotkeys = self.hotkeys
+        failures = dict(getattr(hotkeys, "failures", {}) or {})
+        if not failures:
+            return []
+
+        def combo(text):
+            parsed = globalhotkeys.parse(text) if text else None
+            return (parsed[0] & 0x000F, parsed[1]) if parsed else None
+
+        holders = {}
+        for slot in self.board.slots:
+            key = combo(slot.global_hotkey)
+            if key is not None and slot.index not in failures:
+                holders.setdefault(key, slot)
+        said, elsewhere = [], []
+        for index, text in sorted(failures.items()):
+            slot = self.board[index]
+            key = combo(text)
+            if key is None:
+                said.append(globalhotkeys.describe(text))
+            elif key in holders:
+                first = holders[key]
+                said.append("%s is the global hotkey for two pads on this "
+                            "board, %s %d and %s %d, so only %s %d has it"
+                            % (text, first.bank_short, first.number,
+                               slot.bank_short, slot.number,
+                               first.bank_short, first.number))
+            else:
+                elsewhere.append(text)
+        if elsewhere:
+            said.append("These global hotkeys could not be registered, most "
+                        "likely because another program already uses them: %s"
+                        % ", ".join(sorted(set(elsewhere))))
+        return said
+
+    def _on_hotkeys_refused(self, message):
+        """The listener's report of refused hotkeys, from its own thread.
+
+        Dropped once when opening a board has just said the same refusals in
+        its Loaded line, because that box is what a reload from disk put up.
+        Any other report is said and shown as it always was.
+        """
+        said = getattr(self, "_hotkey_failures_said", None)
+        self._hotkey_failures_said = None
+        hotkeys = getattr(self, "hotkeys", None)
+        if said and dict(getattr(hotkeys, "failures", {}) or {}) == said:
+            return
+        self._on_hotkey_problem(message)
 
     # ------------------------------------------------------------- sources --
     def source_rows(self):
@@ -5393,17 +5600,25 @@ class DropDeckFrame(wx.Frame):
         return (self.streaming_or_recording() or self.sending()
                 or self.recording_video())
 
-    def start_sources(self):
+    def start_sources(self, quiet=False):
         """Open every source that is wanted, and say what would not open.
 
         Said once, quietly, and only about the ones that failed. A source that
         is not plugged in is an ordinary thing on a laptop that moves between
         desks, and it must not turn into a dialog in front of a show.
+
+        `quiet` leaves the sentence in `_sources_trouble` for the caller to
+        say, so opening a board can put it in its own line rather than have
+        that line cut it off.
         """
         missing = []
+        unchosen = []
+        soloed = self.anything_soloed()
         for source in getattr(self, "sources", []):
             try:
-                opened = source.start(self.mixer.samplerate)
+                # Mute and solo go in BEFORE the capture starts, or a muted
+                # source is on the air for a moment.
+                opened = source.start(self.mixer.samplerate, soloed=soloed)
             except Exception:
                 # One source that raises must not cost the others, nor the
                 # watcher that brings sources back: this runs on a timer at
@@ -5411,18 +5626,33 @@ class DropDeckFrame(wx.Frame):
                 errorlog.record_current()
                 opened = False
             if not opened:
-                if source.wanted_on_air or source.wanted_monitor:
+                if not (source.wanted_on_air or source.wanted_monitor):
+                    pass
+                elif getattr(source, "last_error", None) == \
+                        sources.NO_INPUT_CHOSEN:
+                    unchosen.append(source.name)
+                else:
                     missing.append(source.name)
             # What the program watcher compares against, so a source that
             # opened here is not announced as having come back.
             source.was_open = source.is_open
         self._next_source_watch = time.monotonic() + C.SOURCE_WATCH_SECONDS
+        said = []
         if missing:
-            self.announce_help("These sources would not open: %s"
-                               % ", ".join(missing))
+            said.append("These sources would not open: %s"
+                        % ", ".join(missing))
+        if unchosen:
+            said.append("%s %s no input chosen, so %s off. Alt+Shift+S "
+                        "chooses one"
+                        % (", ".join(unchosen),
+                           "has" if len(unchosen) == 1 else "have",
+                           "it is" if len(unchosen) == 1 else "they are"))
+        self._sources_trouble = ". ".join(said)
+        if said and not quiet:
+            self.announce_help(self._sources_trouble)
         self._sync_air_taps()
         self._update_status()
-        return not missing
+        return not (missing or unchosen)
 
     def stop_sources(self):
         for source in getattr(self, "sources", []):
@@ -5431,16 +5661,25 @@ class DropDeckFrame(wx.Frame):
             except Exception:
                 pass
 
-    def apply_sources(self, entries, touch=True):
+    def apply_sources(self, entries, touch=True, quiet=False, keep_from=None):
         """Replace the list of sources with what the dialog came back with.
 
         `touch` False is for a board being opened, which has not changed
-        just because its own sources were put back on.
+        just because its own sources were put back on. `keep_from` is the
+        sources being replaced, whose mute and solo carry across by name.
         """
         self.stop_sources()
         self.board.sources = [dict(entry) for entry in entries]
         self.sources = [sources.Source.from_dict(entry, self.mixer.samplerate)
                         for entry in self.board.sources]
+        held = {}
+        for old in keep_from or []:
+            held.setdefault(old.name, old)
+        for source in self.sources:
+            old = held.get(source.name)
+            if old is not None:
+                source.muted = bool(old.muted)
+                source.soloed = bool(old.soloed)
         group = getattr(self, "source_group", None)
         if group is None:
             group = self.source_group = sources.SourceGroup(self.mic,
@@ -5448,7 +5687,7 @@ class DropDeckFrame(wx.Frame):
         else:
             group.sources = self.sources
         self.mixer.monitor_source = group
-        self.start_sources()
+        self.start_sources(quiet=quiet)
         if touch:
             self._touch()
 
@@ -6546,8 +6785,11 @@ class DropDeckFrame(wx.Frame):
         send = getattr(self, "send", None)
         return send is not None and send.is_running
 
-    def _start_send(self, quiet=False):
-        """Open the send. True if audio is really going out of it."""
+    def _start_send(self, quiet=False, open_sources=True):
+        """Open the send. True if audio is really going out of it.
+
+        `open_sources` False is for a caller that has just opened them.
+        """
         self._stop_send(quiet=True)
         device = self._resolve_send_device()
         # **board.send_on is INTENT and is never cleared by a failure.**
@@ -6588,7 +6830,8 @@ class DropDeckFrame(wx.Frame):
             send.confidence.start()
         self._sync_air_taps()
         self._sync_send_menu()
-        self.start_sources()
+        if open_sources:
+            self.start_sources()
         if not quiet:
             self.announce("Sending to %s." % send.describe())
         self._update_status()
@@ -7016,7 +7259,13 @@ class DropDeckFrame(wx.Frame):
         # Windows for a camera the stream or the recording already has, and
         # DirectShow gives a device to one owner at a time.
         if feed.running:
-            picture_ = feed.frame(width, height)
+            # In a try like the branch below. This is called on a worker
+            # thread, and a raise here left the shot check's busy flag up,
+            # so every later Check the shot answered "still looking".
+            try:
+                picture_ = feed.frame(width, height)
+            except Exception as exc:
+                return None, str(exc)
             where = ("what is going out now" if self._showing()
                      else "what is being captured now")
             return self._with_overlay(picture_), where
@@ -8046,6 +8295,25 @@ class DropDeckFrame(wx.Frame):
             return
         streamer.set_title(self._now_playing_title())
 
+    @contextlib.contextmanager
+    def _board_held(self):
+        """The board is left alone while a window that writes to it is open.
+
+        The check for a board changed on disk runs half a second after the
+        window comes back, so Alt+Tab then Ctrl+P could reload the board
+        while Preferences was open, and OK then wrote the old window's
+        values over the board that had just been loaded. The check waits for
+        the window to close (`_board_file_checked`) and looks again then.
+        """
+        self._settings_open = True
+        try:
+            yield
+        finally:
+            self._settings_open = False
+            if getattr(self, "_board_check_waiting", False):
+                self._board_check_waiting = False
+                wx.CallAfter(self._check_board_file)
+
     def _on_settings(self, _event=None, page=None):
         """Preferences. One window, five tabs, two keys into it.
 
@@ -8061,8 +8329,9 @@ class DropDeckFrame(wx.Frame):
         #: What has to be said whatever the speech level, after everything
         #: else, so the confirmation cannot cut it off.
         heard = []
-        with SettingsDialog(self, self.board, self.mixer, mic=self.mic,
-                            page=page) as dialog:
+        with self._board_held(), SettingsDialog(self, self.board, self.mixer,
+                                                mic=self.mic,
+                                                page=page) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 # The Voice tab has been changing the live chain all the while,
                 # so "nothing changed" is only true once it is put back.
@@ -8236,11 +8505,21 @@ class DropDeckFrame(wx.Frame):
         # because moving them is what the taps have to follow.
         self._sync_air_taps()
         self.apply_source_mixing()
-        heard.extend(self._picture_after_settings(picture_was, bitrate_was))
+        try:
+            heard.extend(self._picture_after_settings(picture_was,
+                                                      bitrate_was))
+        except Exception:
+            # Nothing about the picture may cost the rest of Preferences its
+            # save, which is what a raise here did.
+            errorlog.record_current()
+            heard.append("The picture going out could not be changed. The "
+                         "new one starts the next time you go live or record "
+                         "the picture")
+        # Saved first, so nothing said after it can stand in its way.
+        self._touch()
         if heard:
             self.announce(". ".join(heard))
         self._update_status()
-        self._touch()
 
     #: The picture settings that only take effect when a picture STARTS: the
     #: size and the frame rate are fixed on the encoder at connect.
@@ -8263,13 +8542,15 @@ class DropDeckFrame(wx.Frame):
         look = [key for key in now if key not in self._PICTURE_SIZE_KEYS]
         if any(now.get(key) != was.get(key) for key in look):
             feed = self.feed()
+            # The framing watch too, inside the try: a raise from it used to
+            # skip the rest of Preferences, the save included.
             try:
                 feed.rebuild()
                 feed.set_title(self._now_playing_title())
+                self._stop_framing()
+                self._start_framing()
             except Exception:
                 errorlog.record_current()
-            self._stop_framing()
-            self._start_framing()
             kind = self.board.picture
             label = C.PICTURE_LABELS.get(kind, kind).lower()
             # Said off the RESULT, as set_video_source does: a camera that

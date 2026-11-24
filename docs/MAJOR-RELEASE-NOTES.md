@@ -5,9 +5,22 @@ Plain sentences for the changelog and the release post, added by each step.
 ## Opening boards and settings
 
 - Opening a board now brings all of it with it: its sound cards, the card you
-  listen on, its sources, its send, its global hotkeys, its bank names, its
-  hidden pads and its streaming choices. Before, only the pads changed and
-  everything else stayed as the last board left it.
+  listen on, its sources, its global hotkeys, its bank names, its hidden pads
+  and its streaming choices. Before, only the pads changed and everything
+  else stayed as the last board left it.
+- A send that is running is never stopped by opening another board, so a call
+  carried by it does not drop, and the Loaded line says it carries on. With no
+  send running, a board whose send is on starts it, as it does when Drop Deck
+  starts, and says so.
+- Muting and soloing a source survive opening another board and File, New.
+  File, New also keeps "Put the microphone on air" as it was.
+- The Loaded line now says, without being cut off, which sound cards the board
+  names that are not plugged in, which sources would not open, and whether the
+  board turned global hotkeys on. Two pads sharing one global hotkey are said
+  as the board's own doing, not blamed on another program, and none of this
+  puts up a box.
+- A source with no input chosen no longer opens your default microphone when
+  its board opens. Drop Deck says it has no input chosen instead.
 - A folder pad works the moment its board is opened. It used to say it was an
   empty folder until Preferences had been opened once (feedback 42).
 - File, New, Load the demo pack and importing an old bank keep the sound
@@ -36,7 +49,14 @@ Plain sentences for the changelog and the release post, added by each step.
   the next time you go live or record.
 - Turning sound preview on or off is now saved with the board.
 - A bank four hotkey can no longer take one of Drop Deck's own keys, such as
-  Ctrl+S or F5. The hotkey window says what that key already does.
+  Ctrl+S or F5, a menu's Alt letter, F10, Shift+F10, the Applications key or
+  Ctrl+Page Up and Page Down. The hotkey window says what that key already
+  does.
+- The cue sheet keeps up when another board is opened while it is open.
+- Test the cable is refused while the send is running, because the tone would
+  go down the cable to the call.
+- A board changed on disk is never reloaded underneath an open Preferences
+  window, so OK cannot write the old window's settings over it.
 - Buttons that take a moment, such as Check the shot and Test the cable, no
   longer throw you onto the next button while they work. Pressing one again
   says it is still working.

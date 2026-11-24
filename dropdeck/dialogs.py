@@ -15,6 +15,7 @@ import urllib.parse
 import webbrowser
 
 import wx
+import wx.lib.newevent
 
 from . import audiofile
 from . import cabletest
@@ -59,6 +60,10 @@ class AppKey(str):
     sentence after the key's name: "is Save board, on the File menu".
     """
 
+
+#: Get the list's answer, delivered to the BUTTON's own queue rather than the
+#: application's, so it lands behind any press of that button already waiting.
+_ModelsListed, EVT_MODELS_LISTED = wx.lib.newevent.NewEvent()
 
 _MODIFIER_KEYS = {wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT,
                   wx.WXK_RAW_CONTROL, wx.WXK_WINDOWS_LEFT, wx.WXK_WINDOWS_RIGHT}
@@ -1798,11 +1803,16 @@ class SettingsDialog(wx.Dialog):
             # and the destination under a live stream. The one in use is
             # left as it is, not reloaded over what is in the boxes.
             if name != self.board.stream_name:
-                self._refresh_stations(self.board.stream_name)
+                # What the list showed before, whatever it was. Looking the
+                # live setup up by name picked the first station whenever the
+                # setup on air had never been saved, and showed that one.
+                self.stream_picker.SetSelection(
+                    getattr(self, "_station_shown", 0))
                 self._say_test(self._off_air_first("change station"))
             return
         if not self.board.load_station(name):
             return
+        self._station_shown = self.stream_picker.GetSelection()
         self._fill_stream_fields()
         # The key does not live in the station, so it is fetched by name.
         # `_loaded_key` rather than `secrets.fetch` alone, for the reason
@@ -1885,8 +1895,17 @@ class SettingsDialog(wx.Dialog):
         names = self._station_choices()
         self.stream_picker.Set(names)
         wanted = select or self.stream_name.GetValue().strip()
-        self.stream_picker.SetSelection(
-            names.index(wanted) if wanted in names else 0)
+        if wanted in names:
+            self.stream_picker.SetSelection(names.index(wanted))
+        elif self.board.station_names():
+            # The setup in use was never saved as a station. Showing the
+            # first saved one named a station that is not in use, and on air
+            # that read as if the show were going there.
+            self.stream_picker.SetSelection(wx.NOT_FOUND)
+        else:
+            self.stream_picker.SetSelection(0)     # "No stations saved yet"
+        #: What the list shows, for a refused pick to put back.
+        self._station_shown = self.stream_picker.GetSelection()
 
     def _on_test_stream(self, _event):
         """Connect, say what happened, disconnect. Never broadcasts anything.
@@ -2827,6 +2846,7 @@ class SettingsDialog(wx.Dialog):
         model_row.Add(self.vision_model, 1, wx.EXPAND | wx.RIGHT, 8)
         self.vision_models_get = wx.Button(panel, label="&Get the list")
         self.vision_models_get.Bind(wx.EVT_BUTTON, self._on_vision_models)
+        self.vision_models_get.Bind(EVT_MODELS_LISTED, self._on_models_listed)
         model_row.Add(self.vision_models_get, 0)
         sizer.Add(model_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         self.vision_model_note = wx.StaticText(panel, label="")
@@ -2871,10 +2891,12 @@ class SettingsDialog(wx.Dialog):
     def _on_vision_models(self, _event=None):
         """Ask the service what it really has, rather than trusting a list.
 
-        On the UI thread on purpose: it is one small request, and a
-        Preferences page is not carrying audio. A flag refuses a second press
-        rather than disabling the button, because disabling the focused
-        button moves focus to the next control. See CLAUDE.md.
+        On a thread of its own, with a flag that stays up until the answer
+        is back. It ran on the UI thread, which held the window for the
+        length of the request, so a second press queued behind the first
+        arrived after the flag was down and asked all over again. A flag
+        rather than Disable, because disabling the focused button moves
+        focus to the next control. See CLAUDE.md.
         """
         who = self._vision_chosen()
         if getattr(self, "_asking_models", False):
@@ -2886,13 +2908,40 @@ class SettingsDialog(wx.Dialog):
         self.vision_model_note.SetLabel("Asking %s what it has..."
                                         % vision.PROVIDER_NAMES[who])
         self._say_line(self.vision_model_note.GetLabel())
-        wx.SafeYield()
-        try:
-            ok, got = vision.list_models(who, key)
-        finally:
-            self._asking_models = False
+
+        def work():
+            try:
+                ok, got = vision.list_models(who, key)
+            except Exception as exc:
+                # It is written never to raise, but a thread that dies here
+                # would leave the flag up and the button refusing for ever.
+                ok, got = False, "The list could not be fetched. %s" % exc
+            wx.CallAfter(self._models_listed, who, ok, got)
+
+        threading.Thread(target=work, name="dropdeck-models",
+                         daemon=True).start()
+
+    def _models_listed(self, who, ok, got):
+        """The answer, back on the window's thread, put behind the button.
+
+        Queued on the button itself, after any press of it that is already
+        waiting, so the flag is still up when that press is handled and it
+        is refused. Cleared straight from here, a press waiting in the
+        button's queue arrived after the flag was down and asked again.
+        """
+        if not self:                       # the window closed while it asked
+            return
+        wx.PostEvent(self.vision_models_get,
+                     _ModelsListed(who=who, ok=ok, got=got))
+
+    def _on_models_listed(self, event):
+        if not self:
+            return
+        who, ok, got = event.who, event.ok, event.got
+        self._asking_models = False
         if not ok:
             self.vision_model_note.SetLabel(got)
+            self._say_line(got)
             return
         keeping = self.vision_model.GetValue().strip()
         self.vision_model.Set(got)
@@ -2900,6 +2949,7 @@ class SettingsDialog(wx.Dialog):
         self.vision_model_note.SetLabel(
             "%d models. Arrow through the list, or leave it empty for %s."
             % (len(got), vision.DEFAULT_MODELS.get(who, "the usual one")))
+        self._say_line(self.vision_model_note.GetLabel())
 
     def _say_line(self, text):
         """Speak a line through the frame, at every speech level."""
@@ -5828,8 +5878,12 @@ class ShotCheckDialog(wx.Dialog):
             # The GRAB is on this thread too, not just the asking. Opening a
             # camera to look at it takes about six tenths of a second and a
             # screen capture blocks on the compositor, and neither belongs
-            # on the thread carrying the keyboard.
-            picture_, note = frame.preview_picture()
+            # on the thread carrying the keyboard. And in a try: a raise here
+            # never reached _done, so the busy flag stayed up for good.
+            try:
+                picture_, note = frame.preview_picture()
+            except Exception as exc:
+                picture_, note = None, str(exc)
             wx.CallAfter(self._remember, picture_)
             if picture_ is None:
                 wx.CallAfter(
@@ -6589,6 +6643,14 @@ class SendDialog(wx.Dialog):
                       "tone down the cable, which everybody listening would "
                       "hear.")
             return
+        if getattr(frame, "sending", lambda: False)():
+            # The send is very often carrying a call down this very cable,
+            # and it needs nothing live to be running.
+            self._say("Not while the send is running. This puts a tone down "
+                      "the cable, and the program at the other end would "
+                      "hear it. Turn the send off first: untick Send this "
+                      "show to another program and press OK.")
+            return
         index = self.device.GetSelection()
         dev = (self.devices[index]
                if 0 <= index < len(self.devices) else None)
@@ -6741,6 +6803,10 @@ class CueSheetDialog(wx.Dialog):
 
         self.SetSizerAndFit(outer)
         self.SetEscapeId(wx.ID_CANCEL)
+        # Bound ONCE, here. The table is put on again whenever the frame
+        # rebuilds its own (`adopt_accelerators`), and binding there each
+        # time would stack a handler per rebuild.
+        self.Bind(wx.EVT_MENU, self._forward)
         self.adopt_accelerators()
 
         # Both, and idempotent. EVT_CLOSE alone misses the Close button and
@@ -6770,6 +6836,10 @@ class CueSheetDialog(wx.Dialog):
         closes this window, and forwarded it would also count towards
         stopping everything, so closing the cue sheet and pressing Escape
         once more would silence the show.
+
+        Called again by the frame every time it rebuilds its map, because a
+        copy taken once went stale: after File, Open board the cue sheet
+        still played the OLD board's bank four keys.
         """
         try:
             entries = [entry for entry in
@@ -6777,11 +6847,9 @@ class CueSheetDialog(wx.Dialog):
                        if not (entry.GetKeyCode() == wx.WXK_ESCAPE
                                and entry.GetFlags() == wx.ACCEL_NORMAL)]
             self.keys = entries
-            if entries:
-                self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+            self.SetAcceleratorTable(wx.AcceleratorTable(entries))
         except Exception:
             pass
-        self.Bind(wx.EVT_MENU, self._forward)
 
     def _forward(self, event):
         handler = getattr(self.frame, "ProcessEvent", None)

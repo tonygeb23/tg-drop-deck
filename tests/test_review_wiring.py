@@ -107,29 +107,59 @@ uimod.MixerGroup = QuietGroup
 
 
 class FakeHotkeys:
-    """Global hotkeys that register nothing with Windows."""
+    """Global hotkeys that register nothing with Windows.
+
+    Refused the way Windows refuses them: a combination another program
+    holds (TAKEN), and the second pad on a combination this one already
+    registered. And reported the way the real listener reports them, to the
+    UI thread, where the frame used to put up a box.
+    """
+
+    TAKEN = {"Ctrl+Alt+F12"}
 
     def __init__(self, on_fire=None, on_problem=None):
         self.enabled = False
         self.bindings = {}
         self.failures = {}
+        self.on_problem = on_problem or (lambda message: None)
+
+    def _register(self):
+        self.failures = {}
+        held = set()
+        for index, text in sorted(self.bindings.items()):
+            if text in self.TAKEN or text in held:
+                self.failures[index] = text
+            else:
+                held.add(text)
+        if self.failures:
+            wx.CallAfter(self.on_problem,
+                         "These global hotkeys could not be registered, most "
+                         "likely because another program already uses them: "
+                         "%s" % ", ".join(sorted(set(self.failures.values()))))
 
     def set_bindings(self, bindings):
         self.bindings = dict(bindings)
+        if self.enabled:
+            self._register()
 
     def start(self):
-        self.enabled = True
+        if not self.enabled:
+            self.enabled = True
+            self._register()
         return True
 
     def stop(self):
         self.enabled = False
 
     def toggle(self):
-        self.enabled = not self.enabled
+        if self.enabled:
+            self.stop()
+        else:
+            self.start()
         return self.enabled
 
     def count(self):
-        return len(self.bindings) if self.enabled else 0
+        return (len(self.bindings) - len(self.failures)) if self.enabled else 0
 
 
 globalhotkeys.GlobalHotkeys = FakeHotkeys
@@ -203,6 +233,24 @@ def button_called(window, label):
         if isinstance(child, wx.Button) and child.GetLabel() == label:
             return child
     return None
+
+
+def pump_until(done, seconds=5.0):
+    """Let posted events and worker threads finish, up to a limit."""
+    import time
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        app.ProcessPendingEvents()
+        if done():
+            return True
+        time.sleep(0.02)
+    app.ProcessPendingEvents()
+    return done()
+
+
+def loaded_line(heard):
+    found = [line for line in heard if line.startswith("Loaded")]
+    return found[-1] if found else ""
 
 
 def menu_labels(menu):
@@ -350,7 +398,9 @@ check("A's global hotkeys are on", frame.hotkeys.enabled
 # ===========================================================================
 heading("File, Open board B: B takes over everything, not only its pads")
 heard = listen(frame)
+call = frame.send
 check("it opens", frame._open_board(PATH_B) is True)
+loaded = [line for line in heard if line.startswith("Loaded")]
 check("B's sound cards are the live ones",
       frame.mixer.bank_devices == {1: 904, 2: 905, 3: 904, 4: 904},
       frame.mixer.bank_devices)
@@ -363,7 +413,13 @@ check("and the source group reads B's sources",
       frame.source_group.sources is frame.sources)
 check("no source and no microphone was opened",
       not any(s.is_open for s in frame.sources) and not frame._mic_open())
-check("B has no send, so A's send is off", not frame.sending())
+check("a send carrying a call is never stopped by a board change",
+      frame.sending() and frame.send is call)
+check("and the Loaded line says it carries on",
+      loaded and "Still sending your whole show" in loaded[-1], loaded)
+check("the sources that would not open are said once, in the Loaded line",
+      sum("would not open" in line for line in heard) == 1
+      and "Callers B, Second mic B" in loaded[-1], heard)
 check("A's global hotkeys are gone and B's are the ones bound",
       frame.hotkeys.bindings == {2: "Ctrl+Alt+F10"}, frame.hotkeys.bindings)
 check("and B saved them off, so they are off", not frame.hotkeys.enabled)
@@ -387,11 +443,18 @@ check("the saved setups are B's", "Station B" in saved
 check("opening a board does not mark it changed", not frame.board.dirty)
 check("nothing went live", not frame.streaming())
 
-heading("Back to A: its send and its hotkeys come back on")
+heading("Back to A: its hotkeys come back on, and a stopped send starts")
+frame._stop_send(quiet=True)
+heard.clear()
 check("it opens", frame._open_board(PATH_A) is True)
-check("A's send runs again, out of A's card",
+check("A's send starts, out of A's card, as it does at startup",
       frame.sending() and frame.send.device == 911,
       getattr(frame.send, "device", None))
+loaded = [line for line in heard if line.startswith("Loaded")]
+check("and it is said, the startup line's sentence",
+      loaded and "Sending your whole show to" in loaded[-1], loaded)
+check("the global hotkeys are said too",
+      loaded and "Global hotkeys on, 1 active" in loaded[-1], loaded)
 check("A's hotkeys are on and bound",
       frame.hotkeys.enabled and frame.hotkeys.bindings == {0: "Ctrl+Alt+F9"})
 check("and the menu tick says on", frame.global_item.IsChecked())
@@ -424,6 +487,114 @@ if os.path.exists(boardmod.demo_board_path()):
     check("the demo pack keeps them too",
           frame.mixer.bank_devices == {1: 901, 2: 901, 3: 902, 4: 901}
           and frame.send is running)
+
+# ===========================================================================
+heading("Mute and solo survive a change of board, and so does keeping the "
+        "microphone out")
+PATH_M = os.path.join(HOME, "Board M.json")
+board_a().save(PATH_M)
+frame._open_board(PATH_M)
+check("set up: the send is carrying the show", frame.sending())
+muted = frame.sources[0]
+muted.muted = True
+frame.apply_source_mixing()
+frame._on_new(None)
+check("a source muted on a call is still muted after File New",
+      frame.sources[0].muted)
+check("and still off the air", not frame.sources[0].input.on_air)
+frame.sources[0].muted = False
+frame.sources[0].soloed = True
+frame.apply_source_mixing()
+check("set up: a soloed source takes the microphone off",
+      not frame.mic.on_air)
+frame._on_new(None)
+check("solo survives File New", frame.anything_soloed())
+check("so the microphone stays off the air", not frame.mic.on_air)
+different = board_a()
+different.sources = [
+    {"name": "Games call A", "kind": "device", "device_name": "Capture A",
+     "on_air": True, "gain_db": 3.0},
+    {"name": "Extra", "kind": "device", "device_name": "Capture X",
+     "on_air": True}]
+PATH_M2 = os.path.join(HOME, "Board M two.json")
+different.save(PATH_M2)
+frame._open_board(PATH_M2)
+check("on a board with a different list, the same name keeps its solo",
+      frame.sources[0].soloed and not frame.sources[1].soloed,
+      [(x.name, x.soloed) for x in frame.sources])
+for source in frame.sources:
+    source.soloed = False
+frame.board.stream_mic = False
+frame.apply_source_mixing()
+check("set up: Put the microphone on air is off, so it is not sent",
+      not frame.mic.on_air)
+frame._on_new(None)
+check("File New keeps the microphone out", frame.board.stream_mic is False)
+check("so it is still not on the send", not frame.mic.on_air)
+
+# ===========================================================================
+heading("A board naming cards this machine does not have says so")
+alien = board_a()
+alien.device_name = "Co-host desk"
+alien.bank_devices = {3: {"name": "Co-host beds", "hostapi": "WASAPI"}}
+alien.mic_output_name = "Co-host phones"
+PATH_ALIEN = os.path.join(HOME, "Alien.json")
+alien.save(PATH_ALIEN)
+heard.clear()
+frame._open_board(PATH_ALIEN)
+line = loaded_line(heard)
+check("the main card it names is said", "Co-host desk, which is not here"
+      in line, line)
+check("and a bank's card", "Co-host beds, which is not here" in line, line)
+check("and the card you listen on", "Co-host phones, which is not here"
+      in line, line)
+
+# ===========================================================================
+heading("Global hotkeys a board turns on are said, and never in a box")
+glob = Board()
+for index, key in ((0, "Ctrl+Alt+F11"), (1, "Ctrl+Alt+F11"),
+                   (2, "Ctrl+Alt+F12"), (3, "Ctrl+M")):
+    glob.slots[index].filepath = SOUND
+    glob.slots[index].global_hotkey = key
+glob.global_hotkeys_on = True
+PATH_G = os.path.join(HOME, "Glob.json")
+glob.save(PATH_G)
+frame._open_board(PATH_B)
+heard.clear()
+BOXES.clear()
+frame._open_board(PATH_G)
+app.ProcessPendingEvents()
+line = loaded_line(heard)
+check("switching them on is said, with how many work",
+      "Global hotkeys on, 2 active" in line, line)
+check("two pads on one combination is said as the board's own doing",
+      "Ctrl+Alt+F11 is the global hotkey for two pads on this board" in line,
+      line)
+check("a key another program holds is said as another program's",
+      "another program already uses them: Ctrl+Alt+F12" in line, line)
+check("and the duplicate is not blamed on another program",
+      "already uses them: Ctrl+Alt+F11" not in line, line)
+check("a pad on one of the app's own keys is said",
+      "Ctrl+M is also the global hotkey" in line, line)
+check("and no box, though the listener reported the refusals",
+      not BOXES, BOXES)
+frame._stop_send(quiet=True)
+again = Board()
+again.slots[0].filepath = SOUND
+again.slots[0].global_hotkey = "Ctrl+Alt+F12"
+again.global_hotkeys_on = True
+frame.board.dirty = False
+again.save(PATH_G)
+BOXES.clear()
+heard.clear()
+frame._check_board_file(wait=True)
+app.ProcessPendingEvents()
+check("a reload from disk takes the new board", frame.board.slots[1].filepath
+      is None and frame.board.slots[0].global_hotkey == "Ctrl+Alt+F12")
+check("and puts up no box about its hotkeys", not BOXES, BOXES)
+check("it says them instead",
+      "another program already uses them: Ctrl+Alt+F12" in loaded_line(heard),
+      heard)
 
 # ===========================================================================
 heading("While on air, another board is refused with the come off air rule")
@@ -535,6 +706,26 @@ check("the list goes back to the station in use", seen.get("picker") == "One",
       seen.get("picker"))
 check("and it says come off air first",
       any("then change station" in line for line in heard), heard)
+
+# The setup on air was typed in and never saved as a station.
+frame.board.stream_name = "Unsaved tonight"
+frame.board.stream_host = "tonight.example.invalid"
+
+
+def pick_while_unsaved(dialog):
+    seen["at_open"] = dialog.stream_picker.GetStringSelection()
+    names = list(dialog.stream_picker.GetStrings())
+    choose(dialog.stream_picker, names.index("Two"))
+    seen["after"] = dialog.stream_picker.GetStringSelection()
+    return wx.ID_CANCEL
+
+
+preferences(frame, pick_while_unsaved)
+check("a refused pick never shows a station that is not the one in use",
+      seen.get("after") in ("", "Unsaved tonight"), seen)
+check("it shows what it showed before",
+      seen.get("after") == seen.get("at_open"), seen)
+frame.board.load_station("One")
 del frame.streaming
 
 # ===========================================================================
@@ -656,6 +847,42 @@ preferences(frame, bigger)
 check("a new size says it starts next time",
       any("next time" in line for line in heard), heard)
 
+
+def boom():
+    raise RuntimeError("the framing watch broke")
+
+
+def back_to_card(dialog):
+    choose(dialog.picture_kind, dialog._picture_kinds.index(C.PICTURE_CARD))
+    return wx.ID_OK
+
+
+frame._start_framing = boom
+frame.board.dirty = False
+frame._save_timer.Stop()
+attempt("a fault in the framing watch does not escape Preferences",
+        lambda: preferences(frame, back_to_card))
+check("and Preferences is still saved",
+      frame.board.dirty and frame._save_timer.IsRunning())
+del frame._start_framing
+
+heading("Check the shot is not left busy when the picture raises")
+
+
+def broken_frame(width, height):
+    raise RuntimeError("the capture thread fell over")
+
+
+feed.frame = broken_frame
+checker = dialogs.ShotCheckDialog(frame, frame)
+click(checker.go)
+check("the check finishes, rather than staying busy for good",
+      pump_until(lambda: not checker._busy), checker._busy)
+check("and says there is no picture",
+      "no picture" in checker.answer.GetValue(), checker.answer.GetValue())
+checker.Destroy()
+del feed.frame
+
 heading("Look through the camera now, while the picture is held")
 frame.board.picture = C.PICTURE_CAMERA
 dialog = dialogs.SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic)
@@ -715,6 +942,33 @@ keys._on_key(Keystroke(ord("1"), ctrl=True))
 check("and a pad's key is still only a warning",
       keys.result[0] == ord("1") and "Careful" in keys.warning.GetLabel(),
       keys.warning.GetLabel())
+
+
+def refused(label, code, words, **held):
+    keys._key_code, keys._modifiers = None, 0
+    keys._on_key(Keystroke(code, **held))
+    check("%s is refused, and says it %s" % (label, words),
+          keys.result[0] is None and words in keys.warning.GetLabel(),
+          (keys.result, keys.warning.GetLabel()))
+
+
+# Alt plus each menu's own letter, read off the menu bar as it is.
+bar = frame.GetMenuBar()
+for position in range(bar.GetMenuCount()):
+    title = bar.GetMenuLabel(position)
+    at = title.find("&")
+    if at >= 0 and at + 1 < len(title):
+        refused("Alt+%s" % title[at + 1].upper(), ord(title[at + 1].upper()),
+                "opens the %s menu" % bar.GetMenuLabelText(position), alt=True)
+refused("F10", wx.WXK_F10, "opens the menu bar")
+refused("Shift+F10", wx.WXK_F10, "opens the menu for the pad you are on",
+        shift=True)
+refused("The Applications key", wx.WXK_WINDOWS_MENU,
+        "opens the menu for the pad you are on")
+refused("Ctrl+Page Down", wx.WXK_PAGEDOWN, "moves to the next bank",
+        ctrl=True)
+refused("Ctrl+Page Up", wx.WXK_PAGEUP, "moves to the previous bank",
+        ctrl=True)
 keys.Destroy()
 pad.clear()
 
@@ -765,6 +1019,29 @@ check("Escape is left to close the cue sheet, not to count towards stopping",
       carried is not None and carried
       and not any(e.GetKeyCode() == wx.WXK_ESCAPE for e in carried))
 sheet._on_close()
+# The cue sheet the app opens, kept current when another board comes in.
+keyed = board_b()
+siren = keyed.bank_slots(C.BANK_MISC)[7]
+siren.filepath, siren.name = SOUND, "Siren"
+siren.key_code, siren.modifiers = wx.WXK_F11, wx.ACCEL_CTRL | wx.ACCEL_SHIFT
+siren.custom_hotkey = "Ctrl+Shift+F11"
+PATH_K = os.path.join(HOME, "Keyed.json")
+keyed.save(PATH_K)
+frame._on_cue_sheet()
+opened_sheet = frame.cue_window
+frame._open_board(PATH_K)
+check("after File, Open board the cue sheet carries the new board's keys",
+      any(e.GetKeyCode() == wx.WXK_F11
+          and e.GetFlags() == wx.ACCEL_CTRL | wx.ACCEL_SHIFT
+          and e.GetCommand() == uimod.ID_SLOT_BASE + siren.index
+          for e in opened_sheet.keys))
+fired.clear()
+wx.PostEvent(opened_sheet, wx.CommandEvent(wx.wxEVT_MENU,
+                                           uimod.ID_SLOT_BASE + siren.index))
+app.ProcessPendingEvents()
+check("and a key there still plays its pad, once", fired == [siren.index],
+      fired)
+opened_sheet._on_close()
 frame.trigger = real_trigger
 del frame.trigger
 
@@ -811,35 +1088,71 @@ colours = dialogs.ColoursDialog(frame, frame.board)
 in_flight("What does this look like", colours.describe_button,
           "Still looking at these colours")
 colours.Destroy()
-sending = dialogs.SendDialog(frame, frame.board)
-sending.devices = [{"name": "Imaginary cable", "hostapi": "WASAPI",
+
+
+def cable_dialog():
+    box = dialogs.SendDialog(frame, frame.board)
+    box.devices = [{"name": "Imaginary cable", "hostapi": "WASAPI",
                     "index": 950}]
-sending.device.Set(["Imaginary cable"])
-sending.device.SetSelection(0)
+    box.device.Set(["Imaginary cable"])
+    box.device.SetSelection(0)
+    return box
+
+
+frame._stop_send(quiet=True)
+sending = cable_dialog()
 in_flight("Test the cable", sending.test, "Still testing")
 sending.Destroy()
 
+frame.board.send_on = True
+frame.board.send_device_name = "Cable A"
+frame._start_send(quiet=True)
+sending = cable_dialog()
+HeldThread.made.clear()
+dialogs.threading.Thread = HeldThread
+try:
+    heard.clear()
+    click(sending.test)
+finally:
+    dialogs.threading.Thread = real_thread
+check("Test the cable puts no tone down a cable while the send runs",
+      frame.sending() and not HeldThread.made, HeldThread.made)
+check("and says why", any("send is running" in line for line in heard),
+      heard)
+sending.Destroy()
+frame._stop_send(quiet=True)
+
 settings = dialogs.SettingsDialog(frame, frame.board, frame.mixer,
                                   mic=frame.mic)
-enabled_while_asking = []
+asked = []
 real_list = dialogs.vision.list_models
 
 
-def listing(who, key):
-    enabled_while_asking.append(settings.vision_models_get.IsEnabled())
+def queued_behind(who, key, *args, **kw):
+    """A second press arrives while the first is still waiting."""
+    asked.append(who)
+    if len(asked) == 1:
+        button = settings.vision_models_get
+        event = wx.CommandEvent(wx.wxEVT_BUTTON, button.GetId())
+        event.SetEventObject(button)
+        wx.PostEvent(button.GetEventHandler(), event)
     return True, ["model-one", "model-two"]
 
 
-dialogs.vision.list_models = listing
-click(settings.vision_models_get)
-check("Get the list: the button stays enabled while it asks",
-      enabled_while_asking == [True], enabled_while_asking)
-settings._asking_models = True
+dialogs.vision.list_models = queued_behind
 heard.clear()
 click(settings.vision_models_get)
-check("Get the list: a second press asks nothing and says so",
-      len(enabled_while_asking) == 1
-      and any("Still asking" in line for line in heard), heard)
+check("Get the list: the button stays enabled while it asks",
+      settings.vision_models_get.IsEnabled())
+pump_until(lambda: not getattr(settings, "_asking_models", False)
+           and asked)
+pump_until(lambda: False, 0.3)
+check("Get the list: a press queued behind the first asks nothing",
+      len(asked) == 1, asked)
+check("and says it is still asking",
+      any("Still asking" in line for line in heard), heard)
+check("and the list does arrive", settings.vision_model.GetCount() == 2,
+      settings.vision_model.GetCount())
 dialogs.vision.list_models = real_list
 settings.Destroy()
 
@@ -864,6 +1177,17 @@ check("it says so instead, once",
       sum("could not be saved" in line for line in heard) == 1, heard)
 check("and the board still holds the change", frame.board.dirty)
 frame.board.save = real_save
+del frame.board.save
+frame.board.dirty = False
+frame._save_timer.Stop()
+other = Board()
+other.claim_path(os.path.join(HOME, "other.json"))
+frame._adopt(other)
+frame.board.save = refusing
+frame._touch()
+frame._autosave()
+check("the next board's own first failed save is said too",
+      sum("could not be saved" in line for line in heard) == 2, heard)
 del frame.board.save
 frame.board.dirty = False
 frame._save_timer.Stop()
@@ -927,6 +1251,60 @@ box = frame.playlist_panel.crossfade
 check("Ctrl+V in the crossfade box: its edit part is a wx.TextCtrl, which "
       "keeps Ctrl+V for itself, so no fix is needed",
       any(isinstance(child, wx.TextCtrl) for child in box.GetChildren()))
+
+# ===========================================================================
+heading("A board changed on disk is not reloaded under an open Preferences")
+frame._stop_send(quiet=True)
+PATH_R = os.path.join(HOME, "Reload.json")
+first_copy = Board()
+first_copy.slots[0].filepath = SOUND
+first_copy.save(PATH_R)
+frame._open_board(PATH_R)
+frame.board.dirty = False
+frame._save_timer.Stop()
+original = frame.board
+ducking = not original.ducking
+
+
+def reload_inside(dialog):
+    outside = Board()
+    outside.slots[0].filepath = SOUND
+    outside.slots[1].filepath = SOUND
+    outside.save(PATH_R)                       # somebody else's copy lands
+    frame._check_board_file(wait=True)        # the half second check fires
+    seen["during"] = frame.board
+    dialog.duck_on.SetValue(ducking)
+    return wx.ID_OK
+
+
+heard.clear()
+preferences(frame, reload_inside)
+check("the board is not swapped while Preferences is open",
+      seen.get("during") is original)
+check("so OK changes the board the window was opened on",
+      frame.board is original and original.ducking == ducking)
+check("and the change on disk is looked at once it closes",
+      pump_until(lambda: any("changed outside Drop Deck" in line
+                             for line in heard)), heard)
+frame.board.dirty = False
+frame._save_timer.Stop()
+
+# ===========================================================================
+heading("A source with no input chosen does not open the default input")
+from dropdeck import micinput                                 # noqa: E402
+tried = []
+real_open = micinput.MicInput.start
+micinput.MicInput.start = lambda self, *a, **kw: tried.append(a or kw) or False
+heard.clear()
+try:
+    frame.apply_sources([{"name": "Unfinished", "kind": "device",
+                          "device_name": "", "on_air": True}])
+finally:
+    micinput.MicInput.start = real_open
+check("nothing tries to open an input for it", tried == [], tried)
+check("and it says the source has no input chosen",
+      any("Unfinished has no input chosen" in line for line in heard), heard)
+frame.apply_sources([])
 
 # ===========================================================================
 frame._stop_send(quiet=True)

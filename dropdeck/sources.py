@@ -38,6 +38,11 @@ from . import micinput
 from .micinput import (CHANNELS, MicInput, describe_input,
                        input_devices, resolve_input)
 
+#: What `Source.last_error` holds for a sound card source with no input
+#: chosen. Its own value, so the frame can say THAT rather than "would not
+#: open", which sends somebody looking for a fault in a card they never set.
+NO_INPUT_CHOSEN = "no input chosen"
+
 #: How many extra sources somebody can have. Not a technical limit: each one
 #: is a sound card being read in real time, and a list longer than this is
 #: somebody who wants a mixer rather than a soundboard.
@@ -237,6 +242,14 @@ class Source:
             # another way every time the sources were started again, and
             # retried the route that had already refused.
             return True
+        if not self.device_name:
+            # "Nothing chosen" in the Sources window. It used to fall through
+            # to the system default input, which is the microphone, so a
+            # board with an unfinished source opened the microphone the
+            # moment it was opened, with no key pressed. Nothing opens a
+            # microphone except a keypress.
+            self.last_error = NO_INPUT_CHOSEN
+            return False
         started = self.input.start(device=device)
         self.last_error = None if started else self.input.last_error
         return started
