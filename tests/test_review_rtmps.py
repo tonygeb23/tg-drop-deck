@@ -1073,6 +1073,295 @@ else:
           "not tried: on PyAV's own path it freezes the process")
 
 
+
+# ===========================================================================
+heading("Mark's review: what the relay holds, who it lets in, a broken "
+        "install, and DNS")
+# ===========================================================================
+
+import ctypes                                                   # noqa: E402
+import types                                                    # noqa: E402
+
+LIMIT = getattr(rtmpsrelay, "PREPARE_LIMIT", 64 * 1024) \
+    if rtmpsrelay is not None else 64 * 1024
+trust(True)
+
+
+def held_back(rewrite):
+    """What a ConnectRewrite is holding, read from its own fields so the
+    same count works on a copy that has no `held` to ask."""
+    return (len(rewrite._buf) + sum(len(v) for v in rewrite._held.values())
+            + sum(len(v) for v in rewrite._raw.values()))
+
+
+if rtmpsrelay is not None:
+    # 1. Two megabytes before any connect, the way Mark fed them: a chunk
+    # header declaring the largest message RTMP allows, then filler.
+    rewrite = rtmpsrelay.ConnectRewrite("rtmp://127.0.0.1:5", "rtmps://x:443")
+    rewrite.feed(bytes(rtmpsrelay.HANDSHAKE))
+    header = (bytes([3]) + (0).to_bytes(3, "big")
+              + (0xFFFFFF).to_bytes(3, "big") + bytes([20])
+              + (0).to_bytes(4, "little"))
+    rewrite.feed(header + b"\x00" * 128)
+    # Continuation chunks of that one message, which a parser has to keep:
+    # Mark's two megabytes in, four held (the payload and its raw chunks).
+    more = (b"\xc3" + b"\x00" * 128) * 508
+    worst = 0
+    for _ in range(32):
+        rewrite.feed(more)
+        worst = max(worst, held_back(rewrite))
+    check("two megabytes before a connect are not held (most held %d bytes)"
+          % worst, worst <= LIMIT, worst)
+    check("  and the rewrite gives up on them", bool(rewrite.fault),
+          rewrite.fault)
+    plain = rtmpsrelay.ConnectRewrite("rtmp://127.0.0.1:5", "rtmps://x:443")
+    plain.feed(bytes(rtmpsrelay.HANDSHAKE))
+    worst = 0
+    streams = range(3, 63)
+    for cs in streams:
+        # Messages each under the limit, on sixty chunk streams, none of
+        # them ever finished.
+        plain.feed(bytes([cs]) + (0).to_bytes(3, "big")
+                   + (60000).to_bytes(3, "big") + bytes([20])
+                   + (0).to_bytes(4, "little") + b"\x00" * 128)
+        worst = max(worst, held_back(plain))
+    for _ in range(32):
+        plain.feed(b"".join(bytes([0xC0 | cs]) + b"\x00" * 128
+                            for cs in streams) * 8)
+        worst = max(worst, held_back(plain))
+    check("nor are many unfinished messages (most held %d bytes)" % worst,
+          worst <= LIMIT + 65536, worst)
+
+    # Through the relay itself: it drops the connection and says the
+    # existing sentence.
+    with mock_rtmp.spawn(seconds=30, cert=GOOD[0], key=GOOD[1],
+                         stall=True) as server:
+        relay = rtmpsrelay.Relay("rtmps://127.0.0.1:%d/live/%s"
+                                 % (server.port, KEY), timeout=8).start()
+        port = relay.wait_ready()
+        intruder = socket.create_connection(("127.0.0.1", port), 3)
+        intruder.settimeout(3)
+        dropped = False
+        try:
+            intruder.sendall(bytes(rtmpsrelay.HANDSHAKE) + header
+                             + b"\x00" * 128)
+            for _ in range(32):
+                intruder.sendall(more)
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                if intruder.recv(4096) == b"":
+                    dropped = True
+                    break
+        except OSError:
+            dropped = True
+        intruder.close()
+        relay.close()
+    check("the relay drops a connection that sends that much",
+          dropped, relay.fault)
+    check("  saying %r" % relay.fault,
+          relay.fault == "the connection to 127.0.0.1 could not be prepared",
+          relay.fault)
+
+    # 2. The listener: exclusive, and 127.0.0.1 only.
+    with mock_rtmp.spawn(seconds=30, cert=GOOD[0], key=GOOD[1],
+                         stall=True) as server:
+        relay = rtmpsrelay.Relay("rtmps://127.0.0.1:%d/live/%s"
+                                 % (server.port, KEY), timeout=8).start()
+        port = relay.wait_ready()
+        exclusive = relay._listener.getsockopt(
+            socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE)
+        check("the listener is SO_EXCLUSIVEADDRUSE", exclusive != 0,
+              exclusive)
+        thief = socket.socket()
+        thief.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            thief.bind(("127.0.0.1", port))
+            stolen = True
+        except OSError:
+            stolen = False
+        thief.close()
+        # Windows already refuses this for the same address even without
+        # the option; the option is the belt to that braces.
+        check("  and another program cannot bind that address and port",
+              not stolen)
+        stranger = socket.socket()
+        stranger.settimeout(3)
+        stranger.bind(("127.0.0.2", 0))
+        try:
+            stranger.connect(("127.0.0.1", port))
+            try:
+                shut_out = stranger.recv(1) == b""
+            except socket.timeout:
+                shut_out = False        # let in, and kept waiting
+            except OSError:
+                shut_out = True         # reset by the relay
+        except socket.timeout:
+            shut_out = False
+        except OSError:
+            shut_out = True
+        stranger.close()
+        check("a connection from 127.0.0.2 is shut out", shut_out)
+        deadline = time.time() + 2
+        while time.time() < deadline and not getattr(relay, "turned_away", 0):
+            time.sleep(0.02)
+        check("  and the listener is still there for FFmpeg",
+              relay._listener is not None)
+        # A wildcard bind on the same port does succeed, with or without the
+        # option, so prove it cannot take the connection meant for FFmpeg:
+        # Windows hands a connection to the most specific listener.
+        wildcard = socket.socket()
+        try:
+            wildcard.bind(("0.0.0.0", port))
+            wildcard.listen(1)
+            wildcard.setblocking(False)
+        except OSError:
+            wildcard.close()
+            wildcard = None
+        try:
+            real = socket.create_connection(("127.0.0.1", port), 3)
+        except OSError:
+            real = None
+        deadline = time.time() + 3
+        while time.time() < deadline and relay._listener is not None:
+            time.sleep(0.02)
+        check("which is taken from 127.0.0.1",
+              real is not None and relay.peer is not None
+              and relay.peer[0] == "127.0.0.1", relay.peer)
+        check("  and then the listener closes", relay._listener is None)
+        if wildcard is not None:
+            try:
+                wildcard.accept()
+                took_it = True
+            except OSError:
+                took_it = False
+            wildcard.close()
+            check("  and a wildcard listener on the same port got nothing",
+                  not took_it)
+        if real is not None:
+            real.close()
+        relay.close()
+
+    # 3. A copy whose FFmpeg is missing, or not the one it expects.
+    def broken_install(label, plain_url):
+        states = []
+        with mock_rtmp.spawn(seconds=3) as server:
+            url = plain_url % server.port
+            bus = streamout.AirBus(RATE)
+            streamer = streamout.Streamer(
+                bus, settings(url),
+                on_state=lambda state, detail: states.append((state, detail)))
+            streamer.start()
+            deadline = time.time() + 8
+            pushed = 0
+            while time.time() < deadline and streamer.running:
+                bus.write("main", tone(2048, start=pushed))
+                pushed += 2048
+                time.sleep(0.02)
+            streamer.stop()
+        names = [state for state, _detail in states]
+        failure = [d for s, d in states if s == streamout.FAILED]
+        said = failure[0] if failure else ""
+        check("%s: said once and not retried" % label,
+              streamout.FAILED in names
+              and streamout.RECONNECTING not in names
+              and streamer.attempts == 1, (names, streamer.attempts))
+        check("  as a missing part of Drop Deck, to reinstall: %r" % said,
+              "streaming is missing" in said and "reinstall" in said.lower()
+              and "connect" not in said, said)
+        check("  before anything reached the server",
+              not server.result().connections, server.result().connections)
+
+    keep_glob, keep_loaded = rtmpsrelay.glob, rtmpsrelay._loaded_avformat
+    rtmpsrelay._lib = None
+    rtmpsrelay.glob = types.SimpleNamespace(glob=lambda pattern: [])
+    rtmpsrelay._loaded_avformat = lambda: ""
+    try:
+        broken_install("FFmpeg's DLL missing, plain rtmp",
+                       "rtmp://127.0.0.1:%d/live")
+        broken_install("FFmpeg's DLL missing, rtmps",
+                       "rtmps://127.0.0.1:%d/live")
+    finally:
+        rtmpsrelay.glob, rtmpsrelay._loaded_avformat = keep_glob, keep_loaded
+        rtmpsrelay._lib = None
+
+    class Moved(ctypes.Structure):
+        """FFmpeg's fields somewhere else, as a different FFmpeg might
+        have them."""
+        _fields_ = [("buffer_size", ctypes.c_int), ("error", ctypes.c_int),
+                    ("write_flag", ctypes.c_int),
+                    ("buffer", ctypes.c_void_p), ("buf_ptr", ctypes.c_void_p)]
+
+    keep_layout = rtmpsrelay._AVIOContext
+    rtmpsrelay._AVIOContext = Moved
+    try:
+        broken_install("FFmpeg laid out differently, plain rtmp",
+                       "rtmp://127.0.0.1:%d/live")
+    finally:
+        rtmpsrelay._AVIOContext = keep_layout
+        rtmpsrelay._lib = None
+
+    # 4. Stop while DNS is stalled, first on the streaming thread's own
+    # lookup, then on the relay's.
+    real_lookup = socket.getaddrinfo
+    released = threading.Event()
+    asked = []
+
+    def stalling_lookup(host, *args, **kwargs):
+        if host == "stall.invalid":
+            asked.append(host)
+            if stall_from <= len(asked):
+                released.wait(15)
+            return real_lookup("127.0.0.1", *args, **kwargs)
+        return real_lookup(host, *args, **kwargs)
+
+    socket.getaddrinfo = stalling_lookup
+    try:
+        for label, stall_from in (("the first lookup", 1),
+                                  ("the relay's lookup", 2)):
+            asked.clear()
+            released.clear()
+            bus = streamout.AirBus(RATE)
+            heard = []
+            streamer = streamout.Streamer(
+                bus, settings("rtmps://stall.invalid:9/live"),
+                on_state=lambda state, detail: heard.append(state))
+            streamer.start()
+            deadline = time.time() + 3
+            while time.time() < deadline and len(asked) < stall_from:
+                time.sleep(0.02)
+            time.sleep(0.3)
+            started = time.monotonic()
+            streamer.stop()
+            took = time.monotonic() - started
+            check("Stop while DNS is stalled in %s comes back at once "
+                  "(%.2f s)" % (label, took), took < 1.0 and
+                  len(asked) >= stall_from, (took, len(asked)))
+            check("  and says nothing about a failure",
+                  streamout.FAILED not in heard, heard)
+            stuck = [t for t in threading.enumerate()
+                     if t.name in ("dropdeck-rtmps-relay", "dropdeck-resolve")
+                     and t.is_alive()]
+            check("  leaving only daemon threads in the lookup",
+                  all(t.daemon for t in stuck), [t.name for t in stuck])
+            if psutil is not None:
+                check("  which hold no socket",
+                      not [c for c in psutil.Process().net_connections(
+                          kind="tcp") if c.raddr and c.raddr.port == 9],
+                      "")
+            released.set()
+            deadline = time.time() + 3
+            while time.time() < deadline and any(t.is_alive() for t in stuck):
+                time.sleep(0.05)
+            check("  and they end by themselves once DNS answers",
+                  not any(t.is_alive() for t in stuck),
+                  [t.name for t in stuck if t.is_alive()])
+    finally:
+        released.set()
+        socket.getaddrinfo = real_lookup
+else:
+    check("the relay exists", False)
+
+
 trust(False)
 frame.Destroy()
 app.Yield()

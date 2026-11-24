@@ -98,6 +98,12 @@ CERT_REFUSED = ("the server's certificate could not be checked, so nothing "
 #: The relay passes these through as they are.
 HANDSHAKE = 1 + 1536 + 1536
 
+#: The most the relay will hold back while it waits for the connect command
+#: to be complete. FFmpeg's connect is under two hundred bytes; past this the
+#: connection is dropped, because holding without limit is memory any local
+#: program could make this one spend.
+PREPARE_LIMIT = 64 * 1024
+
 #: What every RTMP client assumes until it says otherwise.
 DEFAULT_CHUNK = 128
 SET_CHUNK_SIZE = 1
@@ -107,6 +113,10 @@ COMMAND_AMF0 = 20
 #: is the slowest a stop can be noticed, and it costs nothing while data
 #: flows, because a select returns as soon as there is something to do.
 SLICE = 0.2
+
+#: How long closing waits for FFmpeg's goodbye to get out through the relay,
+#: which takes milliseconds when the server is there at all.
+CLOSE_WAIT = 1.0
 
 #: How much the relay will hold for a server that is not keeping up before
 #: it stops reading from FFmpeg. Small on purpose: a slow link has to reach
@@ -123,6 +133,19 @@ NEXT_ADDRESS = 0.1
 AVIO_FLAG_WRITE = 2
 _WOULD_BLOCK = {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN,
                 getattr(errno, "WSAEWOULDBLOCK", 10035)}
+
+#: Said, after "Could not go on air.", when this copy cannot drive FFmpeg:
+#: its DLL is not there, or not the one this was written against. Never the
+#: network, and never worth another attempt, so it says so and says what to
+#: do. Mark, 24 November 2026: it used to come out as "could not connect to"
+#: the server and was retried, which sends somebody hunting for a network
+#: fault in a broken install. "streaming is missing" is in streamout.REFUSED.
+MISSING = ("part of Drop Deck's streaming is missing from this copy, so "
+           "nothing was sent, and reinstalling Drop Deck will put it back")
+
+
+class Missing(RuntimeError):
+    """Part of the program itself is not there, or not what it should be."""
 
 
 class RelayError(Exception):
@@ -178,6 +201,11 @@ def _loaded_avformat():
     frozen build (_internal/av.libs). Whatever PyAV loaded is the one whose
     log callback and allocator everything else is using.
     """
+    return _loaded_dll("avformat-")
+
+
+def _loaded_dll(prefix):
+    """The full path of a DLL already loaded in this process, by name."""
     if sys.platform != "win32":
         return ""
     from ctypes import wintypes
@@ -206,46 +234,98 @@ def _loaded_avformat():
     for index in range(count):
         if kernel32.GetModuleFileNameW(modules[index], name, 1024):
             base = os.path.basename(name.value).lower()
-            if base.startswith("avformat-") and base.endswith(".dll"):
+            if base.startswith(prefix) and base.endswith(".dll"):
                 return name.value
     return ""
 
 
 def _ffmpeg():
-    """FFmpeg's avformat, bound once. Raises RuntimeError with a reason."""
+    """FFmpeg's avformat, bound once. Raises Missing with a reason."""
     global _lib
     with _lib_lock:
         if _lib is not None:
             return _lib
         if av is None:
-            raise RuntimeError("the encoder is missing")
-        path = _loaded_avformat()
+            raise Missing("the encoder is missing")
+        try:
+            path = _loaded_avformat()
+        except Exception:
+            path = ""
         if not path:
             near = glob.glob(os.path.join(
                 os.path.dirname(os.path.dirname(av.__file__)), "av.libs",
                 "avformat-*.dll"))
             path = near[0] if near else ""
         if not path:
-            raise RuntimeError("FFmpeg's avformat library could not be found")
-        lib = ctypes.CDLL(path)
-        lib.avformat_version.restype = ctypes.c_uint
-        major = lib.avformat_version() >> 16
+            raise Missing("FFmpeg's avformat library could not be found")
+        try:
+            lib = ctypes.CDLL(path)
+            lib.avformat_version.restype = ctypes.c_uint
+            major = lib.avformat_version() >> 16
+            pointer = ctypes.POINTER(ctypes.c_void_p)
+            lib.avio_open2.argtypes = [pointer, ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.c_void_p, ctypes.c_void_p]
+            lib.avio_open2.restype = ctypes.c_int
+            lib.avio_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                       ctypes.c_int]
+            lib.avio_write.restype = None
+            lib.avio_flush.argtypes = [ctypes.c_void_p]
+            lib.avio_flush.restype = None
+            lib.avio_closep.argtypes = [pointer]
+            lib.avio_closep.restype = ctypes.c_int
+            lib.avio_open_dyn_buf.argtypes = [pointer]
+            lib.avio_open_dyn_buf.restype = ctypes.c_int
+            lib.avio_close_dyn_buf.argtypes = [ctypes.c_void_p, pointer]
+            lib.avio_close_dyn_buf.restype = ctypes.c_int
+        except (OSError, AttributeError) as exc:
+            raise Missing("FFmpeg's avformat library would not load: %s"
+                          % exc) from None
         if major not in KNOWN_AVFORMAT:
-            raise RuntimeError("libavformat %d is not one this was checked "
-                               "against" % major)
-        pointer = ctypes.POINTER(ctypes.c_void_p)
-        lib.avio_open2.argtypes = [pointer, ctypes.c_char_p, ctypes.c_int,
-                                   ctypes.c_void_p, ctypes.c_void_p]
-        lib.avio_open2.restype = ctypes.c_int
-        lib.avio_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
-                                   ctypes.c_int]
-        lib.avio_write.restype = None
-        lib.avio_flush.argtypes = [ctypes.c_void_p]
-        lib.avio_flush.restype = None
-        lib.avio_closep.argtypes = [pointer]
-        lib.avio_closep.restype = ctypes.c_int
+            raise Missing("libavformat %d is not one this was checked "
+                          "against" % major)
+        if not _laid_out_as_expected(lib):
+            raise Missing("FFmpeg's connection is not laid out the way this "
+                          "copy expects")
         _lib = lib
         return lib
+
+
+def _laid_out_as_expected(lib):
+    """Whether `_AVIOContext` reads FFmpeg's own struct correctly.
+
+    Asked of a context that does no I/O at all, an in-memory one, so a copy
+    whose FFmpeg has moved the fields is caught before anything touches the
+    network, rather than after a connection has already been made.
+    """
+    context = ctypes.c_void_p()
+    if lib.avio_open_dyn_buf(ctypes.byref(context)) < 0 or not context:
+        return False
+    try:
+        head = _AVIOContext.from_address(context.value)
+        return bool(head.write_flag == 1 and head.buffer_size > 0
+                    and head.error == 0 and head.buffer
+                    and head.buf_ptr == head.buffer)
+    except Exception:
+        return False
+    finally:
+        data = ctypes.c_void_p()
+        lib.avio_close_dyn_buf(context, ctypes.byref(data))
+        if data:
+            try:
+                avutil = ctypes.CDLL(_loaded_dll("avutil-"))
+                avutil.av_free.argtypes = [ctypes.c_void_p]
+                avutil.av_free(data)
+            except Exception:
+                pass        # a few bytes, once per run
+
+
+def ready():
+    """Bind FFmpeg now, before anything touches the network.
+
+    Raises Missing, with the reason for a support question, when this copy
+    cannot drive FFmpeg at all; `MISSING` is what to say to the presenter.
+    """
+    return _ffmpeg()
 
 
 #: FFmpeg's AVIOInterruptCB: a function it calls whenever it is waiting on
@@ -303,6 +383,9 @@ class FFmpegLink:
         #: which the RTMP explainer would read as a refused key.
         self.timed_out = False
         self.stopped = False
+        #: This copy's FFmpeg is missing or not what it should be. See
+        #: MISSING: a reinstall, not the network.
+        self.broken = False
         # Held for as long as FFmpeg holds the pointer to them.
         self._callback = _INTERRUPT(self._interrupted)
         self._interrupt = _AVIOInterruptCB(self._callback, None)
@@ -344,7 +427,11 @@ class FFmpegLink:
         av.error.err_check(code)            # what PyAV itself would raise
 
     def _open(self):
-        lib = _ffmpeg()
+        try:
+            lib = _ffmpeg()
+        except Missing:
+            self.broken = True
+            raise
         self._deadline = time.monotonic() + self.timeout
         # The GIL is let go for this call, which is the whole point.
         code = lib.avio_open2(ctypes.byref(self._ctx),
@@ -356,8 +443,9 @@ class FFmpegLink:
         head = _AVIOContext.from_address(self._ctx.value)
         if head.write_flag != 1 or head.buffer_size <= 0 or head.error:
             lib.avio_closep(ctypes.byref(self._ctx))
-            raise RuntimeError("FFmpeg's connection is not laid out the way "
-                               "this copy expects")
+            self.broken = True
+            raise Missing("FFmpeg's connection is not laid out the way this "
+                          "copy expects")
         self._head = head
 
     def write(self, data):
@@ -615,13 +703,31 @@ class ConnectRewrite:
                 out += piece
         except (ValueError, struct.error, IndexError, UnicodeDecodeError) \
                 as exc:
-            self.fault = str(exc) or "unreadable"
-            self.done = True
-            return b""
+            return self._give_up(str(exc) or "unreadable")
         if self.done:
             out += self._buf
             self._buf.clear()
+        elif self.held > PREPARE_LIMIT:
+            # Mark, 24 November 2026: two megabytes fed in left four held,
+            # with no end to it. A handshake and a connect are a few hundred
+            # bytes; anything still arriving without one is not FFmpeg.
+            return self._give_up("more than %d bytes before the connect"
+                                 % PREPARE_LIMIT)
         return bytes(out)
+
+    @property
+    def held(self):
+        """Bytes kept back, waiting for the connect to be complete."""
+        return (len(self._buf) + sum(len(v) for v in self._held.values())
+                + sum(len(v) for v in self._raw.values()))
+
+    def _give_up(self, why):
+        self.fault = why
+        self.done = True
+        self._buf.clear()
+        self._held.clear()
+        self._raw.clear()
+        return b""
 
     def _chunk_out(self):
         """One whole chunk off the front, as what to send on. None if short."""
@@ -658,6 +764,9 @@ class ConnectRewrite:
         else:
             ts = last["ts"]
             length, kind, stream = last["length"], last["type"], last["stream"]
+        if length > PREPARE_LIMIT:
+            # Refused at the header, before a byte of it is held.
+            raise ValueError("a %d byte message before the connect" % length)
         extended = ts == 0xFFFFFF if fmt != 3 else last["extended"]
         head = at + size + (4 if extended else 0)
         starting = cs not in self._held
@@ -784,6 +893,8 @@ class Relay:
         self.local_port = 0
         self.rewrite = None
         self.peer = None
+        #: Connections from anywhere but 127.0.0.1, closed unanswered.
+        self.turned_away = 0
         self.handshake_done = False
         self._ready = threading.Event()
         self._established = False
@@ -842,25 +953,34 @@ class Relay:
         for sock in (self._local_sock, self._raw, self._listener):
             _hard_close(sock)
 
-    def close(self, wait=C.STREAM_STOP_TIMEOUT / 2):
-        """Finish, and do not leave a thread or a socket behind.
+    def close(self):
+        """Finish, and leave no socket behind and nobody waiting.
 
-        **Once FFmpeg has its connection, it is let finish first.** Closing
-        FFmpeg's side sends FCUnpublish and deleteStream and then a TLS
-        goodbye has to follow them out, so a relay told to stop the moment
-        FFmpeg let go would drop the last thing a server hears. Before that
-        there is nothing in flight and it stops at once.
+        **Once FFmpeg has its connection, it is let finish first**, for up to
+        `CLOSE_WAIT`. Closing FFmpeg's side sends FCUnpublish and deleteStream
+        and then a TLS goodbye has to follow them out, so a relay told to stop
+        the moment FFmpeg let go would drop the last thing a server hears.
+
+        **Then a moment, and no more.** This runs on the streaming thread,
+        which is what Stop waits for. Mark, 24 November 2026: a resolver
+        stalled on DNS held Stop for five seconds here, and a DNS lookup
+        cannot be interrupted at all. So it is not waited for: the thread is
+        a daemon, holds no socket while it resolves, and ends by itself when
+        the lookup comes back and it finds it has been told to stop.
         """
         thread = self._thread
         here = thread is threading.current_thread()
-        if thread is not None and not here and self._local_sock is not None:
-            thread.join(wait)
+        # Only the first close waits at all. wait_ready closes on a stop and
+        # its caller closes again, and two waits were twice the moment.
+        first = not self._closing
+        if (first and thread is not None and not here
+                and self._local_sock is not None):
+            thread.join(CLOSE_WAIT)
         self._closing = True
-        if thread is not None and not here:
-            thread.join(wait)
+        if first and thread is not None and not here and thread.is_alive():
+            thread.join(2 * SLICE)       # it looks at _closing every SLICE
             if thread.is_alive():
                 self.abort()
-                thread.join(wait)
         self._shut()
 
     @property
@@ -1054,9 +1174,17 @@ class Relay:
                                  % self.host) from None
 
     def _listen(self):
-        """The loopback only, a port of Windows' choosing, one at a time."""
+        """The loopback only, a port of Windows' choosing, one at a time.
+
+        **SO_EXCLUSIVEADDRUSE**, because without it Windows lets another
+        program bind the same port with SO_REUSEADDR and take the connection
+        meant for FFmpeg's, key and all.
+        """
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                listener.setsockopt(socket.SOL_SOCKET, exclusive, 1)
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
             listener.setblocking(False)
@@ -1069,7 +1197,12 @@ class Relay:
         self.rewrite = ConnectRewrite(self.local_prefix, self.real_prefix)
 
     def _accept(self):
-        """One connection, and the listener is closed straight after it."""
+        """One connection from 127.0.0.1, and the listener closes after it.
+
+        The whole of 127.0.0.0/8 is the loopback, and FFmpeg connects from
+        127.0.0.1, so anything else knocking is another program and is shut
+        out without a word, while the listener stays for the real one.
+        """
         while True:
             if self._stopping():
                 raise RelayError("stopped")
@@ -1078,9 +1211,14 @@ class Relay:
             if not ready:
                 continue
             try:
-                sock, self.peer = self._listener.accept()
+                sock, peer = self._listener.accept()
             except (BlockingIOError, InterruptedError):
                 continue
+            if peer[0] != "127.0.0.1":
+                self.turned_away += 1
+                _hard_close(sock)
+                continue
+            self.peer = peer
             break
         listener, self._listener = self._listener, None
         listener.close()

@@ -135,7 +135,11 @@ Plain sentences for the changelog and the release post, added by each step.
 - A video server that takes the connection and then never answers, plain
   rtmp such as Restream included, can no longer freeze Drop Deck. It is
   given up on after ten seconds with "did not answer", and pressing Ctrl+B
-  again while it is connecting stops it at once.
+  again while it is connecting stops it at once, even while the server's
+  name is still being looked up.
+- If part of Drop Deck's streaming is missing from your copy, going live says
+  so once and asks you to reinstall, instead of blaming your network and
+  trying again all night.
 
 ## Sound
 

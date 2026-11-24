@@ -78,6 +78,9 @@ REFUSED = (
     # A server that cannot prove who it is will not prove it on the next
     # attempt either. See rtmpsrelay.CERT_REFUSED.
     "certificate could not be checked",
+    # Nor will a copy of the app with part of itself missing. See
+    # rtmpsrelay.MISSING.
+    "streaming is missing",
 )
 
 #: Errors that are a typo when Ctrl+B is pressed and a network when they turn
@@ -1106,7 +1109,7 @@ class RtmpDestination(Destination):
         url = self.url()
         parsed = urllib.parse.urlparse(self.settings.get("host", ""))
         if parsed.hostname:
-            _resolve(parsed.hostname, parsed.port)
+            _resolve(parsed.hostname, parsed.port, stop=self.stop_event)
         target = self._target(url)
         try:
             # No rtmp_live here: it is an INPUT option, for playing a stream
@@ -1158,6 +1161,9 @@ class RtmpDestination(Destination):
             # said as one, because FFmpeg reports an interrupt as "Immediate
             # exit requested", which _explain_rtmp hears as a refused key.
             said = relay.fault if relay is not None and relay.fault else ""
+            if link is not None and link.broken:
+                from . import rtmpsrelay
+                said = rtmpsrelay.MISSING
             if not said and link is not None and link.timed_out:
                 exc = TimeoutError("timed out")
             raise SinkError(said or _explain_rtmp(
@@ -1183,6 +1189,12 @@ class RtmpDestination(Destination):
         receives the same bytes; tests/test_review_rtmps.py compares them.
         """
         from . import rtmpsrelay
+        try:
+            # Before any network: a copy that cannot drive FFmpeg says so,
+            # in words that send nobody looking for a network fault.
+            rtmpsrelay.ready()
+        except rtmpsrelay.Missing:
+            raise SinkError(rtmpsrelay.MISSING) from None
         if urllib.parse.urlparse(url).scheme.lower() == "rtmps":
             # **The certificate is checked BEFORE FFmpeg is let near the
             # server**, by Python, against the same trust Check my stream
@@ -1523,7 +1535,7 @@ def host_label(url):
     return _host_of(url)
 
 
-def _resolve(host, port):
+def _resolve(host, port, stop=None):
     """Look the server up before FFmpeg does, so a typo says it is a typo.
 
     This exists because of what FFmpeg gives back otherwise. Measured on
@@ -1541,10 +1553,33 @@ def _resolve(host, port):
     Resolving here separates them: a name that will not resolve is reported as
     a name that will not resolve, and after this an I/O error really is the
     server refusing us, which is nearly always the key.
+
+    **With `stop`, the lookup runs on a thread of its own** and this waits
+    for it in slices. A DNS lookup cannot be interrupted, and a stalled one
+    held Stop for as long as Windows took to give up (Mark, 24 November
+    2026). The thread is a daemon and holds nothing, so an abandoned lookup
+    simply ends by itself whenever the answer comes.
     """
-    try:
-        socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
-    except OSError:
+    answer = []
+
+    def look():
+        try:
+            socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
+            answer.append(True)
+        except OSError:
+            answer.append(False)
+
+    if stop is None:
+        look()
+    else:
+        worker = threading.Thread(target=look, daemon=True,
+                                  name="dropdeck-resolve")
+        worker.start()
+        while worker.is_alive():
+            worker.join(0.05)
+            if stop.is_set():
+                raise SinkError("stopped")
+    if not answer or not answer[0]:
         raise SinkError(
             "could not find %s. Check the server address" % host) from None
 
