@@ -30,6 +30,7 @@ import re
 import sys
 import tempfile
 import time
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="dropdeck-security-")
@@ -256,6 +257,31 @@ class FakeStreamer:
 streamout.Streamer = FakeStreamer
 
 
+class FakeGoLive:
+    """The go live summary, with the answer a person would give. It keeps
+    every report it was shown. Stay off air unless told otherwise."""
+
+    shown = []
+    answers = []
+
+    def __init__(self, parent, report):
+        FakeGoLive.shown.append(report)
+        self.remember = False
+        self.fix = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def ShowModal(self):
+        return FakeGoLive.answers.pop(0) if FakeGoLive.answers else wx.ID_CANCEL
+
+
+uimod.GoLiveDialog = FakeGoLive
+
+
 def listen(frame):
     """Everything the frame says from now on, in order."""
     heard = []
@@ -404,14 +430,17 @@ START = write_board("Startup.json", {
     "live_to": "video", "ask_before_live": False,
     "video_server": "rtmp", "video_host": MIXCLOUD,
     "stream_stations": [{"stream_name": "Second Show",
-                         "video_server": "rtmp", "video_host": SECOND}],
+                         "video_server": "rtmp", "video_host": SECOND},
+                        {"stream_name": "Tube Show",
+                         "video_server": "youtube", "video_host": ATTACKER}],
     "slots": [{"global_hotkey": "Ctrl+C"}, {"global_hotkey": "Shift+A"},
               {"global_hotkey": "Ctrl+Alt+F9"}],
 })
 # What 3.10.1 left in Credential Manager: keys by station name, with no
-# server written beside them. Two the startup board names, one it does not.
+# server written beside them. Three the startup board names, one it does not.
 VAULT.keep_old_style("Night Shift", "MIXCLOUD-KEY")
 VAULT.keep_old_style("Second Show", "SECOND-KEY")
+VAULT.keep_old_style("Tube Show", "TUBE-KEY")
 VAULT.keep_old_style("Elsewhere", "ELSEWHERE-KEY")
 boardmod.remember_board_path(START)
 frame = uimod.DropDeckFrame(None)
@@ -438,68 +467,131 @@ else:
     check("SKIPPED: no voice chain in this copy, so nothing to load", True)
 check("the NAS the user's own board records to is kept at the first start",
       frame.board.record_folder == NAS, frame.board.record_folder)
+attempt("and this computer records there",
+        lambda: frame._record_folder() == NAS)
 check("and the startup line does not call it refused",
-      "not a folder on this computer" not in line, line)
+      "folder this computer does not use" not in line
+      and "not a folder on this computer" not in line, line)
 MACHINE = os.path.join(boardmod.config_dir(), getattr(
     boardmod, "MACHINE_FILE", "this computer.json"))
-machine = json.load(open(MACHINE, encoding="utf-8")) \
-    if os.path.exists(MACHINE) else {}
+
+
+def machine_now():
+    try:
+        with open(MACHINE, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
 check("it is written down as picked on this computer, outside the board",
-      NAS in (machine.get("record_folders") or []), machine)
+      NAS in (machine_now().get("record_folders") or []), machine_now())
 check("the startup line names the global hotkeys that are not used, and why",
       "Ctrl+C on" in line and "is copy" in line and "Shift+A on" in line
       and "types a character" in line, line)
 check("they are never offered to Windows",
       frame.hotkeys.bindings == {2: "Ctrl+Alt+F9"}, frame.hotkeys.bindings)
-check("the station password went into Credential Manager",
-      VAULT.text_of("Night Shift", getattr(secrets, "PASSWORD_PREFIX", "?"))
-      == "hunter2", sorted(VAULT.held))
-check("tied to the station's server",
-      VAULT.user_of("Night Shift", getattr(secrets, "PASSWORD_PREFIX", "?"))
-      == "for radio.example.org",
-      VAULT.user_of("Night Shift", getattr(secrets, "PASSWORD_PREFIX", "?")))
+check("the station password is not put in Credential Manager",
+      not any("station password" in target for target in VAULT.held),
+      sorted(VAULT.held))
+frame.board.dirty = True
 frame._autosave()
 on_disk = saved(START)
-check("and once it is kept, it is not in the board file any more",
-      on_disk.get("stream_password") == "", on_disk.get("stream_password"))
+check("it stays in the board file, as in 3.10.1",
+      on_disk.get("stream_password") == "hunter2",
+      on_disk.get("stream_password"))
 check("the folder stays in the user's own board file",
       on_disk.get("record_folder") == NAS, on_disk.get("record_folder"))
 check("the hotkeys that are not used stay on their pads in the file",
       [s.get("global_hotkey") for s in on_disk["slots"][:3]]
       == ["Ctrl+C", "Shift+A", "Ctrl+Alt+F9"],
       [s.get("global_hotkey") for s in on_disk["slots"][:3]])
-check("and the live board still has the password to broadcast with",
-      frame.board.stream_password == "hunter2")
 
-heading("The first start ties the keys 3.10.1 kept to the user's own servers")
-check("the startup station's key is tied to the custom server it names",
-      VAULT.user_of("Night Shift") == "for " + MIXCLOUD,
+heading("The first start ties the keys 3.10.1 kept, a custom server only "
+        "provisionally")
+check("the startup station's key waits to be confirmed for its custom server",
+      VAULT.user_of("Night Shift") == "confirm for " + MIXCLOUD,
       VAULT.user_of("Night Shift"))
-check("and a saved station's to the server that station names",
-      VAULT.user_of("Second Show") == "for " + SECOND,
+check("and a saved station's for the server that station names",
+      VAULT.user_of("Second Show") == "confirm for " + SECOND,
       VAULT.user_of("Second Show"))
+check("a YouTube station's is pinned to YouTube's own secure ingest, for good",
+      VAULT.user_of("Tube Show") == "for " + YOUTUBE,
+      VAULT.user_of("Tube Show"))
 check("a key the user's board does not name is left untied",
       VAULT.user_of("Elsewhere") == "stream", VAULT.user_of("Elsewhere"))
-machine = json.load(open(MACHINE, encoding="utf-8")) \
-    if os.path.exists(MACHINE) else {}
 check("and it is written down that this was done",
-      machine.get("upgrade_trusted") is True, machine)
+      machine_now().get("upgrade_trusted") is True, machine_now())
+
+FakeGoLive.shown.clear()
+FakeGoLive.answers[:] = [wx.ID_CANCEL]
 FakeStreamer.made.clear()
-heard.clear()
+command(frame, uimod.ID_STREAM_TOGGLE)
+shown = FakeGoLive.shown[-1] if FakeGoLive.shown else None
+check("the first Ctrl+B shows the summary although the question is off",
+      shown is not None, FakeGoLive.shown)
+check("naming the custom server",
+      shown is not None and "live.mixcloud.example" in shown.summary(),
+      shown and shown.summary())
+check("and saying what Go live will do to the key",
+      shown is not None and any("Going live sends it to live.mixcloud."
+                                "example" in note.text for note in shown.notes),
+      shown and [note.text for note in shown.notes])
+check("Stay off air sends nothing and confirms nothing",
+      not FakeStreamer.made
+      and VAULT.user_of("Night Shift") == "confirm for " + MIXCLOUD,
+      (FakeStreamer.made, VAULT.user_of("Night Shift")))
+FakeGoLive.answers[:] = [wx.ID_OK]
 command(frame, uimod.ID_STREAM_TOGGLE)
 made = FakeStreamer.made[-1] if FakeStreamer.made else None
-check("so Ctrl+B goes live on the custom server at the first show, no "
-      "retyping", made is not None
-      and made.settings.get("host") == MIXCLOUD
+check("Go live there puts the show on the custom server, no retyping",
+      made is not None and made.settings.get("host") == MIXCLOUD
       and made.settings.get("password") == "MIXCLOUD-KEY",
-      [line for line in heard if "stream key" in line])
+      made and made.settings.get("host"))
+check("and makes the tie final",
+      VAULT.user_of("Night Shift") == "for " + MIXCLOUD,
+      VAULT.user_of("Night Shift"))
 if frame.streaming():
     frame.stop_stream(quiet=True)
+FakeGoLive.shown.clear()
+FakeStreamer.made.clear()
+command(frame, uimod.ID_STREAM_TOGGLE)
+check("after that, with the question off, Ctrl+B just goes live",
+      not FakeGoLive.shown and FakeStreamer.made, FakeGoLive.shown)
+if frame.streaming():
+    frame.stop_stream(quiet=True)
+frame.board.stream_name, frame.board.video_host = "Second Show", SECOND
+FakeStreamer.made.clear()
+attempt("start_stream will not send a key nobody has confirmed, whoever calls",
+        lambda: frame.start_stream() is False and not FakeStreamer.made)
+frame.board.stream_name, frame.board.video_host = "Night Shift", MIXCLOUD
 VAULT.keep_old_style("Second Show", "SECOND-KEY")
 attempt("it happens once: the next start ties nothing",
         lambda: frame._trust_own_board_once() is None
         and VAULT.user_of("Second Show") == "stream")
-VAULT.held[secrets.target_for("Second Show")] = ("SECOND-KEY", "for " + SECOND)
+VAULT.held[secrets.target_for("Second Show")] = ("SECOND-KEY",
+                                                 "confirm for " + SECOND)
+
+heading("If this computer cannot write that down, nothing is trusted")
+kept_state = machine_now()
+os.remove(MACHINE)
+os.makedirs(MACHINE + ".tmp")        # stands in for a file that cannot be written
+VAULT.keep_old_style("Locked", "LOCKED-KEY")
+locked = Board.load(write_board("Locked.json", {
+    "stream_name": "Locked", "video_server": "rtmp",
+    "video_host": "rtmp://elsewhere.example/live"}))
+for start in (1, 2):
+    try:
+        uimod.DropDeckFrame._trust_own_board_once(
+            types.SimpleNamespace(board=locked, _loaded_demo=False))
+    except Exception:
+        pass
+check("two starts in a row tie nothing when the note cannot be written",
+      VAULT.user_of("Locked") == "stream", VAULT.user_of("Locked"))
+os.rmdir(MACHINE + ".tmp")
+with open(MACHINE, "w", encoding="utf-8") as handle:
+    json.dump(kept_state, handle)
+del VAULT.held[secrets.target_for("Locked")]
 
 heading("A board changed on disk while it is open is held to the same rule")
 LOADS.clear()
@@ -520,7 +612,7 @@ if dsp.available() and CHAIN is not None:
           LOADS == [], LOADS)
     check("and the Loaded line says so, by name",
           "voice plugin that is not installed here, y" in reloaded, reloaded)
-check("the station password comes back from Credential Manager",
+check("the station password is the board's own, from its file",
       frame.board.stream_password == "hunter2", frame.board.stream_password)
 
 # ===========================================================================
@@ -550,8 +642,39 @@ if dsp.available() and CHAIN is not None:
           LOADS)
     check("and the Loaded line says so, by name",
           "voice plugin that is not installed here, x" in opened, opened)
-check("the Loaded line says the recording folder was not kept",
-      "not a folder on this computer" in opened, opened)
+check("the Loaded line says this computer will not record to its folder",
+      "folder this computer does not use" in opened, opened)
+check("the board's own field is left as it is, for the computer it came from",
+      frame.board.record_folder == WEBDAV, frame.board.record_folder)
+attempt("but this computer records to the usual folder instead",
+        lambda: frame._record_folder() is None)
+frame.board.dirty = True
+frame._autosave()
+check("and saving the board does not rewrite the field",
+      saved(EVIL).get("record_folder") == WEBDAV,
+      saved(EVIL).get("record_folder"))
+box = dialogs.SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
+                             page=dialogs.SettingsDialog.PAGE_RECORD)
+attempt("Preferences never looks inside that folder for the next file name",
+        lambda: box._record_folder_to_ask() == "")
+box.Destroy()
+
+
+def ok_untouched_folder(dialog):
+    return wx.ID_OK
+
+
+preferences(frame, ok_untouched_folder)
+check("OK with the folder box untouched does not trust it on this computer",
+      WEBDAV not in (machine_now().get("record_folders") or [])
+      and frame.board.record_folder == WEBDAV, machine_now())
+heard.clear()
+frame._open_board(START)
+heard.clear()
+frame._open_board(EVIL)
+check("and it is said once for that folder, not at every open",
+      "folder this computer does not use" not in loaded_line(heard),
+      loaded_line(heard))
 check("YouTube's address is YouTube's, whatever the file says",
       frame.board.video_host == YOUTUBE, frame.board.video_host)
 check("the listener count will not read a file",
@@ -678,7 +801,6 @@ with open(PICTURE, "wb") as handle:
 SOUND = os.path.join(HOME, "drop.wav")
 with open(SOUND, "wb") as handle:
     handle.write(b"RIFF not really a sound")
-VAULT.refuse = True        # so the password and the key stay on the board
 share = Board()
 share.slots[0].filepath = SOUND
 share.stream_name, share.stream_host = "Blindside Radio", "blindsideradio.com"
@@ -740,7 +862,6 @@ if data:
           os.path.isfile(opened_export.picture_file)
           and os.path.dirname(os.path.abspath(opened_export.picture_file))
           .startswith(os.path.abspath(target)), opened_export.picture_file)
-VAULT.refuse = False
 
 heading("3c. A plugin named by its file name alone is found here, if it is")
 FAKE_PLUGIN = "C:\\Program Files\\Common Files\\VST3\\Phasis.vst3"
@@ -785,61 +906,127 @@ finally:
     vst.installed = real_installed
 
 # ===========================================================================
-heading("3b. The station password lives in Credential Manager")
+heading("3b. The station password stays in the board file, as in 3.10.1")
 
-pw = Board()
-pw.stream_name, pw.stream_host = "Blindside Radio", "blindsideradio.com"
-pw.stream_password = "hunter2"
-pw.save_station()
-pw.stream_stations.append({"stream_name": "Second", "stream_host":
-                           "second.example", "stream_password": "pw2"})
-attempt("putting them away reports one was kept and none refused",
-        lambda: pw.secure_passwords() == (True, False))
-attempt("the board file leaves both out",
-        lambda: pw.to_dict()["stream_password"] == ""
-        and all(not s.get("stream_password")
-                for s in pw.to_dict()["stream_stations"]))
-pw_path = os.path.join(HOME, "Passwords.json")
-pw.save(pw_path)
-back = Board.load(pw_path)
-check("reading the file alone never touches the credential store",
-      back.stream_password == "")
-attempt("the window gives them back from Credential Manager",
-        lambda: back.secure_passwords() is not None
-        and back.stream_password == "hunter2"
-        and [s.get("stream_password") for s in back.stream_stations]
-        == ["hunter2", "pw2"])
-stranger = Board()
-stranger.stream_name, stranger.stream_host = "Blindside Radio", \
-    "attacker.example"
-attempt("a board naming that station with another server gets nothing",
-        lambda: stranger.secure_passwords() is not None
-        and stranger.stream_password == "")
 
-VAULT.refuse = True
-# The export above already met a refusal, and it is said once a session.
-frame._password_refusal_said = False
-REFUSED = write_board("Refused.json", {"stream_name": "Locked down",
-                                       "stream_host": "locked.example",
-                                       "stream_password": "still-here",
-                                       "slots": []})
-REFUSED_TOO = write_board("Refused too.json", {"stream_name": "Also locked",
-                                               "stream_host": "also.example",
-                                               "stream_password": "pw3",
-                                               "slots": []})
-heard.clear()
-frame._open_board(REFUSED)
-first = loaded_line(heard)
-check("Windows refusing the store is said",
-      "Windows would not keep your station password safely" in first, first)
+def find_button(window, label):
+    for child in window.GetChildren():
+        if isinstance(child, wx.Button) and child.GetLabel() == label:
+            return child
+        found = find_button(child, label)
+        if found is not None:
+            return found
+    return None
+
+
+PW = write_board("Passwords.json", {
+    "stream_server": "icecast", "stream_host": "radio.example",
+    "stream_port": 8000, "stream_name": "B", "stream_password": "pwB",
+    "live_to": "audio",
+    "stream_stations": [
+        {"stream_name": "A", "stream_server": "icecast",
+         "stream_host": "radio.example", "stream_port": 8000,
+         "stream_password": "pwA"},
+        {"stream_name": "B", "stream_server": "icecast",
+         "stream_host": "radio.example", "stream_port": 8000,
+         "stream_password": "pwB"}],
+    "slots": []})
+
+
+def passwords_on_disk():
+    data = saved(PW)
+    return (data.get("stream_password"),
+            {s.get("stream_name"): s.get("stream_password")
+             for s in data.get("stream_stations", [])})
+
+
+frame._open_board(PW)
+frame.board.dirty = True
 frame._autosave()
-check("and the password stays in the file rather than being lost",
-      saved(REFUSED).get("stream_password") == "still-here")
-heard.clear()
-frame._open_board(REFUSED_TOO)
-check("said once, not at every board", "Windows would not keep your station "
-      "password" not in loaded_line(heard), loaded_line(heard))
-VAULT.refuse = False
+check("a save keeps every password in the board file",
+      passwords_on_disk() == ("pwB", {"A": "pwA", "B": "pwB"}),
+      passwords_on_disk())
+back = Board.load(PW)
+check("and a reload reads them all back from it",
+      back.stream_password == "pwB"
+      and [s.get("stream_password") for s in back.stream_stations]
+      == ["pwA", "pwB"],
+      (back.stream_password,
+       [s.get("stream_password") for s in back.stream_stations]))
+
+
+def forget_and_save_again(dialog):
+    dialog.stream_picker.SetStringSelection("A")
+    click(find_button(dialog, "For&get it"))
+    dialog.stream_name.SetValue("A")
+    dialog.stream_password.SetValue("pwA")
+    click(find_button(dialog, "Sa&ve this station"))
+    return wx.ID_OK
+
+
+preferences(frame, forget_and_save_again)
+frame.board.dirty = True
+frame._autosave()
+check("forgetting a station and saving it again keeps its password",
+      passwords_on_disk()[1].get("A") == "pwA"
+      and passwords_on_disk()[0] == "pwA", passwords_on_disk())
+check("and the other station keeps its own",
+      passwords_on_disk()[1].get("B") == "pwB", passwords_on_disk())
+
+
+def change_then_cancel(dialog):
+    dialog.stream_password.SetValue("typed-and-cancelled")
+    return wx.ID_CANCEL
+
+
+preferences(frame, change_then_cancel)
+frame.board.dirty = True
+frame._autosave()
+check("Cancel leaves the password as it was, on the board and in its file",
+      frame.board.stream_password == "pwA"
+      and passwords_on_disk()[0] == "pwA",
+      (frame.board.stream_password, passwords_on_disk()))
+check("and no station password was ever put in Credential Manager",
+      not any("station password" in target for target in VAULT.held),
+      sorted(VAULT.held))
+
+heading("Forgetting a saved station never deletes the key of the show on air")
+frame._open_board(START)
+frame.board.save_station()
+FakeGoLive.answers[:] = []
+FakeStreamer.made.clear()
+command(frame, uimod.ID_STREAM_TOGGLE)
+box = dialogs.SettingsDialog(frame, frame.board, frame.mixer, mic=frame.mic,
+                             page=dialogs.SettingsDialog.PAGE_STREAM)
+box.stream_picker.SetStringSelection("Night Shift")
+click(find_button(box, "For&get it"))
+box.Destroy()
+check("live on Night Shift, and its saved copy is forgotten",
+      frame.streaming()
+      and "Night Shift" not in frame.board.station_names(),
+      (frame.streaming(), frame.board.station_names()))
+check("but the stream key the show is using is still kept",
+      VAULT.text_of("Night Shift") == "MIXCLOUD-KEY",
+      VAULT.text_of("Night Shift"))
+if frame.streaming():
+    frame.stop_stream(quiet=True)
+
+heading("A key nobody tied goes only to a platform's SECURE ingest")
+VAULT.keep_old_style("Restreamer", "YT-KEY")
+restream = Board()
+restream.stream_name, restream.live_to = "Restreamer", C.LIVE_TO_VIDEO
+restream.video_server = "restream"
+restream.video_host = C.RTMP_INGEST["restream"]
+check("not to Restream's published address, which is plain rtmp",
+      preflight.video_key(restream)[0] == "", preflight.video_key(restream))
+check("the trusted addresses are all secure ones",
+      all(a.lower().startswith("rtmps://") for a in C.RTMP_PLATFORM_INGESTS),
+      C.RTMP_PLATFORM_INGESTS)
+restream.video_server, restream.video_host = "youtube", YOUTUBE
+check("while YouTube's own secure ingest still gets it",
+      preflight.video_key(restream)[0] == "YT-KEY",
+      preflight.video_key(restream))
+del VAULT.held[secrets.target_for("Restreamer")]
 
 # ===========================================================================
 heading("4. The shot check's Ask box never sends a screen nobody agreed to")
@@ -934,6 +1121,10 @@ check("the folder page is off, so it cannot be pointed at Documents",
 check("and an existing install keeps the folder it has",
       setup.get("UsePreviousAppDir", "").lower() == "yes",
       setup.get("UsePreviousAppDir"))
+check("the uninstall log is written fresh, so 3.10.1's delete of the whole "
+      "folder is not carried into an upgraded install",
+      setup.get("UninstallLogMode", "").lower() == "overwrite",
+      setup.get("UninstallLogMode"))
 removed = iss_entries(ISS.get("UninstallDelete", []))
 check("nothing deletes the whole program folder",
       not any(e.get("name", "").rstrip("\\") == "{app}"
@@ -959,11 +1150,10 @@ for label, value in (("a share nobody picked here",
                      ("a WebDAV address", WEBDAV),
                      ("a relative folder", "shows")):
     probe = Board.load(write_board("Folder.json", {"record_folder": value}))
-    check("a recording folder on %s is dropped" % label,
-          probe.record_folder == "", probe.record_folder)
-    check("and said, once, in plain words",
-          any("not a folder on this computer" in n
-              for n in getattr(probe, "load_notes", [])))
+    check("a recording folder on %s stays in the board" % label,
+          probe.record_folder == value, probe.record_folder)
+    attempt("but is not used on this computer",
+            lambda v=value: boardmod.usable_record_folder(v) == "")
 mine = Board.load(write_board("Folder.json", {"record_folder": "D:\\Shows"}))
 check("a folder on this computer is kept", mine.record_folder == "D:\\Shows",
       mine.record_folder)
@@ -995,6 +1185,46 @@ check("the listener count never opens a file, whatever it is handed",
       asked == [], asked)
 check("and says why", "http or https" in (answer.error or ""), answer.error)
 
+import http.server                                            # noqa: E402
+import threading                                              # noqa: E402
+import urllib.request                                         # noqa: E402
+
+
+class SendsToFtp(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", "ftp://127.0.0.1:2121/status-json.xsl")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+redirector = http.server.HTTPServer(("127.0.0.1", 0), SendsToFtp)
+threading.Thread(target=redirector.serve_forever, daemon=True).start()
+ftp_tried = []
+real_ftp = urllib.request.FTPHandler.ftp_open
+
+
+def record_ftp(self, req):
+    ftp_tried.append(req.full_url)
+    raise urllib.error.URLError("a stand-in opens nothing")
+
+
+urllib.request.FTPHandler.ftp_open = record_ftp
+try:
+    local = "http://127.0.0.1:%d" % redirector.server_address[1]
+    answer = streamstats.fetch({"stats_url": local, "host": "127.0.0.1"})
+finally:
+    urllib.request.FTPHandler.ftp_open = real_ftp
+    redirector.shutdown()
+check("a statistics page that redirects to FTP is not followed there",
+      ftp_tried == [], ftp_tried)
+check("an address on the local network is still asked, for Icecast at home",
+      streamstats.is_web(local)
+      and boardmod.web_address("http://192.168.1.20:8000") != "")
+
 
 NAS_TWO = "\\\\nas2.example\\recordings"
 
@@ -1015,13 +1245,11 @@ machine = json.load(open(MACHINE, encoding="utf-8")) \
     if os.path.exists(MACHINE) else {}
 check("and writes it down on this computer, not in the board",
       NAS_TWO in (machine.get("record_folders") or []), machine)
-check("so a board file naming that folder keeps it on load",
-      Board.load(write_board("Folder.json", {"record_folder": NAS_TWO}))
-      .record_folder == NAS_TWO)
-check("while another share in a board file is still dropped",
-      Board.load(write_board("Folder.json", {
-          "record_folder": "\\\\other-nas.example\\shows"})).record_folder
-      == "")
+attempt("so this computer records there, from any board naming it",
+        lambda: boardmod.usable_record_folder(NAS_TWO) == NAS_TWO)
+attempt("while another share named by a board is still not used here",
+        lambda: boardmod.usable_record_folder(
+            "\\\\other-nas.example\\shows") == "")
 check("a listener count address that is not a web address is refused",
       frame.board.stream_stats_url == "", frame.board.stream_stats_url)
 check("and said", any("web address" in line for line in heard), heard)
@@ -1050,8 +1278,39 @@ for text, why in (("Ctrl+C", "copy"), ("Ctrl+V", "paste"),
     attempt("%s is refused as a global hotkey" % text,
             lambda t=text, w=why: w in globalhotkeys.refusal(t),
             lambda t=text: globalhotkeys.describe(t))
-for text in ("Ctrl+Alt+C", "Ctrl+Shift+V", "Alt+A", "Shift+F5", "Ctrl+F9",
-             "Ctrl+Alt+F9"):
+for text, why in (("Ctrl+F9+V", "more than one key"),
+                  ("Shift+F1+A", "more than one key"),
+                  ("Shift+Tab", "moves between controls"),
+                  ("Alt+Tab", "switches between programs"),
+                  ("Ctrl+Tab", "moves between tabs"),
+                  ("Alt+F4", "closes the window"),
+                  ("Alt+Space", "window menu"),
+                  ("Shift+Insert", "edits text"),
+                  ("Ctrl+Insert", "edits text"),
+                  ("Ctrl+Backspace", "edits text"),
+                  ("Ctrl+Delete", "edits text"),
+                  ("Win+Left", "moves or selects"),
+                  ("Ctrl+Home", "moves or selects"),
+                  ("Shift+PageDown", "moves or selects"),
+                  ("Ctrl+Alt+E", "AltGr"), ("Ctrl+Alt+Q", "AltGr"),
+                  ("Ctrl+Alt+C", "AltGr"), ("Ctrl+Alt+2", "AltGr")):
+    attempt("%s is refused as a global hotkey" % text,
+            lambda t=text, w=why: w in globalhotkeys.refusal(t),
+            lambda t=text: globalhotkeys.describe(t))
+#: The keys Mark found punctuation landing on, by ord(): Right, Delete, Left,
+#: the Applications key and Print Screen.
+LANDED_ON = {0x27, 0x2E, 0x25, 0x5D, 0x2C}
+for text in ("Ctrl+'", "Ctrl+.", "Alt+'", "Ctrl+%", "Alt+]", "Ctrl+,"):
+    parsed = globalhotkeys.parse(text)
+    check("%s never becomes another key's code" % text,
+          parsed is None or parsed[1] not in LANDED_ON,
+          parsed and hex(parsed[1]))
+check("a character the keyboard types only with Shift is refused, not guessed",
+      globalhotkeys.parse("Ctrl+%") is None
+      and "with Shift" in globalhotkeys.refusal("Ctrl+%"),
+      globalhotkeys.refusal("Ctrl+%"))
+for text in ("Ctrl+Shift+V", "Alt+A", "Shift+F5", "Ctrl+F9", "Ctrl+Alt+F9",
+             "Win+Alt+D", "Ctrl+M", "Alt+Shift+F2"):
     attempt("%s is still allowed" % text,
             lambda t=text: globalhotkeys.refusal(t) == ""
             and globalhotkeys.parse(t) is not None)
@@ -1080,7 +1339,8 @@ real_user32 = globalhotkeys.user32
 globalhotkeys.user32 = FakeUser32()
 try:
     hk = REAL_HOTKEYS(on_fire=lambda i: None)
-    hk.set_bindings({0: "Ctrl+C", 1: "Shift+A", 2: "Ctrl+Alt+F9"})
+    hk.set_bindings({0: "Ctrl+C", 1: "Shift+A", 2: "Ctrl+Alt+F9",
+                     3: "Ctrl+F9+V", 4: "Alt+Tab"})
     hk._to_ui = lambda func, *args: None
     hk._run()          # registers, reads one message (none), lets go
 finally:
@@ -1089,12 +1349,14 @@ check("the listener itself offers Windows only the safe one",
       registered == [(globalhotkeys.MOD_CONTROL | globalhotkeys.MOD_ALT,
                       0x78)], registered)
 attempt("and keeps the others apart from Windows' own refusals",
-        lambda: set(hk.refused) == {0, 1} and hk.failures == {},
+        lambda: set(hk.refused) == {0, 1, 3, 4} and hk.failures == {},
         lambda: (getattr(hk, "refused", None), hk.failures))
 
 HOTKEYS = write_board("Hotkeys.json", {
     "global_hotkeys_on": True,
-    "slots": [{"global_hotkey": "Ctrl+V"}, {"global_hotkey": "Ctrl+Alt+F10"}]})
+    "slots": [{"global_hotkey": "Ctrl+V"}, {"global_hotkey": "Ctrl+Alt+F10"},
+              {"global_hotkey": "Ctrl+F9+V"}, {"global_hotkey": "Alt+Tab"},
+              {"global_hotkey": "Ctrl+Alt+E"}]})
 heard.clear()
 frame._open_board(HOTKEYS)
 opened = loaded_line(heard)
@@ -1102,6 +1364,13 @@ check("on open, only the safe one is registered",
       frame.hotkeys.bindings == {1: "Ctrl+Alt+F10"}, frame.hotkeys.bindings)
 check("and the Loaded line says which and why",
       "Ctrl+V on" in opened and "is paste" in opened, opened)
+check("the newer refusals too, each with its reason",
+      "Ctrl+F9+V on" in opened and "more than one key" in opened
+      and "Alt+Tab on" in opened and "switches between programs" in opened
+      and "Ctrl+Alt+E on" in opened and "AltGr" in opened, opened)
+check("and they stay on their pads, in the board",
+      [frame.board.slots[i].global_hotkey for i in (2, 3, 4)]
+      == ["Ctrl+F9+V", "Alt+Tab", "Ctrl+Alt+E"])
 check("the pad keeps it", frame.board.slots[0].global_hotkey == "Ctrl+V")
 frame.hotkeys.enabled = False
 frame.board.global_hotkeys_on = False
@@ -1110,7 +1379,7 @@ command(frame, uimod.ID_GLOBAL_TOGGLE)
 check("Ctrl+G turning them on says it too",
       any("Ctrl+V on" in line for line in heard), heard)
 
-slot = frame.board.slots[3]
+slot = frame.board.slots[5]
 capture = dialogs.AssignHotkeyDialog(frame, slot, global_mode=True)
 for keys, why in (((ord("C"),), {"ctrl": True}), ((ord("A"),),
                                                   {"shift": True})):
@@ -1120,8 +1389,13 @@ check("the assign window will not take Ctrl+C or Shift+A",
 check("and says why", "types a character" in capture.warning.GetLabel(),
       capture.warning.GetLabel())
 capture._on_key(Keystroke(ord("C"), ctrl=True, alt=True))
-check("Ctrl+Alt+C is taken as it always was",
-      capture.readout.GetValue() == "Alt+Ctrl+C", capture.readout.GetValue())
+check("nor Ctrl+Alt+C, which Windows reads as AltGr",
+      capture.readout.GetValue() == "None"
+      and "AltGr" in capture.warning.GetLabel(),
+      (capture.readout.GetValue(), capture.warning.GetLabel()))
+capture._on_key(Keystroke(wx.WXK_F9, ctrl=True, alt=True))
+check("Ctrl+Alt+F9 is taken as it always was",
+      capture.readout.GetValue() == "Alt+Ctrl+F9", capture.readout.GetValue())
 capture.Destroy()
 
 

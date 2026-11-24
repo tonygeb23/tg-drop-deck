@@ -167,12 +167,6 @@ def local_folder(value):
     return text
 
 
-#: What the Loaded line or the startup line says about a dropped folder.
-DROPPED_FOLDER_NOTE = ("This board asked for its recordings to go somewhere "
-                       "that is not a folder on this computer, so they go to "
-                       "your usual recordings folder")
-
-
 def network_folder(value):
     """A folder on a share, `\\\\server\\share\\...`, or "".
 
@@ -246,6 +240,37 @@ def picked_record_folder(value):
     if any(isinstance(p, str) and _folder_key(p) == wanted for p in picked):
         return text
     return ""
+
+
+def usable_record_folder(value):
+    """The board's recording folder if THIS computer may record there, else "".
+
+    A folder on this computer, or a share picked in Preferences here. Anything
+    else, a share or a web folder named by a board from somebody else, or a
+    relative path, is not used here and the usual folder is: the show,
+    microphone and all, would otherwise go to whatever server the board's
+    author named. The board's own field is never changed for it.
+    """
+    return local_folder(value) or picked_record_folder(value)
+
+
+def record_folder_said(value):
+    """Has this computer already said it will not record to that folder."""
+    key = _folder_key(value)
+    return any(isinstance(p, str) and _folder_key(p) == key
+               for p in machine_state().get("record_folders_said") or [])
+
+
+def note_record_folder_said(value):
+    """Write down that it was said, so it is said once per folder."""
+    state = machine_state()
+    said = [p for p in state.get("record_folders_said") or []
+            if isinstance(p, str)]
+    if not any(_folder_key(p) == _folder_key(value) for p in said):
+        said.append(str(value))
+        state["record_folders_said"] = said
+        return save_machine_state(state)
+    return True
 
 
 def remember_record_folder(value):
@@ -1008,19 +1033,6 @@ class Board:
         self.drops = DropLibrary()
         #: How many missing sounds `load` found beside the board by itself.
         self.found_beside = 0
-        #: What `load` refused out of the file, as sentences for the Loaded
-        #: line or the startup line to say once. A board is plain JSON that
-        #: people send each other, so a setting it could not keep is said,
-        #: not swallowed.
-        self.load_notes = []
-        #: The recording folder `load` refused, kept only so the first start
-        #: of this version can trust it on the user's own board. Never used
-        #: and never saved.
-        self.dropped_record_folder = ""
-        #: Station passwords that are safely in Credential Manager, as
-        #: (station, server, password). The file leaves these out; see
-        #: `secure_passwords`. Nothing here is ever written to disk.
-        self._kept_passwords = set()
         #: What `find_beside` repaired, {(kind, which): (guess, the path the
         #: file had)}.
         #: Saved back as the original, because a guess is not a fact.
@@ -1714,72 +1726,6 @@ class Board:
                 return True
         return False
 
-    # ------------------------------------------------------------ passwords --
-    def _password_entries(self):
-        """Every (name, server, password, station dict or None) on the board,
-        the live one first."""
-        yield (self.stream_name or "", self.stream_host or "",
-               self.stream_password or "", None)
-        for station in self.stream_stations:
-            yield (station.get("stream_name") or "",
-                   station.get("stream_host") or "",
-                   station.get("stream_password") or "", station)
-
-    def password_kept(self, name, host, password):
-        """Is this password in Credential Manager, so the file leaves it out."""
-        return bool(password) and ((name or "", secrets.host_key(host),
-                                    password) in self._kept_passwords)
-
-    def secure_passwords(self):
-        """Station passwords into Credential Manager, and back out of it.
-
-        Called by the window, never by `load` or `save`, so reading and
-        writing a board file never touches the credential store.
-
-        A password still in the board file is stored under its station's
-        name, tied to its server the way a stream key is, and the file leaves
-        it out from the next save on, but only once Windows has said it kept
-        it. A board whose file has none is given back the one kept for its
-        station, when it is for the same server: a board naming somebody's
-        station and pointing at another server gets nothing.
-
-        One name holds one password. A second, different one under a name
-        already claimed here stays in the file rather than overwrite it.
-
-        Returns (stored, refused): whether one was newly kept, so the file
-        needs writing, and whether Windows refused one, which stays in the
-        file and has to be said.
-        """
-        stored = refused = False
-        claimed = {}
-        for name, host, password, station in list(self._password_entries()):
-            if not host.strip():
-                continue
-            spot = (name, secrets.host_key(host))
-            if not password:
-                password, _held, _tied = secrets.key_for(
-                    name, host, secrets.PASSWORD_PREFIX)
-                if not password:
-                    continue
-                if station is None:
-                    self.stream_password = password
-                else:
-                    station["stream_password"] = password
-                self._kept_passwords.add(spot + (password,))
-                claimed.setdefault(name, spot + (password,))
-                continue
-            if claimed.get(name, spot + (password,)) != spot + (password,):
-                continue
-            claimed[name] = spot + (password,)
-            if spot + (password,) in self._kept_passwords:
-                continue
-            if secrets.store(name, password, secrets.PASSWORD_PREFIX, host):
-                self._kept_passwords.add(spot + (password,))
-                stored = True
-            else:
-                refused = True
-        return stored, refused
-
     def tie_kept_keys(self):
         """Tie each stream key kept by 3.10.1 to the server this board names
         for its station. Returns how many were tied.
@@ -1789,9 +1735,10 @@ class Board:
         alone, so a key saved for a custom server, Mixcloud through somebody's
         own RTMP relay for instance, has nothing written down to say where it
         goes, and holding it back would refuse a working show at the top of
-        the first one after updating. The user's own board is the best
-        witness there is to where each key belongs. A key already tied is
-        left alone, and the live station is asked before its saved copies.
+        the first one after updating. The board open at startup is the best
+        witness there is to where each key belongs, but not a perfect one, so
+        a custom server is tied provisionally (see below). A key already tied
+        is left alone, and the live station is asked before its saved copies.
         """
         tied = 0
         seen = set()
@@ -1805,23 +1752,19 @@ class Board:
             if name in seen:
                 continue
             seen.add(name)
-            address = (C.RTMP_INGEST[server] if server in C.RTMP_FIXED_ADDRESS
-                       else _rtmp_address(host))
+            # YouTube and Facebook are pinned to their own secure ingest, and
+            # that is final. Anything else is only as trustworthy as this
+            # board, which may be one somebody sent, so it waits for a person
+            # to confirm it at the first go live (ui._cleared_to_go).
+            pinned = server in C.RTMP_FIXED_ADDRESS
+            address = C.RTMP_INGEST[server] if pinned else _rtmp_address(host)
             if not address:
                 continue
             key = secrets.fetch(name)
             if key and not secrets.tied_to(name) and secrets.store(
-                    name, key, host=address):
+                    name, key, host=address, confirmed=pinned):
                 tied += 1
         return tied
-
-    def _station_for_file(self, station):
-        """A saved station as it is written: without a password that is kept."""
-        out = dict(station)
-        if self.password_kept(out.get("stream_name"), out.get("stream_host"),
-                              out.get("stream_password")):
-            out["stream_password"] = ""
-        return out
 
     def save_station(self, name=None):
         """Remember the current settings under their own name.
@@ -1895,10 +1838,7 @@ class Board:
             "stream_port": int(self.stream_port),
             "stream_mount": self.stream_mount,
             "stream_user": self.stream_user,
-            # Left out once Credential Manager has it. See secure_passwords.
-            "stream_password": ("" if self.password_kept(
-                self.stream_name, self.stream_host, self.stream_password)
-                else self.stream_password),
+            "stream_password": self.stream_password,
             "stream_format": self.stream_format,
             "stream_bitrate": int(self.stream_bitrate),
             "stream_name": self.stream_name,
@@ -1938,8 +1878,7 @@ class Board:
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
             "playlist_monitor_only": bool(self.playlist_monitor_only),
-            "stream_stations": [self._station_for_file(station)
-                                for station in self.stream_stations],
+            "stream_stations": list(self.stream_stations),
             "mic_channel": self.mic_channel,
             "cue_sound": str(self.cue_sound),
             "cue_level_db": float(self.cue_level_db),
@@ -2209,17 +2148,11 @@ class Board:
         fmt = data.get("record_format")
         board.record_format = fmt if fmt in C.RECORD_FORMAT_KEYS else "mp3"
         board.record_bitrate = _stream_bitrate(data.get("record_bitrate", 192))
-        wanted = data.get("record_folder") or ""
-        # A share only when it was picked in Preferences on this computer.
-        board.record_folder = (local_folder(wanted)
-                               or picked_record_folder(wanted))
-        if wanted and not board.record_folder:
-            # Kept aside, never used, for the first start of this version to
-            # trust on the user's own board (ui._trust_own_board_once).
-            board.dropped_record_folder = str(wanted)
-            # Never the path itself: it is the board author's text, and read
-            # aloud it is a run of backslashes.
-            board.load_notes.append(DROPPED_FOLDER_NOTE)
+        # Kept exactly as the file has it, whatever this computer can do with
+        # it: a board shared through Dropbox records to the NAS on the other
+        # computer, and rewriting the field here took that away from it.
+        # Whether THIS computer may record there is `usable_record_folder`.
+        board.record_folder = data.get("record_folder") or ""
         try:
             board.stop_presses = max(C.MIN_STOP_PRESSES,
                                      min(C.MAX_STOP_PRESSES,

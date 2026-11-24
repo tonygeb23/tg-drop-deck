@@ -2393,20 +2393,16 @@ class DropDeckFrame(wx.Frame):
         held = []
         for slot in self.board.slots:
             text = slot.global_hotkey
-            use = globalhotkeys.everyday_use(text) if text else ""
-            if use:
+            why = globalhotkeys.why_not(text) if text else ""
+            if why:
                 held.append("%s on %s %d, which %s"
-                            % (text, slot.bank_short, slot.number,
-                               "types a character"
-                               if use == globalhotkeys.TYPES else "is " + use))
+                            % (text, slot.bank_short, slot.number, why))
         if not held:
             return []
         many = len(held) > 1
-        return ["%s not used, because every other program needs %s: %s. %s "
-                "on %s until you change %s"
+        return ["%s not used: %s. %s on %s until you change %s"
                 % ("These global hotkeys are" if many
                    else "This global hotkey is",
-                   "those keys" if many else "that key",
                    "; ".join(held),
                    "They stay" if many else "It stays",
                    "their pads" if many else "its pad",
@@ -5399,39 +5395,44 @@ class DropDeckFrame(wx.Frame):
         return notes
 
     def _trust_own_board_once(self):
-        """The first start of this version trusts the board it opens.
+        """The first start of this version trusts the board it opens, once.
 
         3.10.1 kept stream keys without saying which server each was for, and
         let a board record to any folder. This version hands a key only to
-        its own server and drops a recording folder on a share, which would
-        refuse a broadcaster's custom server and their NAS at the top of the
-        first show after updating. So once, on the board that opens at
-        startup, which is the user's own (the one open last, from
-        last_board.json, or board.json), each kept key is tied to the server
-        that board names for it, and a share it records to is remembered as
-        picked here. Never the demo, which is nobody's. Written down in
-        MACHINE_FILE so it happens once: after that, a board from anywhere
-        else is held to the rules.
+        its own server and will not record to a share a board names, which
+        would refuse a broadcaster's custom server and their NAS at the top
+        of the first show after updating. So once, on the board that opens at
+        startup (the one open last, from last_board.json, or board.json, and
+        never the demo), each kept key is tied to the server that board names
+        for it, and a share it records to is remembered as picked here.
+
+        **Written down FIRST, and nothing is trusted if that fails.** Done the
+        other way round, a settings folder that could not be written trusted
+        whatever board opened at every single start (Mark, 24 November 2026).
+
+        **A key tied to a custom server is only provisional.** That board may
+        be one somebody sent, so the first go live with it always shows the
+        summary naming the server, and only Go live there makes the tie
+        final (see `_cleared_to_go`). YouTube and Facebook are pinned to
+        their own secure ingest and need nothing.
         """
         state = board_module.machine_state()
         if state.get("upgrade_trusted"):
             return
-        board = self.board
-        if not getattr(self, "_loaded_demo", False):
-            try:
-                board.tie_kept_keys()
-            except Exception:
-                errorlog.record_current()
-            folder = getattr(board, "dropped_record_folder", "")
-            if (folder and board_module.network_folder(folder)
-                    and board_module.remember_record_folder(folder)):
-                board.record_folder = folder
-                board.dropped_record_folder = ""
-                board.load_notes = [note for note in board.load_notes
-                                    if note != board_module.DROPPED_FOLDER_NOTE]
-        state = board_module.machine_state()
         state["upgrade_trusted"] = True
-        board_module.save_machine_state(state)
+        if not board_module.save_machine_state(state):
+            return
+        if getattr(self, "_loaded_demo", False):
+            return
+        board = self.board
+        try:
+            board.tie_kept_keys()
+        except Exception:
+            errorlog.record_current()
+        folder = board.record_folder or ""
+        if (board_module.network_folder(folder)
+                and not board_module.usable_record_folder(folder)):
+            board_module.remember_record_folder(folder)
 
     def _resolve_plugin_name(self, board):
         """A voice plugin named by its file name alone, found here.
@@ -5447,46 +5448,32 @@ class DropDeckFrame(wx.Frame):
             board.voice_settings = dict(settings, plugin=found)
 
     def _secure_board(self, board):
-        """What a board just opened was refused, said, and its passwords put
-        away. Sentences for the Loaded line or the startup line.
+        """What a board just opened was refused, as sentences for the Loaded
+        line or the startup line.
 
         At startup and on every open and reload, because a board is plain
-        JSON that people send each other: a recording folder on somebody's
-        server and a plugin from anywhere are dropped, and the Icecast
-        passwords go into Credential Manager rather than staying in the file.
+        JSON that people send each other: a plugin from anywhere is never
+        loaded, and a recording folder this computer will not use is said,
+        once per folder. **Neither is taken out of the board.** A board
+        shared through Dropbox is used on another computer as well, where
+        the plugin may be installed and the NAS is the user's own, and
+        rewriting the file here would take them away from it.
         """
-        notes = list(getattr(board, "load_notes", []) or [])
+        notes = []
         refusal = self._plugin_refusal(board)
         if refusal:
             notes.append(refusal)
-        stored, said = self._put_passwords_away(board)
-        notes.extend(said)
-        if stored or getattr(board, "load_notes", None):
-            # Written back, so the password and the folder leave the file
-            # and the folder is said once rather than at every start.
-            board.dirty = True
-            timer = getattr(self, "_save_timer", None)
-            if timer is not None:
-                timer.Start(2000, oneShot=True)
+        folder = board.record_folder or ""
+        if (folder and not board_module.usable_record_folder(folder)
+                and not board_module.record_folder_said(folder)):
+            board_module.note_record_folder_said(folder)
+            # Never the path itself: it is the board author's text, and read
+            # aloud it is a run of backslashes.
+            notes.append("This board records to a folder this computer does "
+                         "not use, so your recordings go to your usual "
+                         "folder. The board keeps its own folder for the "
+                         "computer it came from")
         return notes
-
-    def _put_passwords_away(self, board):
-        """`board.secure_passwords`, and what to say about it.
-
-        Returns (stored, sentences). Windows refusing is said once a session,
-        because it is the same fact every time a board opens.
-        """
-        try:
-            stored, refused = board.secure_passwords()
-        except Exception:
-            errorlog.record_current()
-            return False, []
-        if not refused or getattr(self, "_password_refusal_said", False):
-            return stored, []
-        self._password_refusal_said = True
-        return stored, ["Windows would not keep your station password safely, "
-                        "so it stays in your board file. Do not send that "
-                        "file to anybody"]
 
     def _follow_board_cards(self):
         """The board's own sound cards and monitor card, if they differ.
@@ -6211,6 +6198,13 @@ class DropDeckFrame(wx.Frame):
         if streamout.is_rtmp(settings["server"]) and settings.get("key_held"):
             self.announce(preflight.held_key_sentence(settings))
             return False
+        # Nor one the first start tied to a custom server, until somebody has
+        # said yes to that server: Ctrl+B asks, and its Go live confirms.
+        if (streamout.is_rtmp(settings["server"])
+                and settings.get("key_unconfirmed")):
+            self.announce("Press Ctrl+B to hear where this stream key goes "
+                          "and confirm it once, before it is sent")
+            return False
         # Refused HERE rather than at the far end. A missing key comes back
         # from YouTube as a bare I/O error several seconds into going live,
         # which is the worst moment and the least useful message.
@@ -6279,7 +6273,7 @@ class DropDeckFrame(wx.Frame):
             self.record_bus,
             fmt=self.board.record_format,
             bitrate=self.board.record_bitrate,
-            folder=self.board.record_folder or None,
+            folder=self._record_folder(),
             on_state=self._on_record_state)
         if not self.recorder.start():
             detail = self.recorder.detail
@@ -6343,7 +6337,7 @@ class DropDeckFrame(wx.Frame):
             height=int(settings.get("video_height") or self.board.video_height),
             fps=int(settings.get("video_fps") or self.board.video_fps),
             bitrate=self.board.record_bitrate,
-            folder=self.board.record_folder or None,
+            folder=self._record_folder(),
             on_state=self._on_record_state)
         if not self.video_recorder.start():
             detail = self.video_recorder.detail
@@ -6869,9 +6863,19 @@ class DropDeckFrame(wx.Frame):
         self.announce(said)
         self._update_status()
 
+    def _record_folder(self):
+        """Where recordings go on THIS computer, or None for the usual folder.
+
+        The board's own folder when this computer may record there: a folder
+        on this computer, or a share picked in Preferences here. Otherwise
+        the usual folder, and the board's field is left exactly as it is, so
+        a board shared with another computer keeps that computer's NAS.
+        """
+        return board_module.usable_record_folder(self.board.record_folder)             or None
+
     def _open_recordings(self):
         from . import recorder as recording
-        folder = self.board.record_folder or recording.default_folder()
+        folder = self._record_folder() or recording.default_folder()
         try:
             os.makedirs(folder, exist_ok=True)
             os.startfile(folder)              # noqa: S606 - a folder we made
@@ -7874,6 +7878,11 @@ class DropDeckFrame(wx.Frame):
                     # A key kept before keys were tied, about to be used
                     # with a platform's own ingest, which start_stream ties.
                     "key_untied": untied,
+                    # A key the first start tied to a custom server, which a
+                    # person has to confirm once (`_cleared_to_go`).
+                    "key_unconfirmed": (bool(key) and not held and bool(tied)
+                                        and secrets.unconfirmed(
+                                            board.stream_name or "")),
                     "format": "aac", "bitrate": board.stream_bitrate,
                     "name": board.stream_name,
                     # The CHANNEL, which is not the radio station. Kept as a
@@ -8016,16 +8025,23 @@ class DropDeckFrame(wx.Frame):
         whole complaint was not knowing what was live; the checkbox inside it
         turns this back into the single keystroke it used to be, for somebody
         who does this every day and knows their own settings.
+
+        **Except once per key the first start tied to a custom server.** That
+        tie came from whatever board was open, which may have been somebody
+        else's, so the summary naming the server is shown even with the
+        question turned off, and only Go live in it makes the tie final.
         """
         try:
-            report = (self.preflight() if settings is None
-                      else self._report_for(settings))
+            if settings is None:
+                settings = self._stream_settings()
+            confirm = bool(settings.get("key_unconfirmed"))
+            report = self._report_for(settings)
             if report is None:
                 return True
         except Exception:
             # Never let the check itself be what stops a broadcast.
             return True
-        if not self.board.ask_before_live:
+        if not self.board.ask_before_live and not confirm:
             # Still said, just not asked. A warning nobody has to dismiss is
             # the point of turning the dialog off, not a warning nobody hears.
             #
@@ -8048,6 +8064,8 @@ class DropDeckFrame(wx.Frame):
                 self.board.ask_before_live = False
                 self._touch()
             if answer == wx.ID_OK:
+                if confirm:
+                    self._confirm_stream_key(settings)
                 return True
             if answer != wx.ID_APPLY:
                 self.announce("Staying off air")
@@ -8055,9 +8073,23 @@ class DropDeckFrame(wx.Frame):
             self._on_settings(page=(SettingsDialog.PAGE_VIDEO
                                     if fix == C.FIX_VIDEO
                                     else SettingsDialog.PAGE_STREAM))
-            report = self.preflight()
+            try:
+                settings = self._stream_settings()
+                confirm = bool(settings.get("key_unconfirmed"))
+                report = self._report_for(settings)
+            except Exception:
+                report = None
             if report is None:
                 return False
+
+    def _confirm_stream_key(self, settings):
+        """Go live was pressed on a summary naming the server: the key the
+        first start tied there provisionally now goes there for good."""
+        name = self.board.stream_name or ""
+        key = settings.get("password") or ""
+        if key and secrets.unconfirmed(name) and secrets.same_host(
+                secrets.tied_to(name), settings.get("host", "")):
+            secrets.store(name, key, host=settings.get("host", ""))
 
     # ------------------------------------------------- the video source --
     def known_cameras(self):
@@ -8529,12 +8561,8 @@ class DropDeckFrame(wx.Frame):
                                    if undone else "Nothing changed")
                 # A station saved or forgotten on the Streaming tab is a
                 # deliberate act and survives Cancel, so the menu has to show
-                # it and the board still has to reach the disk, with its
-                # password in Credential Manager rather than in the file.
+                # it and the board still has to reach the disk.
                 self._rebuild_station_menu()
-                _stored, said = self._put_passwords_away(self.board)
-                if said:
-                    self.announce(". ".join(said))
                 if self.board.dirty:
                     self._save_timer.Start(2000, oneShot=True)
                 return
@@ -8571,15 +8599,20 @@ class DropDeckFrame(wx.Frame):
             self.board.record_format = dialog.record_format_key
             self.board.record_bitrate = dialog.record_bitrate_value
             folder = dialog.record_folder_path
-            if folder and not (board_module.local_folder(folder)
-                               or board_module.network_folder(folder)):
+            # Only when it was typed or chosen. Left alone, the box still
+            # holds the board's own folder, which may be another computer's
+            # NAS: OK must neither trust it here nor complain about it.
+            if not getattr(dialog, "record_folder_changed", True):
+                pass
+            elif folder and not (board_module.local_folder(folder)
+                                 or board_module.network_folder(folder)):
                 heard.append("Save recordings in has to be a whole folder "
                              "path, such as one chosen with Browse, so it was "
                              "not changed")
             else:
                 # A share chosen HERE is the user's own, and is written down
-                # on this computer so the board may keep it. The same share
-                # arriving in somebody else's board file is still dropped.
+                # on this computer so this computer records there. The same
+                # share arriving in somebody else's board is not used here.
                 if board_module.network_folder(folder):
                     board_module.remember_record_folder(folder)
                 self.board.record_folder = folder
@@ -8637,14 +8670,6 @@ class DropDeckFrame(wx.Frame):
             # borrowing it meant that merely looking at the video page and
             # pressing OK wiped a user's radio station password.
             self._apply_stream_key(video, was_called, stream["name"] or "")
-            # The station password is filed by name too. The new name's is
-            # stored below; the old one's goes unless a saved station still
-            # answers to it.
-            if (was_called and was_called != (stream["name"] or "")
-                    and not self._is_saved_station(was_called)):
-                secrets.forget(was_called, secrets.PASSWORD_PREFIX)
-            _stored, said = self._put_passwords_away(self.board)
-            heard.extend(said)
             picture_settings = dialog.picture_settings
             self.board.picture = picture_settings["picture"]
             self.board.picture_file = picture_settings["picture_file"]

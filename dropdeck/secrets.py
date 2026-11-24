@@ -85,17 +85,14 @@ def available():
 #: It is also billable, which a stream key is not.
 VISION_PREFIX = "TG Drop Deck vision key: "
 
-#: The third: an Icecast or SHOUTcast source password, one per station. It
-#: lived in board.json until the major release after 3.10.1, while the guide
-#: already said it was in Credential Manager. Anybody holding it can take
-#: over the station's mount, so it is the same kind of secret as a stream key.
-PASSWORD_PREFIX = "TG Drop Deck station password: "
-
 #: What Credential Manager shows beside each one, so nobody has to guess.
+#: (The Icecast source password is NOT kept here. It stays in board.json,
+#: as it always has: a board shared between two computers through Dropbox,
+#: or moved to the Mac, has to carry it, and every attempt to move it here
+#: lost one somewhere. Exports leave it out; see board.for_export.)
 _COMMENTS = {
     TARGET_PREFIX: "A live stream key. Safe to delete.",
     VISION_PREFIX: "A shot check key for an AI service. Safe to delete.",
-    PASSWORD_PREFIX: "A radio station source password. Safe to delete.",
 }
 
 #: The user name every credential was written with through 3.10.1. A key
@@ -106,6 +103,12 @@ _UNTIED = "stream"
 #: In front of the server a credential belongs to, in its user name, which
 #: Credential Manager shows: "for rtmps://a.rtmps.youtube.com/live2".
 _TIED = "for "
+
+#: In front of the server for a key tied by the first start of this version
+#: from a board that may not be the user's own: "confirm for rtmp://...". It
+#: is used only once a person has pressed Go live on a summary naming that
+#: server, which writes it again as `_TIED`.
+_PENDING = "confirm for "
 
 
 def target_for(station, prefix=TARGET_PREFIX):
@@ -216,18 +219,20 @@ def _delete(target):
     return True
 
 
-def store(station, key, prefix=TARGET_PREFIX, host=""):
+def store(station, key, prefix=TARGET_PREFIX, host="", confirmed=True):
     """Keep a key. True when it really went into the credential store.
 
     `host` is the server the key is for, and it is written beside the key.
     A board file is plain JSON that people send each other, and a station is
     found by NAME, so a board naming somebody's station could otherwise send
     their key wherever the board pointed. `key_for` hands a key only to the
-    server it was kept for.
+    server it was kept for. `confirmed` False writes the tie as waiting for
+    a person to confirm it (`unconfirmed`).
     """
     if not key:
         return forget(station, prefix)
-    user = (_TIED + host_key(host)) if host_key(host) else _UNTIED
+    tie = _TIED if confirmed else _PENDING
+    user = (tie + host_key(host)) if host_key(host) else _UNTIED
     return _write(target_for(station, prefix), key, user,
                   _COMMENTS.get(prefix, _COMMENTS[TARGET_PREFIX]))
 
@@ -241,9 +246,17 @@ def fetch(station, prefix=TARGET_PREFIX):
 def tied_to(station, prefix=TARGET_PREFIX):
     """The server a kept key belongs to, or "" when nobody wrote one down."""
     found = _read(target_for(station, prefix))
-    if not found or not str(found[1]).startswith(_TIED):
-        return ""
-    return str(found[1])[len(_TIED):]
+    user = str(found[1]) if found else ""
+    for tie in (_TIED, _PENDING):
+        if user.startswith(tie):
+            return user[len(tie):]
+    return ""
+
+
+def unconfirmed(station, prefix=TARGET_PREFIX):
+    """Is the kept key's server waiting for a person to confirm it."""
+    found = _read(target_for(station, prefix))
+    return bool(found) and str(found[1]).startswith(_PENDING)
 
 
 #: Why `key_for` held a key back.

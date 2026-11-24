@@ -75,14 +75,17 @@ Plain sentences for the changelog and the release post, added by each step.
   pointing somewhere else is stopped before it goes live, with a sentence
   saying why, and the go live summary names the server whenever it is not
   the platform's own.
-- Stream keys saved by 3.10.1 keep working, custom servers included. The
-  first time this version starts, each key is tied to the server your own
-  board names for it, with nothing to retype. A key your board does not name
-  still works with YouTube, Facebook and Restream; for any other server, type
-  it again once on the Video streaming page.
-- Your Icecast or SHOUTcast password now lives in Windows Credential Manager,
-  one per station, like the stream key, and leaves the board file. If Windows
-  will not keep it, it stays in the board file and Drop Deck says so once.
+- Stream keys saved by 3.10.1 keep working, custom servers included, with
+  nothing to retype. The first time this version starts, each key is tied
+  to the server the board you have open names for it. For YouTube and
+  Facebook that is their own secure address, and that is all. For any other
+  server, the first Ctrl+B shows where the key will go, even if you have
+  turned that question off, and Go live there confirms it for good.
+- A key your board does not name still works with YouTube's and Facebook's
+  own secure addresses. For any other server, Restream included, type it
+  again once on the Video streaming page.
+- Forgetting a saved station no longer deletes the stream key of the station
+  you are using, so a show on the air keeps its key.
 - Exporting a board with its sounds leaves out your passwords, any stream
   key, your recordings folder and the folders you last used. Your own
   picture goes with it, beside the sounds, and the voice plugin goes by its
@@ -91,21 +94,29 @@ Plain sentences for the changelog and the release post, added by each step.
   out."
 - The Ask box in Check my shot never sends your screen unless you have
   agreed to it in that check. Before then it says "Check the shot first".
-- Uninstalling removes Drop Deck and nothing else from its folder, and the
-  installer no longer asks where to put it, so it cannot be pointed at a
-  folder such as Documents.
+- Uninstalling removes Drop Deck and nothing else from its folder, on a copy
+  updated from 3.10.1 too, and the installer no longer asks where to put
+  it, so it cannot be pointed at a folder such as Documents.
 - Recording to a NAS or other network folder works when you chose that
   folder in Preferences on this computer, and the one your board already
-  records to keeps working after the update. A board from somebody else
-  naming a network or web folder records to your usual folder instead, and
-  Drop Deck says so once. Sounds kept on a network share work exactly as
-  before.
+  records to keeps working after the update. When a board names a network
+  or web folder you did not choose here, this computer records to your usual
+  folder instead and says so once for that folder. The board keeps its own
+  folder, so a board shared with another computer through Dropbox still
+  records to that computer's NAS. Sounds kept on a network share work
+  exactly as before.
 - Where listeners connect has to be a web address starting with http or
-  https.
-- Global hotkeys can no longer be Shift plus a letter or symbol, or Ctrl plus
-  A, C, V, X, Z, Y, S, F, N, O, P or W, because every other program needs
-  those keys. A board that already has one keeps it on the pad, but it is not
-  used, and Drop Deck says which and why.
+  https, and a page that tries to send Drop Deck anywhere else is not
+  followed. Addresses on your own network still work.
+- Global hotkeys can no longer be any of these, because every other program
+  needs them: Shift plus a letter or symbol; Ctrl plus A, C, V, X, Z, Y, S,
+  F, N, O, P or W; Tab, Insert, Delete, Backspace, the arrows, Home, End,
+  Page Up or Page Down with one modifier; Alt+F4, Alt+Tab, Ctrl+Tab and
+  Alt+Space; and Ctrl+Alt plus a letter, digit or symbol, which Windows
+  reads as AltGr and uses for characters such as @ and the euro sign. A
+  combination with two keys besides the modifiers is refused too, and so is
+  a symbol your keyboard types only with Shift. A board that already has one
+  keeps it on the pad, but it is not used, and Drop Deck says which and why.
 - If Windows will not keep your AI provider key, Drop Deck now says so
   instead of dropping it without a word.
 - Going live to YouTube, Facebook or any rtmps server now checks that the

@@ -162,13 +162,40 @@ def is_web(url):
     return parts.scheme.lower() in ("http", "https") and bool(parts.netloc)
 
 
+class _WebRedirectsOnly(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to another web address.
+
+    urllib's own handler follows one to ftp as well, so a statistics page
+    that answered with a redirect sent this app to an FTP server of its
+    author's choosing (Mark, 24 November 2026). An address on the local
+    network is still fine: plenty of people run Icecast at home.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_web(newurl):
+            raise urllib.error.HTTPError(
+                req.full_url, code, "a redirect to something that is not a "
+                "web address was refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+#: Web only, all the way down: no FTP, no file, no data URLs, and no
+#: redirect to any of them.
+_OPENER = urllib.request.OpenerDirector()
+for _handler in (urllib.request.ProxyHandler(), urllib.request.HTTPHandler(),
+                 urllib.request.HTTPSHandler(),
+                 urllib.request.HTTPDefaultErrorHandler(),
+                 _WebRedirectsOnly(), urllib.request.HTTPErrorProcessor()):
+    _OPENER.add_handler(_handler)
+
+
 def _get(url):
     if not is_web(url):
         raise ValueError("not a web address")
     request = urllib.request.Request(url, headers={
         "User-Agent": "%s/%s" % (C.APP_NAME, C.APP_VERSION),
         "Accept": "application/json, text/plain, */*"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as reply:
+    with _OPENER.open(request, timeout=TIMEOUT) as reply:
         return reply.read().decode("utf-8", "replace")
 
 

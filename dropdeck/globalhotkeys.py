@@ -60,29 +60,72 @@ MODIFIER_NAMES = {"CTRL": MOD_CONTROL, "CONTROL": MOD_CONTROL,
                   "WIN": MOD_WIN, "WINDOWS": MOD_WIN}
 
 
+def _parts(text):
+    """(modifier bits, [every key in it that is not a modifier]).
+
+    A single character keeps its own case, because the keyboard layout is
+    asked about the character as written.
+    """
+    mods, keys = 0, []
+    for raw in str(text or "").replace("-", "+").split("+"):
+        part = raw.strip()
+        if not part:
+            continue
+        if part.upper() in MODIFIER_NAMES:
+            mods |= MODIFIER_NAMES[part.upper()]
+        else:
+            keys.append(part if len(part) == 1 else part.upper())
+    return mods, keys
+
+
+def _character_key(char):
+    """The virtual key that types one character on this keyboard, or None.
+
+    Letters and digits are their own codes on every Windows layout. Anything
+    else is asked of the current layout, and counts only when the layout
+    types it with no Shift, Ctrl or Alt. **Never `ord()`**: the code of an
+    apostrophe is 0x27, which is VK_RIGHT, so Ctrl+' registered Ctrl+Right
+    Arrow, Ctrl+. took Delete and Ctrl+, took Print Screen (Mark, 24
+    November 2026). A character this cannot place is refused.
+    """
+    if char.upper() in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
+        return ord(char.upper())
+    try:
+        scan = ctypes.windll.user32.VkKeyScanW
+        scan.argtypes = [ctypes.c_wchar]
+        scan.restype = ctypes.c_short
+        found = int(scan(char))
+    except Exception:
+        return None
+    if found == -1:
+        return None
+    vk, shift_state = found & 0xFF, (found >> 8) & 0xFF
+    if shift_state or vk in (0, 0xFF):
+        return None
+    return vk
+
+
+def _key_code(part):
+    if part in NAMED_KEYS:
+        return NAMED_KEYS[part]
+    if len(part) == 1:
+        return _character_key(part)
+    return None
+
+
 def parse(text):
     """"Ctrl+Alt+F9" -> (modifiers, virtual key). None if it cannot be used.
 
     Returns None for a bare key with no modifier. That is not a parse failure,
     it is a refusal: a system-wide hotkey with no modifier takes that key away
-    from every other program running.
+    from every other program running. None too for more than one key that is
+    not a modifier: this kept the last one, so Ctrl+F9+V registered Ctrl+V.
     """
-    if not text:
+    mods, keys = _parts(text)
+    if len(keys) != 1 or mods == 0:
         return None
-    mods, key = 0, None
-    for part in str(text).replace("-", "+").split("+"):
-        part = part.strip().upper()
-        if not part:
-            continue
-        if part in MODIFIER_NAMES:
-            mods |= MODIFIER_NAMES[part]
-        elif part in NAMED_KEYS:
-            key = NAMED_KEYS[part]
-        elif len(part) == 1:
-            key = ord(part)
-        else:
-            return None
-    if key is None or mods == 0:
+    key = _key_code(keys[0])
+    if key is None:
         return None
     return mods | MOD_NOREPEAT, key
 
@@ -97,73 +140,104 @@ CTRL_KEYS_EVERYBODY_NEEDS = {
     "P": "print", "W": "close",
 }
 
+#: Keys that move, select and edit in every program, with what they do.
+#: With any ONE modifier they are Shift+Tab, Ctrl+Left, Shift+End, Win+Up
+#: and the rest, which nobody can lose.
+EDITING_KEYS = {
+    "TAB": "moves between controls in every program",
+    "INSERT": "edits text in nearly every program",
+    "DELETE": "edits text in nearly every program",
+    "BACKSPACE": "edits text in nearly every program",
+    "LEFT": "moves or selects in nearly every program",
+    "RIGHT": "moves or selects in nearly every program",
+    "UP": "moves or selects in nearly every program",
+    "DOWN": "moves or selects in nearly every program",
+    "HOME": "moves or selects in nearly every program",
+    "END": "moves or selects in nearly every program",
+    "PAGEUP": "moves or selects in nearly every program",
+    "PAGEDOWN": "moves or selects in nearly every program",
+}
+
+#: Windows' own, whatever program is in front.
+WINDOWS_KEYS = {
+    (MOD_ALT, "F4"): "closes the window in every program",
+    (MOD_ALT, "TAB"): "switches between programs",
+    (MOD_CONTROL, "TAB"): "moves between tabs in nearly every program",
+    (MOD_ALT, "SPACE"): "opens the window menu in every program",
+}
+
+#: What `why_not` says for Shift plus a printable key, kept as a name
+#: because the window used to compare against it.
+TYPES = "types a character in every program"
+
+
+def why_not(text):
+    """Why this may not be a GLOBAL hotkey, as a clause after "it", or "".
+
+    "" for anything a global hotkey may have, and for what `parse` refuses on
+    its own (a bare key, a name it does not know), which `describe` words.
+    Separate from `parse`, which also reads this app's own menu keys, Ctrl+S
+    among them, to find out which of them another program holds.
+    """
+    mods, keys = _parts(text)
+    if not mods or not keys:
+        return ""
+    if len(keys) > 1:
+        return "has more than one key besides Ctrl, Alt, Shift and Windows"
+    key = keys[0]
+    if len(key) == 1 and _character_key(key) is None:
+        return ("is a character this keyboard types with Shift or not at "
+                "all, so it cannot be told apart from another key")
+    if parse(text) is None:
+        return ""
+    single = bin(mods).count("1") == 1
+    upper = key.upper()
+    if (mods, upper) in WINDOWS_KEYS:
+        return WINDOWS_KEYS[(mods, upper)]
+    if single and upper in EDITING_KEYS:
+        return EDITING_KEYS[upper]
+    if mods == MOD_CONTROL and upper in CTRL_KEYS_EVERYBODY_NEEDS:
+        return "is %s in nearly every program" % CTRL_KEYS_EVERYBODY_NEEDS[upper]
+    if mods == MOD_SHIFT and (len(key) == 1 or upper == "SPACE"):
+        return TYPES
+    if mods == MOD_CONTROL | MOD_ALT and len(key) == 1:
+        # Windows reads Ctrl+Alt as AltGr, and on most European layouts
+        # AltGr is how @, the euro sign and the braces are typed.
+        return ("is AltGr to Windows, which types characters such as @ and "
+                "the euro sign on many keyboards")
+    return ""
+
 
 def refusal(text):
-    """Why a combination that parses must still not be a GLOBAL hotkey.
-
-    "" when it may be. Separate from `parse`, which also reads this app's
-    own menu keys, Ctrl+S among them, to find out which of them another
-    program holds. This is a rule about taking a key from every program:
-
-    - Shift plus one printable key is how every program types that capital
-      letter or symbol, so it would be typed nowhere else on the machine.
-    - Ctrl plus A, C, V, X, Z, Y, S, F, N, O, P or W is select all, copy,
-      paste and the rest, everywhere.
+    """Why a combination must not be a GLOBAL hotkey, as a sentence, or "".
 
     It adds to the rule that a global hotkey needs a modifier, which `parse`
-    keeps.
+    keeps. Every rule is in `why_not`.
     """
-    use = everyday_use(text)
-    if not use:
+    why = why_not(text)
+    if not why:
         return ""
-    if use == TYPES:
-        return ("%s types a character in every program, so as a global "
-                "hotkey it would be taken from all of them. Add Ctrl or Alt."
-                % text)
-    return ("%s is %s in nearly every program, so as a global hotkey it "
-            "would stop working everywhere else. Add Alt or Shift."
-            % (text, use))
-
-
-#: What `everyday_use` answers for Shift plus a printable key.
-TYPES = "typing"
-
-
-def everyday_use(text):
-    """What every program uses this combination for, in a word or two.
-
-    `TYPES` for Shift plus a printable key, "copy" and the like for the
-    Ctrl keys, "" for anything a global hotkey may have.
-    """
-    parsed = parse(text)
-    if parsed is None:
-        return ""
-    mods = parsed[0] & 0x000F
-    parts = [p.strip().upper()
-             for p in str(text).replace("-", "+").split("+") if p.strip()]
-    key = next((p for p in parts if p not in MODIFIER_NAMES), "")
-    if mods == MOD_SHIFT and (len(key) == 1 or key == "SPACE"):
-        return TYPES
-    if mods == MOD_CONTROL and key in CTRL_KEYS_EVERYBODY_NEEDS:
-        return CTRL_KEYS_EVERYBODY_NEEDS[key]
-    return ""
+    return ("%s cannot be a global hotkey, because it %s. A function key with "
+            "Ctrl or Alt is the safest choice." % (text, why))
 
 
 def usable(text):
     """Can this be registered as a global hotkey at all."""
-    return parse(text) is not None and not refusal(text)
+    return parse(text) is not None and not why_not(text)
 
 
 def describe(text):
     """Why a hotkey was refused, in words the user can act on."""
     if not text:
         return "No hotkey set."
+    if why_not(text):
+        return refusal(text)
     if parse(text) is None:
         if "+" not in str(text):
             return ("A global hotkey needs a modifier. %s on its own would be "
                     "taken away from every other program." % text)
         return "%s is not a hotkey this can register." % text
-    return refusal(text)
+    return ""
 
 
 class GlobalHotkeys:
@@ -258,7 +332,7 @@ class GlobalHotkeys:
         hotkey_id = 1
         for index, text in sorted(wanted.items()):
             parsed = parse(text)
-            if parsed is not None and refusal(text):
+            if refusal(text):
                 # The last word, whoever asked: a board file is the usual
                 # way one of these arrives, and the window filters them too.
                 with self._lock:

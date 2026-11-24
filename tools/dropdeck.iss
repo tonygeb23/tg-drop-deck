@@ -47,6 +47,11 @@ DefaultDirName={localappdata}\Programs\{#AppPublisher}\{#AppName}
 ; somebody's Documents. An existing install keeps the folder it has.
 DisableDirPage=yes
 UsePreviousAppDir=yes
+; Inno APPENDS to the uninstall log of the version installed before, so on a
+; copy upgraded from 3.10.1 its old "filesandordirs {app}" line would still
+; run at uninstall and empty the folder (Mark). A fresh log each install
+; means only the [UninstallDelete] below is ever run.
+UninstallLogMode=overwrite
 DefaultGroupName={#AppPublisher}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest

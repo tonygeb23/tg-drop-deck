@@ -365,6 +365,10 @@ def check(settings, board, audio_running=True, mic_open=False,
     elif video and not settings.get("password"):
         notes.append(Note(STOP, "There is no stream key for this station",
                           C.FIX_VIDEO))
+    if video and settings.get("key_unconfirmed"):
+        # Not a stop: this is the question. Going live is the answer.
+        notes.append(Note(WARN, unconfirmed_key_sentence(settings),
+                          C.FIX_VIDEO))
     if not video and host and not settings.get("password"):
         # Not a stop: a private Icecast can be set up to want no password, and
         # refusing to broadcast over a guess would be worse than the warning.
@@ -431,10 +435,24 @@ def held_key_sentence(settings):
                 "it is not being sent there. If %s is right, type the key "
                 "again on the Video streaming page" % (tied, host, host))
     return ("The stream key saved for this station was kept before Drop Deck "
-            "noted which server each key is for, and %s is not YouTube, "
-            "Facebook or Restream, so it is not being sent there. If %s is "
-            "right, type the key again on the Video streaming page"
+            "noted which server each key is for, and %s is not YouTube's or "
+            "Facebook's own secure address, so it is not being sent there. "
+            "If %s is right, type the key again on the Video streaming page"
             % (host, host))
+
+
+def unconfirmed_key_sentence(settings):
+    """What the go live summary says the first time a key tied by the
+    upgrade goes to a server that is not a platform's own.
+
+    The board that tied it was only the one open when this version first
+    started, so a person has to say yes to the server once.
+    """
+    host = streamout.host_label(settings.get("host", "")) or "this server"
+    return ("This stream key was kept before Drop Deck noted which server "
+            "each key is for. Going live sends it to %s, and from then on it "
+            "goes there and nowhere else. If that is not your server, stay "
+            "off air" % host)
 
 
 def going_live_warning(board):

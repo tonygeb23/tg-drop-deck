@@ -40,7 +40,7 @@ from . import streamhelp
 from . import streamout
 from . import streamstats
 from . import vst
-from .board import STATION_FIELDS
+from .board import STATION_FIELDS, usable_record_folder
 from .micinput import input_devices
 from .mixer import describe_device, output_devices
 from .slot import format_duration
@@ -198,8 +198,10 @@ class AssignHotkeyDialog(wx.Dialog):
                 "Alt. A key on its own would be taken away from everything "
                 "else you are running.\n"
                 "Alt counts as a modifier, so Alt plus a letter is fine. "
-                "Shift plus a letter, and Ctrl plus C, V and the other keys "
-                "every program uses, are refused for the same reason.\n"
+                "Shift plus a letter, Ctrl plus C, V and the other keys "
+                "every program uses, the arrows and Tab with one modifier, "
+                "and Ctrl+Alt plus a letter, which Windows reads as AltGr, "
+                "are refused for the same reason.\n"
                 "Press Delete to clear it. Tab reaches the buttons.")
         else:
             explain = ("Press the key combination you want, then choose OK.\n"
@@ -1912,11 +1914,12 @@ class SettingsDialog(wx.Dialog):
             self._say_test("There is nothing saved by that name.")
             return
         # A forgotten station must not leave its key behind in the credential
-        # store, where nothing would ever clean it up, nor its password,
-        # unless the setup in use is still called that and still needs it.
-        secrets.forget(name)
+        # store, where nothing would ever clean it up, UNLESS the setup in
+        # use is that station: then the key is the one it is broadcasting
+        # with, or will be, and forgetting the saved copy deleted it from
+        # under a live show, so the next reconnect had no key (Mark).
         if name != (self.board.stream_name or ""):
-            secrets.forget(name, secrets.PASSWORD_PREFIX)
+            secrets.forget(name)
         self._refresh_stations()
         self._say_test("Forgot %s." % name)
 
@@ -2789,6 +2792,10 @@ class SettingsDialog(wx.Dialog):
             panel, value=(getattr(self.board, "record_folder", "")
                           or recording.default_folder()))
         name_field(self.record_folder, "Save recordings in")
+        #: What the box opened with, so OK can tell a folder chosen here from
+        #: the board's own, which may be another computer's NAS.
+        self._record_folder_at_open = self.record_folder.GetValue().strip()
+        self._record_folder_chosen = False
         self.record_folder.SetToolTip(
             "Files are named Drop Deck Stream 001 and count up, so nothing "
             "you have already recorded is ever written over.")
@@ -2821,17 +2828,36 @@ class SettingsDialog(wx.Dialog):
 
     def _on_record_folder(self, _event):
         with wx.DirDialog(self, "Where should recordings go?",
-                          defaultPath=self.record_folder.GetValue(),
+                          defaultPath=self._record_folder_to_ask(),
                           style=wx.DD_DEFAULT_STYLE) as dialog:
             if dialog.ShowModal() == wx.ID_OK:
                 self.record_folder.SetValue(dialog.GetPath())
+                self._record_folder_chosen = True
                 self._show_next_recording()
+
+    @property
+    def record_folder_changed(self):
+        """Was the folder typed or chosen here, rather than left as it was."""
+        return (getattr(self, "_record_folder_chosen", False)
+                or self.record_folder.GetValue().strip()
+                != getattr(self, "_record_folder_at_open", ""))
+
+    def _record_folder_to_ask(self):
+        """The folder in the box, unless it is the board's own and this
+        computer does not use it. A share named by somebody else's board is
+        never looked into: listing it reaches their server, and Windows
+        offers it the user's sign in on the way."""
+        typed = self.record_folder.GetValue().strip()
+        if (typed and not self.record_folder_changed
+                and not usable_record_folder(typed)):
+            return ""
+        return typed
 
     def _show_next_recording(self):
         """Say what the next file will be called, so it is not a surprise."""
         from . import recorder as recording
         try:
-            path = recording.next_path(self.record_folder.GetValue().strip()
+            path = recording.next_path(self._record_folder_to_ask()
                                        or recording.default_folder(),
                                        self.record_format_key)
             self.record_next.SetLabel("The next one will be %s"
