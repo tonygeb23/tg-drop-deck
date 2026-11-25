@@ -35,6 +35,11 @@ ROOT = os.path.dirname(HERE)
 # A private desktop does not make it quiet. Skipped unless --with-sound.
 PLAYS_SOUND = {"test_proccapture.py", "test_sourcelist.py"}
 
+# And this one opens the first real camera for five seconds: a light on in
+# the room, and a device taken from whatever call the person is on. Skipped
+# unless --with-camera.
+USES_CAMERA = {"test_framing.py"}
+
 STUB = '''"""Stand-in for accessible_output2 in tests: says nothing, anywhere."""
 '''
 STUB_AUTO = '''class Auto:
@@ -177,6 +182,7 @@ def main(argv):
     files = []
     quiet = False
     with_sound = False
+    with_camera = False
     it = iter(argv)
     for arg in it:
         if arg == "--timeout":
@@ -185,6 +191,8 @@ def main(argv):
             quiet = True
         elif arg == "--with-sound":
             with_sound = True
+        elif arg == "--with-camera":
+            with_camera = True
         else:
             files.append(arg)
     if not files:
@@ -197,6 +205,12 @@ def main(argv):
             print("==== %s: skipped, it plays a tone on the speakers "
                   "(--with-sound to run it)" % os.path.basename(path))
         files = [f for f in files if f not in loud]
+    if not with_camera:
+        seen = [f for f in files if os.path.basename(f) in USES_CAMERA]
+        for path in seen:
+            print("==== %s: skipped, it opens a real camera "
+                  "(--with-camera to run it)" % os.path.basename(path))
+        files = [f for f in files if f not in seen]
     name = "dropdeck_tests_%d" % os.getpid()
     desk = win32service.CreateDesktop(name, 0, win32con.GENERIC_ALL, None)
     stub, wrapper = _stub_dir()
