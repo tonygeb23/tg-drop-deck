@@ -14,11 +14,25 @@ Things agents handed back for the lead to apply at the end. Not user facing.
 - "The on air sound shapes what goes out, never what the presenter hears.
   `dsp.ProgramChain` runs once each in the stream, both recorders and the
   send, after their bus sums the cards, each with its own state. The mixers
-  skip the air soft clip only while it is active. It holds while
-  `DuckBus.loud`. Alt+Shift+P bypasses it for the session and is never
-  saved. On for new boards, off for old ones."
-- "Loudness is measured on the background pass, never on a press. A trim the
-  user set wins. Nothing is boosted past its own peak headroom, because the
+  skip the air soft clip only while it is active. The leveller holds only
+  while `DuckBus.music_down`, a mixer's duck gain really below unity, never
+  merely because a microphone is open. The ceiling is a true peak ceiling
+  (`dsp.TruePeakCeiling`, 1.2 ms of lookahead on the program path only);
+  Firm starts at -3. Every block is made finite first: one inf used to
+  silence the stream for the session. Alt+Shift+P crossfades over 50 ms,
+  is never saved, and a bank 4 pad that already has the key keeps it. On
+  for new boards, off for old ones."
+- "**The send's loop guard goes by the cable's own name, never by the
+  registry.** Windows pairs a device's two ends by the card, so a headset's
+  speakers and microphone look like a loop and a guest gets taken off the
+  air. Only a known virtual cable's other end, or a Loopback or Stereo Mix
+  input on the card being sent into, is refused (`routing.loops_back`). A
+  false refusal is worse than a missed loop (Mark, 24 November 2026)."
+- "Loudness is measured on the background pass, never on a press, and the
+  numbers belong to one version of one file: path, size and modification
+  time, checked on every pass and when the window comes back. Numbers from a
+  board file may only cut until checked here. A trim the user set wins,
+  0 dB included (`trim_set`). Nothing is boosted past its own peak headroom, because the
   presenter's output has no limiter."
 - Layout: `loudness.py   BS.1770 loudness in numpy`.
 - The duck while talking nuance: the open microphone is still the floor; the
@@ -33,10 +47,16 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   resample, ring fill, duck while talking). WASAPI does not apply.
 - Audio step 2: the two leftovers (startup card line, mic on air refusal mid
   send), the program chain and loudness matching.
+- Audio step 3: the loop guard by cable name, the second talker coming back
+  at once, sanitising NaN and inf in the program chain and the resampler,
+  music_down for the leveller, loudness stamps and board value checks, the
+  stop event for measuring, the compare key yielding to a pad, the 50 ms
+  compare crossfade, the true peak ceiling, the ring rescue, trim_set.
 - Earlier steps (wiring, security, RTMPS): collect from the final audit.
 
 ## Open points
 
-- Firm at -2 dBFS reaches -0.73 dBTP. Suggested: -3 when Firm is chosen, or
-  a true peak ceiling.
+- Firm at -2 reached -0.73 dBTP: fixed in step 3 (true peak ceiling, Firm
+  at -3). AAC 128k on a brickwalled master can still decode over full scale,
+  which no ceiling before the encoder can promise.
 - Preferences is eleven tabs now; the guide says ten.
