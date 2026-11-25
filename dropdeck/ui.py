@@ -1974,7 +1974,8 @@ class DropDeckFrame(wx.Frame):
         # opposite of itself in its first two words. The tick says the state.
         self.mic_item = mic_menu.AppendCheckItem(
             ID_MIC_TOGGLE, "&Microphone\tCtrl+M",
-            "While it is on, the beds and the playlist duck out of the way")
+            "While it is on, and ducking is on, the beds and the playlist "
+            "duck out of the way")
         mic_menu.Append(ID_MIC_SETTINGS,
                         "Microphone &settings...\tCtrl+Shift+M",
                         "Which microphone, how much gain, which output you "
@@ -5178,7 +5179,8 @@ class DropDeckFrame(wx.Frame):
         self._remember(saved)
         if not quiet and path is None:
             # Save board as says its own line. See _on_save_as.
-            self.announce_help(f"Saved to {os.path.basename(saved)}")
+            # By its name, no ".json", as Save board as says it.
+            self.announce_help("Saved %s" % _board_words(saved))
         return saved
 
     def _save_failed(self, exc, quiet):
@@ -9161,7 +9163,7 @@ class DropDeckFrame(wx.Frame):
         if streamer.on_air_for > 2 and not getattr(streamer, "bytes_sent", 0):
             parts.append("but nothing has left this machine yet. Give it a "
                          "moment, and if it does not change, check your "
-                         "sound card in Preferences, Audio")
+                         "sound card in Preferences, Output")
         dropped = self.air_bus.dropped if self.air_bus is not None else 0
         if dropped:
             parts.append("%d blocks lost, so listeners have heard gaps"
@@ -9306,7 +9308,7 @@ class DropDeckFrame(wx.Frame):
             elif folder and not (board_module.local_folder(folder)
                                  or board_module.network_folder(folder)):
                 heard.append("Save recordings in has to be a whole folder "
-                             "path, such as one chosen with Browse, so it was "
+                             "path, such as one picked with Choose, so it was "
                              "not changed")
             else:
                 # A share chosen HERE is the user's own, and is written down

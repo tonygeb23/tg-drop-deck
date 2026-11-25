@@ -45,7 +45,8 @@ Three faders, because a bed, a drop and a song should never fight over one:
 | `Ctrl+Space` | Stop only the sound you started last, and again for the one before |
 | `Ctrl+F` | Search every bank by name |
 | `Ctrl+L` | What is playing right now |
-| `Ctrl+B` | Go live, and come off air |
+| `Ctrl+B` | Go live on your video platform, and come off air |
+| `Alt+Shift+B` | Go live on your radio station, and come off air |
 | `Alt+Shift+V` | Change what the stream is showing, on air or off |
 | `Ctrl+R` | Start and stop recording |
 | `Ctrl+Shift+R` | Record the picture as well as the sound, to one MP4 |
@@ -72,33 +73,49 @@ ends. That overlap is the crossfade, and it is a box under the running order
 rather than a setting to go hunting for. Artist and title come from each
 file's own tags, in columns a screen reader reads one at a time, and every
 track has a tick. A beep before a track ends is the countdown clock a sighted
-presenter watches; it plays where you hear yourself, so it stays out of the
-show. Save a running order as M3U and open it anywhere.
+presenter watches; it plays on the card you listen on, so with headphones
+there it stays out of the show. Save a running order as M3U and open it
+anywhere.
 
-**Streaming to your own station.** `Ctrl+B` sends the programme to Icecast, a
-Liquidsoap harbor or SHOUTcast, in MP3 or Ogg Opus. Sounds, beds, playlist and
-microphone go out; your preview and your end of track beep do not, because
-those are yours. Encoding and the network run on their own thread, so a bad
-connection costs the stream and never your own audio, and it reconnects by
-itself. `F7` and `F8` become a monitor fader on air, so you can turn the music
+**Streaming to your own station.** `Alt+Shift+B` sends the programme to
+Icecast, a Liquidsoap harbor or SHOUTcast, in MP3, AAC or Ogg Opus. Sounds,
+beds, playlist and microphone go out; your preview and your end of track beep
+do not, because those are yours. Encoding and the network run on their own
+thread, so a bad connection costs the stream and never your own audio, and it
+reconnects by itself. `F7` and `F8` become a monitor fader on air, so you can turn the music
 down to hear your screen reader while listeners still get it at full level.
 `Ctrl+Shift+A` says who is listening, and handles the awkward case that is
 really the common one: when the server you send to is not the server people
 listen on.
 
-**And to YouTube, Facebook or Restream.** Those will not take sound on its own, so something has to be on the screen: a card with your station name and whatever is playing, which costs about 64 kbps, your own artwork, a camera, your screen, or your screen with the camera small in the corner. `Alt+Shift+V` changes it while you are on air without dropping the connection. `Ctrl+Shift+F` says what the camera can see, in shot or not, centred, close enough, lit, because you cannot look at a preview window.
+**And to YouTube, Facebook or Restream, with `Ctrl+B`.** Those will not take sound on its own, so something has to be on the screen: a card with your station name and whatever is playing, which costs about 64 kbps, your own artwork, a camera, your screen, or your screen with the camera small in the corner. `Alt+Shift+V` changes it while you are on air without dropping the connection. `Ctrl+Shift+F` says what the camera can see, in shot or not, centred, close enough, lit, because you cannot look at a preview window.
 
-**`Ctrl+B` says what it is about to send** and waits for Enter: where the show is going, what it is sending, what is on the screen, and whether your microphone is on the air. It also says what would spoil the broadcast without stopping it, which is the half worth having. Turn the question off if you would rather it did not ask.
+**`Ctrl+B` and `Alt+Shift+B` say what they are about to send** and wait for Enter: where the show is going, what it is sending, what is on the screen, and whether your microphone is on the air. They also say what would spoil the broadcast without stopping it, which is the half worth having. Turn the question off if you would rather it did not ask.
 
-Nothing goes out until you press `Ctrl+B`.
+Nothing goes out until you press `Ctrl+B` or `Alt+Shift+B`.
+
+**On air sound.** What goes to the stream, the recordings and the send can be
+evened out, so a loud song and a quiet one arrive closer together, and kept
+under a ceiling you choose, measured between the samples as well as on them.
+Your own output is never touched, so a key sounds as soon as it always did.
+`Alt+Shift+P` bypasses it for a moment, to compare. Songs and pads can have
+their loudness matched as well, each measured once in the background, and a
+level you set on a pad yourself always wins.
+
+**Your stream key stays yours.** It is kept in Windows Credential Manager,
+goes only to the server it was saved for, and over rtmps only once the
+server's certificate has been checked. An exported board leaves out your
+passwords, any stream key and your own folders.
 
 **A microphone with a real chain.** A gate, a high pass filter, a three band
-equaliser, a compressor and a true peak limiter, in that order, plus VST3
+equaliser, a compressor and a limiter, in that order, plus VST3
 effects. Every parameter is a row in a list, in plain words with real units,
 read out as you change it, so a plugin whose own window no screen reader can
 read becomes a list any screen reader can. Beds and the playlist duck while
 the microphone is open and come back when you close it, and you can hear
-yourself through an output of its own.
+yourself through an output of its own. Whether your voice goes out at all is
+one box on the Microphone page: Send my microphone to streams, recordings and
+other programs.
 
 Nothing opens your microphone but you pressing `Ctrl+M`.
 
@@ -174,7 +191,12 @@ Each file is a script, so run them individually or all at once:
 for f in tests/test_*.py; do python "$f" || echo "FAILED $f"; done
 ```
 
-Twenty eight files, and they run with no sound card: the engine tests render
+On a machine somebody is using, run them through `python tools/run_private.py`
+instead, all of them or the files you name. It starts each one on a private
+desktop with speech silenced, so no window takes the foreground and nothing is
+read aloud.
+
+Fifty seven files, and they run with no sound card: the engine tests render
 the mixer by hand and check the samples, including that ducking really ducks
 by the amount it claims.
 

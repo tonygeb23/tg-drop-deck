@@ -25,8 +25,7 @@ from . import constants as C
 #: What every platform needs, whichever one it is. Said once here rather than
 #: repeated four times, and rendered before the platform's own steps.
 BEFORE = [
-    "Open Preferences with Control Shift P and go to the Video streaming "
-    "page.",
+    "Open Preferences with Control P and go to the Video streaming page.",
     "Choose your platform in the Platform box. YouTube and Facebook fill in "
     "their own address and lock it, because there is only one each.",
 ]
@@ -35,13 +34,12 @@ AFTER = [
     "Choose what to show in the Show box. A card with your station name on "
     "it is the default and is what most radio shows want. YouTube will not "
     "take sound on its own, so something has to be on the screen.",
-    "Tick Go live here when I press Control B, so Control B sends the show "
-    "to this platform rather than to your radio station.",
     "Press Check my stream key. It asks the platform whether your key is "
     "right and tells you what the platform said. It sends no sound and no "
     "picture, so nothing is broadcast and nothing is posted.",
-    "Press OK, then Control B to go live. Control Shift B tells you what the "
-    "stream is doing at any time.",
+    "Press OK, then Control B to go live. Control B always goes to your "
+    "video platform, and Alt Shift B to your radio station. Control Shift B "
+    "tells you what the stream is doing at any time.",
 ]
 
 
@@ -229,10 +227,11 @@ TROUBLE = [
      "press Go Live Now, so a preview and no post is Facebook working "
      "normally."),
     ("Control B goes to the wrong place",
-     "Control B goes to your video platform and Alt Shift B goes to your "
-     "radio station. On air, Streaming location shows both, with a dot "
-     "beside the one Control B will use, and the Go live here when I press "
-     "Control B box on the Video streaming page is the same setting."),
+     "Control B always goes to your video platform and Alt Shift B to your "
+     "radio station, whatever else is set. On air, Streaming location shows "
+     "both, with a dot beside the one used last, and that is the one Control "
+     "Shift B tells you about while you are off air. The Go live here when I "
+     "press Control B box on the Video streaming page moves the same dot."),
     ("It says I am on air and I am not sure anything is going out",
      "Press Control Shift B. It says how long you have been on air and, if "
      "nothing has left the machine yet, it says that too. Nothing going out "

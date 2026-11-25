@@ -18,7 +18,15 @@ import tempfile
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
-os.environ.setdefault("APPDATA", tempfile.mkdtemp(prefix="guide-check-"))
+# A settings folder of its own, every run, and not a default. Windows always
+# sets APPDATA, so `setdefault` never applied and the frame opened the user's
+# own board: its bank four hotkeys then counted as keys the guide had to
+# name, and the first start of a new version spent its once only steps
+# (the what's new line, tying kept stream keys) on the user's real settings.
+_SETTINGS = tempfile.mkdtemp(prefix="guide-check-")
+os.environ["APPDATA"] = _SETTINGS
+os.environ["TGDROPDECK_DATA"] = os.path.join(_SETTINGS, "data")
+os.makedirs(os.environ["TGDROPDECK_DATA"], exist_ok=True)
 
 import wx                                                       # noqa: E402
 
@@ -72,6 +80,188 @@ def parse(text):
         else:
             return None
     return None if key is None else (flags, key)
+
+
+# A key in any of the three ways the guide writes one: `Ctrl+B` in code, the
+# same with no backticks in bold or plain prose, and "Control Shift B" spelled
+# out, which is how the streaming chapter reads, rendered from streamhelp.py.
+# The key itself is a capital letter, a digit or a named key, so "Ctrl+digit"
+# in the bank table is not read as Ctrl+D.
+_WRITTEN_KEY = re.compile(
+    r"\b(?:(?:Ctrl|Alt|Shift)\+)+(?:F\d{1,2}|[A-Z0-9]|Enter|Space|Tab|Delete"
+    r"|Escape|Up|Down|Home|End)(?![\w+])")
+_SPELLED_KEY = re.compile(
+    r"\b(?:(?:Control|Alt|Shift) )+(?:F\d{1,2}|[A-Z0-9])(?![\w+])")
+
+
+def _keys_in(text):
+    """Every key a piece of the guide names, as (flags, code)."""
+    found = set()
+    for match in _WRITTEN_KEY.finditer(text):
+        key = parse(match.group(0))
+        if key:
+            found.add(key)
+    for match in _SPELLED_KEY.finditer(text):
+        key = parse(match.group(0).replace("Control", "Ctrl").replace(" ", "+"))
+        if key:
+            found.add(key)
+    return found
+
+
+def _sentences(raw):
+    """(chapter heading, section heading, sentence) for the whole guide.
+
+    A paragraph, a list item and a table row are each a block, so a sentence
+    never runs from one into the next, and the markdown that is not words
+    (bold, code, a link's address) is taken out before splitting. A table
+    row's first cell is what the row is about, a key in the key tables, so
+    it goes in front of every sentence of the rest of the row.
+    """
+    chapter = section = ""
+    block = []
+    out = []
+
+    def plain(text):
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        return text.replace("**", "").replace("`", "")
+
+    def flush():
+        if not block:
+            return
+        text = " ".join(block)
+        block.clear()
+        first = ""
+        if text.startswith("|"):
+            cells = [cell.strip() for cell in text.strip("|").split("|")]
+            first, text = plain(cells[0]), " ".join(cells[1:])
+        for sentence in re.split(r"(?<=[.!?;])\s+", plain(text)):
+            if sentence.strip(" ."):
+                out.append((chapter, section,
+                            (first + " " + sentence.strip()).strip()))
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            flush()
+            if stripped.startswith("## "):
+                chapter, section = stripped, ""
+            elif stripped.startswith("### "):
+                section = stripped
+            continue
+        if not stripped or re.fullmatch(r"\|[\s|:-]+\|", stripped):
+            flush()
+            continue
+        if stripped.startswith("|") or re.match(r"([-*]|\d+[.)])\s", stripped):
+            flush()
+        block.append(stripped)
+        if stripped.startswith("|"):
+            flush()
+    flush()
+    return out
+
+
+def _said(word, text):
+    """Is this word in the text, give or take an ending: video, videos."""
+    return re.search(r"\b%s(?:s|es|d|ed|ing)?\b" % re.escape(word), text,
+                     re.IGNORECASE) is not None
+
+
+def contradictions(raw, menu_bar):
+    """Sentences that name a key while describing a different command.
+
+    Ctrl+B passed every check this file had from 3.8.2 to 3.10.1 while the
+    guide taught it as the radio station's key, because Ctrl+B exists; it has
+    been the video platform's since 3.8.2. Whether a sentence describes a key
+    correctly is not something a script can read, but two shapes of that
+    mistake are, and both are derived from the app rather than listed:
+
+    - **Twins.** Two menu items whose labels are the same words but one,
+      with at least two in common, are one command aimed at two places, and
+      a writer can mix them up: Go live on video and Go live on radio, Go to
+      the playlist and Go to the soundboard. A sentence naming one twin's
+      key, and not the other's, that has the other's word and not its own,
+      is describing the other one. So is one under a heading with the other's
+      word, which is how "Going on air. Ctrl+B." sat in the radio chapter.
+      Two words in common, because New board and Open board are twins by one
+      and "open" and "new" are in half the sentences of the guide.
+    - **Preferences.** A key written as the way into Preferences, or into one
+      of its pages, has to be a key that opens Preferences. Ctrl+Shift+P was
+      taught that way, in five places, and it goes to the playlist.
+
+    Returns a list of sentences, each with what is wrong with it.
+    """
+    labels = {}
+    written = {}
+    stack = [menu_bar.GetMenu(i) for i in range(menu_bar.GetMenuCount())]
+    while stack:
+        menu = stack.pop()
+        for item in menu.GetMenuItems():
+            if item.IsSeparator():
+                continue
+            if item.GetSubMenu() is not None:
+                stack.append(item.GetSubMenu())
+                continue
+            label = item.GetItemLabel()
+            if chr(9) not in label:
+                continue
+            words, key = label.split(chr(9), 1)
+            code = parse(key.strip())
+            if code:
+                labels[code] = re.findall(r"[a-z]+", words.replace("&", "")
+                                          .lower())
+                written[code] = key.strip()
+    twins = []
+    keys = sorted(labels)
+    for one in keys:
+        for other in keys:
+            a, b = labels[one], labels[other]
+            if one == other or len(a) != len(b) or len(a) < 3:
+                continue
+            differ = [(x, y) for x, y in zip(a, b) if x != y]
+            if len(differ) == 1 and min(len(differ[0][0]),
+                                        len(differ[0][1])) >= 3:
+                twins.append((one, differ[0][0], other, differ[0][1]))
+    # Said, because the pairs are derived and somebody reading a failure
+    # should be able to see which pairs it came from.
+    print("  (twins from the menus: %s)" % ("; ".join(
+        "%s %s, %s %s" % (written[one], own, written[other], theirs)
+        for one, own, other, theirs in twins if one < other) or "none"))
+
+    # Where Preferences opens from. Ctrl+P is derived, as the key of the
+    # item whose label says Preferences. Ctrl+Shift+M is named, with its
+    # reason: it opens Preferences on the Microphone page, and its label is
+    # Microphone settings.
+    opens_preferences = {code for code, words in labels.items()
+                         if "preferences" in words}
+    opens_preferences.add(parse("Ctrl+Shift+M"))
+    key_text = r"(%s|%s)" % (_WRITTEN_KEY.pattern, _SPELLED_KEY.pattern)
+    into_preferences = (
+        re.compile(r"\bPreferences\b[^.;:]{0,30}?" + key_text),
+        re.compile(key_text + r"[^.;:]{0,15}?\b(?:and|then) the "
+                   r"[A-Z][\w ]{0,25}?\b(?:page|tab)\b"),
+        re.compile(key_text + r"\W{0,3}opens Preferences\b"))
+
+    wrong = []
+    for chapter, section, sentence in _sentences(raw):
+        named = _keys_in(sentence)
+        context = chapter + " " + section
+        for one, own, other, theirs in twins:
+            if one not in named or other in named or _said(own, sentence):
+                continue
+            if _said(theirs, sentence) or (_said(theirs, context)
+                                           and not _said(own, context)):
+                wrong.append("%r, in %s: %s is the key for %s, and this is "
+                             "about %s, which is %s"
+                             % (sentence[:140], chapter, written[one], own,
+                                theirs, written[other]))
+        for pattern in into_preferences:
+            for match in pattern.finditer(sentence):
+                spot = match.group(1)
+                code = _keys_in(spot)
+                if code and not code & opens_preferences:
+                    wrong.append("%r names %s as the way into Preferences"
+                                 % (sentence[:140], spot))
+    return wrong
 
 
 def main():
@@ -164,6 +354,9 @@ def main():
         # not as a key the app ships with. Assigning it is the whole point of
         # the sentence it appears in.
         "Alt+A": "an example of a global hotkey, not a shipped one",
+        # The Submit button's letter in Help, Submit feedback, which the menu
+        # letters list names. On the main window it opens the Sounds menu.
+        "Alt+S": "the Submit button's own letter in Submit feedback",
     }
     missing = []
     for text in sorted(keyish):
@@ -225,6 +418,20 @@ def main():
     check("while a plain letter is still left to the list, for finding a track",
           plain.skipped)
 
+    print()
+    print("What the guide says each key does")
+    # A key that exists can still be taught as something it is not, which is
+    # how Ctrl+B for the radio station and Ctrl+Shift+P for Preferences both
+    # got through every check above. See `contradictions` for the two shapes
+    # this catches. A sentence that trips it and is right goes here, by a
+    # phrase from it, with the reason; the guide is reworded first if that
+    # makes it clearer, and nothing is here today because that worked.
+    EXCUSED_SENTENCES = {}
+    found = [line for line in contradictions(raw, frame.GetMenuBar())
+             if not any(phrase in line for phrase in EXCUSED_SENTENCES)]
+    check("no key is taught as a command it is not", not found,
+          "".join("\n        " + line for line in found))
+
     # And the reverse: a key in the app that the guide never mentions.
     print()
     print("Keys the app has that the guide should probably mention")
@@ -242,6 +449,11 @@ def main():
         "Ctrl+Q": "quit, which every Windows program has",
         "Ctrl+W": "close, the same",
         "Alt+F4": "Windows itself",
+        # Bound to the swap because it was asked for, and Windows keeps it
+        # for its own task switcher and almost never lets it through, which
+        # is why no menu offers it since 3.10.0. The guide teaches the swap
+        # key that does arrive, Alt+Shift+W, and must not teach this one.
+        "Ctrl+Alt+Tab": "Windows' own task switcher takes it first",
     }
 
     def is_digit_map(flags, code):

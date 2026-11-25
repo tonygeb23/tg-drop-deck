@@ -25,7 +25,7 @@ The whole app is the number row. Press 1. You should hear applause.
   Alt + Ctrl + Shift + 1-0  Music beds 11 to 20
 
   Ctrl + Tab                Move to the next bank
-  Escape                    Stop everything
+  Escape, twice             Stop everything
 
 Sound effects and drops overlap. They never cut each other off. Music beds
 toggle: the same key starts one and stops it.
@@ -61,7 +61,7 @@ MAKING IT YOURS
 The forty sounds that ship with it are a demo. Here is how to build a board
 of your own.
 
-1. Press Ctrl+N to empty all eighty slots. Answer Yes.
+1. Press Ctrl+N to empty all eighty slots. Choose OK.
 
 2. Tab to any button, or press Ctrl+Tab to reach the bank you want.
    The tabs are: 1 Sound Effects, 2 Dialog Drops, 3 Music Beds,
@@ -99,8 +99,10 @@ Some things worth knowing while you build:
     sounds", point it at the new location, and the whole board repairs
     itself in one go.
 
-  - Ctrl+S saves the board to a file of its own, so you can keep one board
-    per show and open whichever you need with Ctrl+O.
+  - The first Ctrl+S on a new board asks what to call it and where to keep
+    it, the same as Ctrl+F12, Save board as. After that Ctrl+S saves it
+    where it is, so you can keep one board per show and open whichever you
+    need with Ctrl+O.
 
   - File then "Load the demo pack" brings the demo sounds back at any
     time. You cannot lose them.
@@ -115,7 +117,7 @@ set that program's microphone to the other end of the same cable.
 Do NOT point Ctrl+P, Output at a cable for this. That output carries your
 pads, your beds and your running order and NOT your microphone, so the
 other program would get your soundboard with no voice on it, and you would
-stop hearing your own soundboard. Ctrl+Shift+R reads out where everything
+stop hearing your own soundboard. Ctrl+Shift+W reads out where everything
 is going at any time.
 
 Ctrl+P chooses where your sounds come out, which is a different question:

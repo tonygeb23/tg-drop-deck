@@ -1084,9 +1084,9 @@ class SettingsDialog(wx.Dialog):
         self._label(panel, sizer, "Before a track ends")
         self._note(panel, sizer,
                    "A short beep to tell you a playlist track is nearly over,\n"
-                   "so you know when to be ready. You hear it wherever you\n"
-                   "hear yourself, set on the Microphone tab, so with\n"
-                   "headphones set up there it stays out of the show.")
+                   "so you know when to be ready. You hear it on What I\n"
+                   "listen on, on the Microphone tab, so with headphones\n"
+                   "chosen there it stays out of the show.")
 
         self.warn_on = wx.CheckBox(
             panel, label="&Beep before a playlist track ends")
@@ -1199,8 +1199,8 @@ class SettingsDialog(wx.Dialog):
 
         self._note(panel, sizer,
                    "Ctrl+M turns the microphone on and off. While it is on,\n"
-                   "the beds and the playlist duck out of the way, and they\n"
-                   "come back up the moment you turn it off.")
+                   "and ducking is on, the beds and the playlist duck out of\n"
+                   "the way, and they come back up the moment you turn it off.")
 
         # Which side of a stereo input the voice is on. A headset is mono
         # and this never matters; a hardware mixer feeding a line input puts
@@ -1654,8 +1654,8 @@ class SettingsDialog(wx.Dialog):
         self.match_loudness.SetToolTip(
             "Each song and sound is measured once, in the background, and "
             "played at a level that matches the rest. A level you set on a "
-            "sound or a song yourself always wins. This changes what you "
-            "hear as well as what goes out.")
+            "pad yourself always wins, 0 dB included. This changes what "
+            "you hear as well as what goes out.")
         sizer.Add(self.match_loudness, 0, wx.ALL, 10)
 
     def _onair_key(self):
@@ -3083,8 +3083,8 @@ class SettingsDialog(wx.Dialog):
                    "is set to go out, and it does not need you to be on air. "
                    "The cue before a track ends and previews are never in it. "
                    "Ctrl+Shift+R records the picture as well, to one MP4. "
-                   "Which picture that is, and its size, are on the Picture "
-                   "page, and Alt+Shift+V changes it from anywhere.")
+                   "Which picture that is, and its size, are on the Video "
+                   "streaming page, and Alt+Shift+V changes it from anywhere.")
 
         self._label(panel, sizer, "&Record as")
         self.record_format = wx.Choice(
@@ -6332,9 +6332,9 @@ class ShotCheckDialog(wx.Dialog):
         board = self.frame.board
         key = secrets.fetch(board.vision_provider, secrets.VISION_PREFIX)
         if not key:
-            self._show("No key has been set up yet. Open Preferences, Shot "
-                       "check, and put in a key for the service you want to "
-                       "use.")
+            self._show("No key has been set up yet. Open Preferences, AI "
+                       "Provider, and put in a key for the service you want "
+                       "to use.")
             return
         kind = self._kind()
         if vision.needs_consent(kind):

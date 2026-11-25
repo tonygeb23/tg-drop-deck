@@ -89,3 +89,14 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   first song at go live and never updates; after a restart a board that was
   never named is not recognised as one, so Ctrl+S saves it in place; "Saved
   to X.json" still says the extension after Save as.
+- The Windows guide (`Websites/tgstudios.app/content/pages/drop-deck-guide.md`,
+  not in git) was rewritten for this release on 24 November 2026 and is NOT
+  deployed. Deploy it with the release, after Tony's go, by the site's own
+  steps (build.py, scp, chmod, curl every page). The copy as it was is in the
+  session scratchpad, `guide_before\drop-deck-guide.md`.
+- `tools/make_guide_section.py` has stale headings: its `--write` would damage
+  the guide. Do not run it until it is brought up to date.
+- Tony's call: "Go live here when I press Ctrl+B" on the Video streaming page
+  (dialogs.py, about line 2763) is stale. Since 3.8.2 Ctrl+B always goes to
+  the video platform, and the box only moves the Streaming location dot. It is
+  kept because a learned control is not taken away; reword or retire it?

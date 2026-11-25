@@ -37,7 +37,7 @@ Plain sentences for the changelog and the release post, added by each step.
   microphone goes out with this station" or "Your microphone is not sent
   with this station". Loading one inside Preferences says it too.
 - If you switch to another microphone in Preferences while yours is on and the
-  new one will not open, Drop Deck now says so and Microphone on is unticked.
+  new one will not open, Drop Deck now says so and Microphone is unticked.
 - While you are on air, Preferences will not change where Ctrl+B goes or load
   a saved station. It says "Come off air first" instead, the same as the On
   air menu.
@@ -219,9 +219,9 @@ Plain sentences for the changelog and the release post, added by each step.
   same page. Each song and sound is measured once, in the background, and
   played at a matching level, in what you hear as well as what goes out. A
   file you change under the same name is measured again. A level you set on
-  a sound or a song yourself always wins, 0 dB included, which is how you
-  keep one sound exactly as recorded. Quiet files are only turned up as far
-  as they can go without distorting.
+  a pad yourself always wins, 0 dB included, which is how you keep one sound
+  exactly as recorded. Quiet files are only turned up as far as they can go
+  without distorting.
 - File, New and the demo pack turn On air sound and loudness matching on,
   and so does a first start. A board you already have keeps the sound it had
   until you turn them on, and the first time this version starts, Drop Deck
@@ -371,3 +371,40 @@ Plain sentences for the changelog and the release post, added by each step.
   the title of the song that is playing at that moment.
 
 ## Help and the guide
+
+- The user guide covers everything in this release: On air sound and the
+  quick compare, loudness matching, ducking further while you talk, the
+  System default's quick route, the send that refuses to hear itself, the
+  four microphone channel choices, Send song titles as, the cue sheet and
+  Add songs on the Playlist menu, the new names on the Microphone page,
+  Ctrl+S on a new board, Delete twice on the track on air, the menu letters,
+  and what Drop Deck now does to keep your stream key, your passwords and
+  your recordings yours.
+- Nothing in the guide teaches Ctrl+B for your radio station any more. The
+  guide and Help, Setting up streaming no longer tell you to tick a box so
+  that Ctrl+B goes to your video platform: Ctrl+B always does, and
+  Alt+Shift+B always goes to your radio station.
+- The guide and the streaming steps in the app say Ctrl+P opens Preferences.
+  They said Ctrl+Shift+P, which goes to the playlist.
+- The guide says your Icecast password is kept in the board file and left
+  out when you export a board. It used to say it was kept in Windows
+  Credential Manager, which was not true.
+- The key list in the guide has Alt+Shift+B for your radio station,
+  Alt+Shift+A for Add songs to the end, Alt+Shift+P for the quick compare and
+  Alt+Enter for a track's own crossfade, and the guide lists Preferences as
+  the eleven pages it really has.
+- F1 says Ctrl+Shift+Enter plays from the track you are on, not from the top.
+  It describes Source control's check boxes and buttons rather than the left
+  and right mode it no longer has, names Streaming location, Load a saved
+  setup where it said Station, says Escape is two presses unless you changed
+  it, says the music ducks under the microphone only while ducking is on,
+  and says how to hear the on air sound: send the show and press
+  Ctrl+Shift+H.
+- Getting started says Ctrl+Shift+W reads out where everything is going, not
+  Ctrl+Shift+R, which records the picture, and that the first Ctrl+S on a new
+  board asks where to keep it. The readme teaches Alt+Shift+B for your radio
+  station.
+- Three sentences in the app named pages that do not exist. The Recording
+  page now points to the Video streaming page for the picture, Check my shot
+  with no key set up points to AI Provider, and Ctrl+Shift+B, when nothing
+  has left the machine, points to Preferences, Output.

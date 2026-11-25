@@ -1628,6 +1628,49 @@ def item_19():
 section("19", item_19)
 
 
+# ===========================================================================
+heading("20. Four sentences the guide step found untrue")
+
+
+def item_20():
+    prefs = real_preferences(S.PAGE_ONAIR)
+    try:
+        tip = prefs.match_loudness.GetToolTipText()
+        check("loudness matching says a level set on a PAD wins, the only "
+              "level Windows lets you set",
+              "pad yourself always wins" in tip and "song" not in tip.split(
+                  "matches the rest")[1], tip)
+        notes = [child.GetLabel() for child in
+                 prefs.tabs.GetPage(S.PAGE_MIC).GetChildren()
+                 if isinstance(child, wx.StaticText)]
+        said = " ".join(" ".join(n.split()) for n in notes)
+        check("the Microphone page says the music ducks only while ducking "
+              "is on", "While it is on, and ducking is on, the beds" in said,
+              said[:200])
+    finally:
+        prefs.Destroy()
+    item = frame.GetMenuBar().FindItemById(uimod.ID_MIC_TOGGLE)
+    check("so does the Microphone menu item's help",
+          item is not None and "and ducking is on" in item.GetHelp(),
+          item.GetHelp() if item is not None else None)
+    path = os.path.join(tempfile.mkdtemp(prefix="dropdeck-named-"),
+                        "Mine.json")
+    frame.board.path = path
+    frame.board.never_named = False
+    frame.board.dirty = True
+    words = hear(lambda: frame._save(), level=C.SPEECH_ALL)
+    check("a plain Ctrl+S on a named board says its name, no .json",
+          any(w == "Saved Mine" for w in words)
+          and not any(".json" in w for w in words), words)
+    source = open(uimod.__file__, encoding="utf-8").read()
+    guard("the record folder refusal names the Choose button, which is "
+          "what that button is called",
+          "picked with Choose" in source and "with Browse" not in source)
+
+
+section("20", item_20)
+
+
 # ---------------------------------------------------------------------------
 user32.UnhookWinEvent(HOOK)
 try:

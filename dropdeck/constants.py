@@ -619,6 +619,8 @@ BANK 3: Music Beds (loop by default)
 
 BANK 4: Miscellaneous
   Right-click a button      Assign a sound file and your own hotkey
+  A pad's hotkey cannot be one of Drop Deck's own keys, such as Ctrl+S or
+  F5. The hotkey window says what that key already does.
 
 PER BUTTON
   Space or Enter            Play, or assign a file if the slot is empty
@@ -681,18 +683,24 @@ THE PLAYLIST - a running order that cues itself
   Ctrl+V                    Paste songs copied in File Explorer
                             Works from anywhere and brings you to the list.
                             You can drag files onto the list as well.
-  Alt+Shift+A               Add songs to the end, from a file window
+  Alt+Shift+A               Add songs to the end, from a file window. A
+                            bank 4 pad that already had Alt+Shift+A keeps
+                            it, and the Playlist menu then says which pad
   Enter                     Play from the item you are on
   Space                     Tick or untick it. An unticked track stays in
                             the list, keeps its place, and is skipped.
                             Your screen reader says checked or not checked
   Shift+Enter               Cross into it from whatever is on air, at the
                             crossfade length. How you get out of a track early
-  Delete                    Take that item out
+  Delete                    Take that item out. On the track that is on
+                            the air it takes two presses: the first says
+                            what the second will do, which is stop the
+                            music
   Alt+Up / Alt+Down         Move it up or down the order
   Alt+Home / Alt+End        Send it to the top of the order, or the end
   Shift+A / Shift+U         Tick every track, or untick every track
-  Ctrl+Shift+Enter          Play the running order from the top
+  Ctrl+Shift+Enter          Play the running order from the track you are
+                            on, from anywhere in the app
   Ctrl+Shift+L              Go to whatever is on air
   First letter              Jumps to the next track whose title starts with
                             it, the way any Windows list does
@@ -715,16 +723,17 @@ THE PLAYLIST - a running order that cues itself
                             A single track can be given a crossfade of its
                             own from its right-click menu, or handed back to
                             the playlist's.
-  Playlist menu             Add files, drops every so many songs, crossfade
-                            length, tick or untick everything, next,
-                            previous, stop, save, open, clear
+  Playlist menu             Add songs, drops every so many songs, the cue
+                            sheet, crossfade length, tick or untick
+                            everything, next, previous, stop, save, open,
+                            clear
 
 A BEEP BEFORE A TRACK ENDS
   Preferences, Ctrl+P, Playlist tab. Turn it on and set how many seconds, ten by
   default. A short pip tells you a playlist track is nearly over, which is
   the countdown clock a sighted presenter watches.
-  You hear it wherever you hear yourself, set in Microphone settings, so
-  with headphones set up there it stays out of the show.
+  You hear it on What I listen on, in Microphone settings, so with
+  headphones chosen there it stays out of the show.
   Six sounds to pick from and a volume, both on the same tab. Each one plays
   as you choose it, so you can find one you hear over your own music. They
   are different shapes rather than different notes, which is what makes them
@@ -735,10 +744,14 @@ A BEEP BEFORE A TRACK ENDS
 ON AIR SOUND
   What goes out, to the stream, both recordings and the send, can be evened
   out and kept under a ceiling: Preferences, On air sound. It never changes
-  what you hear yourself. Alt+Shift+P turns it off and on again for a moment,
-  so you can hear what it is doing; that is not saved. The same page can
-  match the loudness of your songs and sounds, which does change what you
-  hear, and a level you set on a sound or a song yourself always wins.
+  what you hear yourself. Alt+Shift+P bypasses it for a moment and puts it
+  back, to compare, and that is never saved. It changes only what goes out,
+  so to hear the difference yourself, send the show with Alt+Shift+O and
+  listen to what is being sent with Ctrl+Shift+H. A bank 4 pad that already
+  had Alt+Shift+P keeps it, and the compare is then on the On air menu only.
+  The same page can match the loudness of your songs and sounds, which does
+  change what you hear. A level you set on a pad yourself always wins, 0 dB
+  included, which is how you keep one sound exactly as recorded.
 
 RECORDING THE SHOW
   Ctrl+R starts and stops it, and it says Recording started and Recording
@@ -792,9 +805,11 @@ OTHER THINGS ON THE AIR
   Each source has a name, a gain, which channel to take, whether it goes on
   the air, and whether you hear it yourself.
   SOURCE CONTROL, on Alt+Ctrl+Shift+S, is the one for during a show. Up and
-  down choose a source, left and right choose what to do to it, and Space
-  does it: mute, solo, rename or remove. The microphone is in the list too,
-  because soloing a call has to take your voice down or it is not a solo.
+  down choose a source, and Tab reaches what to do with it: Muted and Solo
+  are check boxes that Space ticks, and Rename and Remove are buttons. In
+  the list, F2 renames and Delete removes. The microphone is in the list
+  too, because soloing a call has to take your voice down or it is not a
+  solo.
   Every source keeps a number, and it is its position rather than anything to
   do with its name: renaming one does not renumber it. Pressing a digit in
   that list jumps to that source.
@@ -810,9 +825,13 @@ FEEDING TEAMTALK, ZOOM, OBS, OR ANY OTHER PROGRAM
   Alt+Shift+O, Send this show to another program. Point it at a virtual audio
   cable and set the other program's microphone to the other end of that same
   cable. It sends the whole show: pads, beds, running order, your microphone
-  and every source you are catching, and it does not need you to be on air.
+  if Send my microphone is on, and every source you are catching, and it does
+  not need you to be on air.
   It can leave one source out, so sending to a program you are also capturing
-  does not hand that program its own audio back.
+  does not hand that program its own audio back. And it will not send into a
+  virtual cable while your microphone or a source listens to the other end of
+  that same cable, because the show would go round and round; it says which
+  input to change. A real sound card's own microphone is never refused.
   Ctrl+Shift+H hears exactly what is going. Ctrl+Shift+O says whether it is
   arriving cleanly. Ctrl+Shift+W reads out where everything is going.
   Do NOT point Preferences, Output at a cable for this. That output carries
@@ -854,25 +873,41 @@ THE MICROPHONE
   Ctrl+M                    Microphone on or off
   Alt+Shift+M               The same, for when another program has taken
                             Ctrl+M for itself
-  Ctrl+Shift+M              Which microphone, how much gain, which output
-                            you hear yourself on, and whether you do
+  Ctrl+Shift+M              Which microphone, how much gain, What I listen
+                            on, whether you hear your own voice there, and
+                            whether your microphone is sent at all
   Microphone, ticked while it is on, and Microphone settings are on the On
   air menu, under Microphone.
 
+  Ctrl+M says Mic on or Mic off, and names the microphone only when that is
+  news. If you are streaming, recording or sending and your voice is not in
+  it, it says Mic on, but nobody else hears it, and why: Send my microphone
+  is off, you are muted in Source control, or a source is soloed.
+
   While the microphone is ON, the beds and the playlist duck out of the way,
-  and they come back up the moment you turn it off. That happens because the
-  microphone is open, not because you are talking - a gate that opens on your
-  voice clips the first word of every sentence.
+  unless ducking is off with Ctrl+D, and they come back up the moment you
+  turn it off. That happens because the microphone is open, not because you
+  are talking: a gate that opens on your voice clips the first word of every
+  sentence. Duck further while I am talking, in Preferences, Sounds and beds,
+  takes the music a little further down while your voice is coming through,
+  on top of that.
 
   Hearing yourself is off until you turn it on. On headphones it is how you
   know you are live; on speakers it is a feedback loop. It can go to an output
   of its own, so monitoring sits in your headphones and the show does not.
 
-  WHICH CHANNEL, if your microphone comes from a mixer. A headset is mono and
-  this never matters. A hardware mixer feeding a line input puts the voice on
-  one side of a stereo pair, and taking the other side is silence. If the
-  level meter moves and you hear nothing, this is almost always why. It is in
-  Preferences, Microphone.
+  Going out is a separate question. Send my microphone to streams,
+  recordings and other programs, on the Microphone page, decides whether
+  anybody else hears you, whether or not you are hearing yourself.
+
+  WHICH CHANNEL, if your microphone comes from a mixer or an interface. A
+  headset is mono and this never matters. Both, the side with a voice on it
+  takes whichever input you are talking into and leaves the other one's hiss
+  out. Both, always mixed is for two people on one interface, one on each
+  input. Left only and Right only are for a hardware mixer that puts the
+  voice on one side of a stereo pair, where taking the other side is
+  silence. If the level meter moves and you hear nothing, this is almost
+  always why. It is in Preferences, Microphone.
 
   Nothing here ever opens the microphone on its own. It opens when you press
   Ctrl+M or Alt+Shift+M and at no other time, and whether it was on is never
@@ -909,8 +944,10 @@ PROCESSING YOUR VOICE
   above it can get past minus one.
 
 VST3 PLUGINS
-  Preferences, Voice, Plugin. Any VST3 effect on this machine can go in the
-  chain, after the compressor and before the limiter.
+  Preferences, Voice, Plugin. Any VST3 effect installed on this machine can
+  go in the chain, after the compressor and before the limiter. A board that
+  asks for a plugin from anywhere else, such as a network share, runs your
+  voice without it and says so.
 
   Its own window is never opened. A plugin describes every one of its
   controls, with a name, a range and a unit, so they appear in the same list
@@ -986,20 +1023,24 @@ WHAT IS COMING UP
                             A track leaves ten seconds after it starts
   N                         Inside it, says the next three in one sentence
   Enter                     Inside it, crosses into the track you are on
-  Your pads and every other key still work while it is open.
+  Your pads and every other key still work while it is open. It is on the
+  Playlist menu too, as Cue sheet, what is coming up.
 
+THE STREAM
   Set it up first: On air menu, Set up streaming. You need the address of your
   server, its port, the mount point and the source password, all of which come
   from whoever runs it. Test the connection proves it works before the show
   rather than during it.
 
-  It sends everything you can hear: sounds, beds, the playlist and, unless you
-  turn it off, the microphone. It does NOT send a preview or the beep before a
-  track ends, because those are yours and not the listener's.
+  It sends everything you can hear: sounds, beds, the playlist and your
+  microphone, unless Send my microphone is off on the Microphone page. It
+  does NOT send a preview or the beep before a track ends, because those are
+  yours and not the listener's.
 
-  The microphone goes out whenever it is open, whether or not you are hearing
-  yourself. Being heard and hearing yourself are separate questions, and a
-  presenter working on speakers monitors nothing and is still on air.
+  The microphone goes out whenever it is open and Send my microphone is on,
+  whether or not you are hearing yourself. Being heard and hearing yourself
+  are separate questions, and a presenter working on speakers monitors
+  nothing and is still on air.
 
   Icecast, a Liquidsoap harbor and SHOUTcast all work, in MP3, AAC or Ogg
   Opus. For SHOUTcast put in the port your listeners use; the app works out
@@ -1007,28 +1048,33 @@ WHAT IS COMING UP
 
   MORE THAN ONE STATION
   Save as many as you like. Set one up, give it a name, and press Save this
-  station. The On air menu then lists them under Station, so switching is one
-  menu away rather than four boxes of retyping. Switching is refused while you
-  are on air; come off first, which is deliberate.
+  station. The On air menu then lists them under Streaming location, Load a
+  saved setup, so switching is one menu away rather than four boxes of
+  retyping. Switching is refused while you are on air; come off first, which
+  is deliberate.
 
-  F7 and F8 become a MONITOR fader while you are on air. Turn the playlist
-  down to hear your screen reader and your listeners still get it at full
-  level, right down to silence in the room. F3 to F6 are ordinary faders: a
-  drop you fire at half level is one you meant to fire at half level. There is
-  a switch for this in Set up streaming if you would rather it changed both.
+  F7 and F8 are a MONITOR fader. Turn the playlist down to hear your screen
+  reader and the stream, both recordings and the send still get it at full
+  level, right down to silence in the room. While any of them is running,
+  F7 and F8 say "what you hear only". F3 to F6 are ordinary faders: a drop
+  you fire at half level is one you meant to fire at half level. There is a
+  switch for this in Set up streaming if you would rather it changed both.
 
-  If the connection drops it gets itself back and tells you. If the network
-  cannot keep up the STREAM loses audio and your own sound carries on, which
-  is the right way round, and Ctrl+Shift+B says whether that has happened.
+  If the connection drops it gets itself back and says Back on air. If the
+  network cannot keep up the STREAM loses audio and your own sound carries
+  on, which is the right way round, and Ctrl+Shift+B says whether that has
+  happened.
 
-  Listeners see the artist and title from your playlist, unless you turn that
-  off in the same place.
+  Listeners see the song that is playing, the way round Send song titles as
+  says: Title by Artist, Artist - Title, or Artist - Title - Album. Send the
+  track title, in the same place, turns that off.
 
   Nothing goes out until you press Ctrl+B or Alt+Shift+B. It is never on when
   the app opens.
 
 GLOBAL
   Ctrl+F                    Search every bank by name (Ctrl+E also works)
+                            It says how many match once you stop typing.
                             Alt+P in there plays a match without closing it,
                             so you can try each one. Enter jumps and closes.
   Ctrl+D                    Ducking on or off
@@ -1066,6 +1112,13 @@ GLOBAL HOTKEYS - firing a sound from another program
   It needs at least one modifier such as Ctrl or Alt. Alt on its own counts,
   so Alt plus a letter is fine. A key with no modifier at all would be taken
   away from every other program on the machine, so it is refused.
+  So are the keys every other program needs: Shift plus a letter or symbol,
+  Ctrl plus A, C, V, X, Z, Y, S, F, N, O, P or W, Tab, the arrows and the
+  editing keys with one modifier, Alt+F4, Alt+Tab, Ctrl+Tab, Alt+Space, and
+  Ctrl+Alt plus a letter, digit or symbol, which Windows reads as AltGr. A
+  function key with Ctrl or Alt is the safest choice. A board that already
+  has one of these keeps it on the pad, but it is not used, and Drop Deck
+  says which and why.
   Ctrl+G arms and disarms the whole set, and disarming hands the keys back.
 
 TELLING US SOMETHING
@@ -1082,18 +1135,22 @@ TELLING US SOMETHING
 
 FILE
   Ctrl+N                    Start a new, empty board
-  Ctrl+S                    Save the current board
+  Ctrl+S                    Save the current board. One that has never had
+                            a name asks where to keep it, as Ctrl+F12 does
   Ctrl+F12                  Save the board to a new file
   Ctrl+O                    Open a board
   File, Export board with its sounds
                             One folder holding the board and a copy of every
                             sound it plays, pads, playlist and drops. Put it
                             in Google Drive, Dropbox or on a stick, and open
-                            the board from it on any computer, the Mac too
+                            the board from it on any computer, the Mac too.
+                            Passwords, stream keys and your own folders are
+                            left out
   Ctrl+P                    Preferences: output, sounds and beds, playlist,
-                            microphone, voice, audio streaming, video
-                            streaming, recording, speech and AI provider.
-                            Ten tabs, Ctrl+Tab between them
+                            microphone, voice, on air sound, audio
+                            streaming, video streaming, recording, speech
+                            and AI provider. Eleven tabs, Ctrl+Tab between
+                            them
 
 A board opened on another computer looks for its missing sounds in its own
 folder, and the folders under it, before you have to relink anything. Sounds
@@ -1101,7 +1158,8 @@ kept in the board's folder are saved relative to it, so a board and its
 sounds kept together in a cloud folder open wherever that folder does.
 
 The playlist has its own fader and ducks under sounds and drops, the same
-way the beds do. Escape three times stops it along with everything else.
+way the beds do. Escape stops it along with everything else: twice, unless
+you changed that in Preferences, Sounds and beds.
 
 Sounds in banks 1, 2 and 4 overlap freely and never cut each other off.
 A bed toggles: press its hotkey again and it fades out.
