@@ -1,0 +1,45 @@
+TG Drop Deck 4.0.0 for Windows, the Mastodon thread. Checked against the changelog and posted 25 November 2026.
+
+Characters as Mastodon counts them, 500 allowed, every link counted as 23:
+Post 1: 476
+Post 2: 491
+Post 3: 336
+
+Post 1 is public and the only one with hashtags. Posts 2 and 3 go under it as replies.
+Post it once the 4.0.0 download and update feed are live, so the link and Check for updates both give 4.0.0.
+The blank line before each marker is spacing, not part of the post above it.
+
+----------------------------------------------------------------------
+
+=== post 1 ===
+TG Drop Deck 4.0.0 for Windows is out. It is free. This is a major release, and it keeps your board, sounds and settings.
+
+The new On air sound evens out the music your listeners get, so a loud song and a quiet one arrive closer together. It never changes what you hear yourself.
+
+You can also match the loudness of songs and sounds. And your stream key now goes only to the server it was saved for.
+
+https://tgstudios.app/drop-deck/
+#TGDropDeck #Accessibility #Blind #NVDA #Podcasting
+
+=== post 2 ===
+Already use Drop Deck? Four things before your first show on 4.0.0.
+
+On air sound is off on a board you already have. Turn it on in Preferences, On air sound, Process the on air sound.
+
+Some global hotkeys stop firing, such as Ctrl+Alt with a letter, which Windows reads as AltGr. Drop Deck says which and why. A function key with Ctrl or Alt is safest.
+
+A Restream or custom stream key may need typing once. YouTube and Facebook keys carry on.
+
+Delete takes two presses on the track on air.
+
+=== post 3 ===
+One more change: Ctrl+B is always your video platform now, and Alt+Shift+B always your radio station.
+
+Drop Deck will offer you the update. To get it now, use Help, Check for updates.
+
+The manual has every key:
+https://tgstudios.app/drop-deck-guide/
+
+The Mac copy stays on 3.10.0 for now and catches up later.
+
+Thank you to everyone who sent feedback.
