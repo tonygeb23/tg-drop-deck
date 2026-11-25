@@ -1,6 +1,6 @@
 # TG Drop Deck for Windows, the major release
 
-VERSION, released DATE
+4.0.0, released 24 November 2026
 
 A major release of Drop Deck for Windows. Your board, your sounds and your
 settings are all kept when you update.
@@ -141,7 +141,7 @@ The manual covers all of it, with every key: tgstudios.app/drop-deck-guide.
 
 ## For the update window
 
-Drop Deck VERSION for Windows is a major release. On air sound, which is new,
+Drop Deck 4.0.0 for Windows is a major release. On air sound, which is new,
 evens out the music your listeners get. It is off on a board you already
 have until you turn it on in Preferences, On air sound. Put the microphone
 on air is now Send my microphone, on the Microphone page. Global hotkeys

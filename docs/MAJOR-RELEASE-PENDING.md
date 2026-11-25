@@ -112,25 +112,27 @@ Things agents handed back for the lead to apply at the end. Not user facing.
 
 ## Open points
 
-- Firm at -2 reached -0.73 dBTP: fixed in step 3 (true peak ceiling, Firm
-  at -3). AAC 128k on a brickwalled master can still decode over full scale,
-  which no ceiling before the encoder can promise.
-- Preferences is eleven tabs now; the guide says ten.
-- Noticed in Area 5, not fixed: with titles off, the video card gets the
-  first song at go live and never updates; after a restart a board that was
-  never named is not recognised as one, so Ctrl+S saves it in place; "Saved
-  to X.json" still says the extension after Save as.
-- The Windows guide (`Websites/tgstudios.app/content/pages/drop-deck-guide.md`,
-  not in git) was rewritten for this release on 24 November 2026 and is NOT
-  deployed. Deploy it with the release, after Tony's go, by the site's own
-  steps (build.py, scp, chmod, curl every page). The copy as it was is in the
-  session scratchpad, `guide_before\drop-deck-guide.md`.
-- `tools/make_guide_section.py` has stale headings: its `--write` would damage
-  the guide. Do not run it until it is brought up to date.
-- Tony's call: "Go live here when I press Ctrl+B" on the Video streaming page
-  (dialogs.py, about line 2763) is stale. Since 3.8.2 Ctrl+B always goes to
-  the video platform, and the box only moves the Streaming location dot. It is
-  kept because a learned control is not taken away; reword or retire it?
-- Tony to check before release, on real hardware: late blocks on a 96 kHz
+Applied to CLAUDE.md, the changelog and the guide on 24 November 2026 for
+the 4.0.0 release candidate. What is still open:
+
+- **Deploy the Windows guide with the release, after Tony's go**, by the
+  site's own steps (build.py, scp, chmod, curl every page). It is not in git;
+  the copies as they were are in the session scratchpad, `guide_before`,
+  `guide_before_final` and `guide_before_write`.
+- **The Mac pickup** is `docs/MAC-PICKUP-4.0.0.md`.
+- **Tony's call:** "Go live here when I press Ctrl+B" on the Video streaming
+  page is stale. Since 3.8.2 Ctrl+B always goes to the video platform, and
+  the box only moves the Streaming location dot. It is kept because a
+  learned control is not taken away; reword or retire it?
+- **Tony to check on real hardware before release:** late blocks on a 96 kHz
   card with the on air sound and a recording running; Alt+Shift+A pressed
-  for real; the "Go live here when I press Ctrl+B" box (reword or retire).
+  for real; the NVDA list in the release candidate message.
+- **Not fixed, noticed in Area 5:** with Send the track title off, the video
+  card gets the first song at go live and never updates.
+- **AAC at 128k on a brickwalled master** can still decode over full scale,
+  which no ceiling before the encoder can promise.
+- **The frozen selftest exits 0xC000041D after writing its report**, on the
+  private desktop at least. The report is complete and is the contract
+  RELEASING.md reads; the crash is at process exit with the unshown frame
+  still alive (os._exit still runs DLL detach). Worth a look so the exit
+  code means pass or fail; it touches no user.

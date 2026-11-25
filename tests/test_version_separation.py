@@ -100,7 +100,12 @@ check("the shipped version accepts it",
 # the FROZEN build's selftest reports 3.10.0 with the update channel live.
 # 3.10.1 is built, 20 November 2026: installer 86.0 MB and zip 115.8 MB, and
 # the FROZEN build's selftest reports 3.10.1 with the update channel live.
-newest_build = "3.10.1"
+# 4.0.0 is built, 24 November 2026, as the release candidate for Tony's NVDA
+# pass: installer 86.3 MB and zip 116.1 MB, and the FROZEN build's selftest
+# reports 4.0.0 with the update channel live and secure streaming working.
+# Run on a private desktop, its one problem was screen capture, which a
+# private desktop cannot give; it is the same ctypes code the source tests.
+newest_build = "4.0.0"
 
 check("and the Windows app is not ahead of the newest Windows build",
       not appupdate.parse_version(C.APP_VERSION)

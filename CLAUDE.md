@@ -91,8 +91,12 @@ And specific to this one:
   under WASAPI is twenty two. On a soundboard, whose whole promise is that
   nothing goes between a keypress and a sound, that is a ninefold difference
   sitting behind the word "default". `output_devices()` already lists WASAPI
-  first. Whether the app should stop resolving "system default" through
-  PortAudio's default host API is an open question and Tony's to answer.
+  first. **Since 4.0.0, System default opens Windows' default card through
+  WASAPI shared mode**, never exclusive, with MME only as a fall back that is
+  said once (`mixer.wasapi_default`). Measured 24 November 2026: 180.3 ms
+  before, 22.0 after. The default microphone goes the same way. PortAudio
+  fixes every default when it starts, MME's included, so a Windows default
+  changed mid session is not followed until restart, as before.
 
 - **A source is read ONCE per callback, so mix minus is a SUBTRACTION.**
   `SourceGroup.read_air_minus` returns the air sum and the same sum less one
@@ -191,7 +195,56 @@ And specific to this one:
   syllable of every sentence; one that hangs open ducks the bed when you
   cough. **Monitoring is added after the duck** in `Mixer.render`, or the
   voice would duck itself, and a monitor that starves or throws returns
-  silence rather than stalling the output callback.
+  silence rather than stalling the output callback. Duck further while I am
+  talking (`board.talk_duck`, 4.0.0, off by default) is a second stage on
+  top of that floor: it goes further down only while the voice is above
+  `C.TALK_THRESHOLD_DB`, and the open microphone is still what ducks.
+- **`_mic_off_air_reason` is the one answer to whether the microphone goes
+  out.** Both air functions (`apply_source_mixing`, `_sync_air_taps`) set
+  `mic.on_air` from it, and Ctrl+M, the go live summary and the status bar
+  say it, so what the app says can never disagree with what goes out. A
+  guard asks whether a loop WOULD exist, never what a setting used to be:
+  a Preferences guard that compared against the live board was blind to a
+  station loaded inside the same window (Jackson and Mark, 24 November 2026).
+- **The microphone channel keeps the meaning it was saved with.** `mix` is
+  the plain average, exactly 3.10.1's "Both, mixed together" and the Mac's
+  `mix`. `voice` picks the side with a voice on it, which takes a microphone
+  on one input of a two input interface to full level without the other
+  input's hiss, and is the default for the demo and a first start only;
+  File, New keeps the board's choice. Picking a side on old boards made a
+  one microphone setup 6 dB hotter overnight and two hosts pump at every
+  turn, which is why an existing board keeps `mix`.
+- **The on air sound shapes what goes out, never what the presenter hears.**
+  `dsp.ProgramChain` runs once each in the stream, both recorders and the
+  send, after their bus sums the cards, each with its own state, and the
+  mixers skip the air soft clip only while it is active. The leveller holds
+  only while `DuckBus.music_down`, a mixer's duck gain really below unity,
+  never merely because a microphone is open: holding on an open microphone
+  left a hot master 10 dB over the target for as long as somebody talked.
+  The ceiling, `dsp.TruePeakCeiling`, is aimed at the true peak with 56
+  samples of lookahead (1.2 ms at 48 kHz) on the program path only. Ordinary
+  music on Gentle or Firm stays under it; Off, or hard material such as
+  noise, can come out up to about a decibel over, which is why Firm starts at
+  -3. **Every block is made finite first**: one inf in a glitched file took
+  the ceiling's gain to minus infinity and silenced the stream, both
+  recordings and the send for the session, still saying ON AIR. Alt+Shift+P
+  bypasses it with a 50 ms crossfade, is never saved, is shown wherever the
+  air state is, and yields to a bank 4 pad that already had the key. On for
+  new boards and the demo, off for boards that existed before it.
+- **Loudness is measured on the background pass, never on a press**, and the
+  numbers belong to one version of one file: path, size and modification
+  time, checked on every pass and when the window comes back. Numbers read
+  from a board file may only cut until they are checked here. A trim the
+  user set wins, 0 dB included (`trim_set`). Nothing is boosted past its own
+  peak headroom, because the presenter's output has no limiter. **A pass
+  never writes a new board nobody has touched**, or looking at the demo
+  made it the board that opened next time (Mark, 24 November 2026).
+- **The send's loop guard goes by the cable's own name, never by the
+  registry.** Windows pairs a device's two ends by the card, so a headset's
+  speakers and microphone look like a loop and a guest gets taken off the
+  air. Only a known virtual cable's other end, or a Loopback or Stereo Mix
+  input on the card being sent into, is refused (`routing.loops_back`). A
+  false refusal is worse than a missed loop (Mark, 24 November 2026).
 - **Nothing opens a microphone except a keypress.** Not startup, not loading
   a board. `mic_monitor`, the device and the gain are saved; whether it was
   ON is deliberately not, and there is a test that says so.
@@ -925,7 +978,11 @@ dropdeck/
   send.py        the on air mix out of a sound card, for another program here
   micdiag.py     why the microphone is not working: keys, privacy, error codes
   errorlog.py    the faults a windowed build would otherwise lose, to errors.log
+  loudness.py    BS.1770 loudness in numpy, and the matching trim
+  routing.py     which device is which, and the send's loop guard
 tools/
+  run_private.py     every test file on a private desktop, speech silenced.
+                     THE way to run tests while somebody is at the machine
   audiopost.py       levels and seamless loops for generated audio
   make_demo_pack.py  the forty-piece demo pack, via ElevenLabs
   check_guide.py     fact-checks the published user guide against the app
@@ -1023,7 +1080,16 @@ is checked rather than remembered: it pulls every backticked keystroke out of
 the guide, checks each against the accelerator table the app really builds, and
 checks the numbers the guide quotes against `constants.py`. Keys handled
 somewhere other than the table are listed in it **with the reason**, so an
-unexplained miss is a real miss.
+unexplained miss is a real miss. Since 4.0.0 it also catches a key described
+as a different command, which is how "Ctrl+B for radio" sat in five places
+for two releases. **Run it as `python tools/run_private.py tools/check_guide.py`**:
+it builds the real frame, so it uses a temporary settings folder, stands in
+Credential Manager, opens no sound card, makes no update check, and loads
+plugins only with `--with-plugins`. An audit run that loaded every VST3
+plugin hung for 200 seconds and left Waves helper processes running.
+`tools/make_guide_section.py --write` renders the in-app streaming help into
+chapter 27 and touches nothing else; it needs a wrapper to get `--write`
+through `run_private`.
 
 One trap, and it caught me: the guide is hard-wrapped markdown, so any quoted
 phrase longer than a few words straddles a newline. The checker normalises
@@ -1033,6 +1099,26 @@ would have had me editing correct prose.
 
 ## Things that will bite
 
+- **The real time risk is the GIL, not the CPU.** Measured offline on
+  24 November 2026 with everything running at once: all four program chains
+  use 6 per cent of one core at 48 kHz and 11 at 96 kHz, yet the 96 kHz
+  microphone's 5.3 ms block finished 95 per cent of the way through under
+  load, because pure Python on another thread (the tag pass, mutagen) holds
+  the lock. No block was late in 64,000, but count late blocks on a real
+  96 kHz card before trusting it, and keep heavy Python off every thread
+  while a show is running.
+- **Tests run on a private desktop while anybody is at the machine.**
+  `tools/run_private.py` starts each file with `CreateDesktop` and
+  `STARTUPINFO.lpDesktop`, gives it an accessible_output2 that says nothing,
+  and puts the clipboard back, because a frame that takes focus takes the
+  foreground from somebody working with NVDA and speaks to them. It skips
+  `test_proccapture` and `test_sourcelist`, which play a tone on the real
+  speakers, and `test_framing`, which opens a real camera, unless
+  `--with-sound` or `--with-camera`. **A test or tool that builds the frame
+  must set APPDATA and `TGDROPDECK_DATA` to temporary folders before it
+  imports `dropdeck`**, or it reads and writes the real board and uses up
+  its once only notices: `os.environ.setdefault("APPDATA", ...)` does
+  nothing on Windows, where APPDATA is always set.
 - **A timer swallows whatever its callback raises.** `_announce_startup` runs
   inside a `wx.CallLater` and asked a `MixerGroup` for a `stream` attribute it
   has never had. From 2.1.2 to 2.3.0 that raised on every single launch, so the

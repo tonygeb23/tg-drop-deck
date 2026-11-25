@@ -75,7 +75,8 @@ except BaseException:
     traceback.print_exc()
     code = 1
 log.flush()
-os._exit(code)
+# A crashed child's status, such as 0xC000041D, does not fit os._exit.
+os._exit(code if isinstance(code, int) and 0 <= code < 256 else 1)
 '''
 
 
