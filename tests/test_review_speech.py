@@ -8,10 +8,11 @@ row that is not on air still removed at once); guards pass on both and are
 counted on a line of their own.
 
   1. Ctrl+M and Alt+Shift+M: "Mic on" and "Mic off", the device only when it
-     is news, "music ducked" only with ducking on, "not on air" when it is not;
+     is news, "music ducked" only with ducking on, and first that nobody else
+     hears it when it is not on the air (worded so since the polish step);
   2. a reconnect says "Back on air", not the whole going live line again;
-  3. Delete on the track on the air asks first, No the default, and says what
-     it did at the essential level;
+  3. Delete on the track on the air wants a second press (it asked with a box
+     until the polish step), and says what it did at the essential level;
   4. Streaming location says the key that really goes there, and the Ctrl+B
      stop names Alt+Shift+B to a radio presenter;
   5. the Stop everything button counts the Escapes the board really wants;
@@ -349,13 +350,15 @@ def item_1():
     mic_off()
     MIC_MODE[0] = "open"
 
-    # Not on air: a send is running and the microphone is kept off it.
+    # Not on air: a send is running and the microphone is kept off it. Said
+    # first, with the reason, since the polish step (test_review_polish 2).
     frame.send = FakeSend()
     frame.board.stream_mic = False
     said = hear(ESSENTIAL, lambda: post(frame, uimod.ID_MIC_TOGGLE))
     check("with the send running and the microphone kept off the air, it "
-          "says not on air", said == ["Mic on. Music ducked. Not on air"],
-          said)
+          "says nobody else hears it",
+          said == ["Mic on, but nobody else hears it: Send my microphone is "
+                   "off. Music ducked"], said)
     mic_off()
     frame.board.stream_mic = True
     said = hear(ESSENTIAL, lambda: post(frame, uimod.ID_MIC_TOGGLE))
@@ -468,9 +471,16 @@ section("2", item_2)
 
 
 # ===========================================================================
-heading("3. Delete on the track on the air asks first")
+heading("3. Delete on the track on the air wants a second press, not a box")
+
+# The polish step took the box out. It held the pads, had Yes and No and no
+# close, and Escape did not close it (Jessica and Ryder, 24 November 2026).
+# These checks replace the ones that asked for the box; each fails on
+# 6fa5dad, where Delete put the box up.
 
 SONGS = [wav("Song %d" % n, 6.0) for n in (1, 2, 3)]
+FIRST_DELETE = ("Song 1 is on the air. Press Delete again to remove it and "
+                "stop the music")
 
 
 def focus_list():
@@ -479,57 +489,96 @@ def focus_list():
     pump(0.1)
 
 
-def item_3():
+def first_on_air(row=0):
+    """Three songs, the first on the air, the cursor on `row`."""
     panel = frame.playlist_panel
-    frame.board.playlist.clear()
-    panel.refresh()
-    panel.add_paths(SONGS)
-    pump(0.1)
-    frame.play_playlist(0)
-    pump(0.1)
-    guard("the playlist is playing its first track",
-          frame.player.playing and frame.player.index == 0)
-    focus_list()
-    panel.select(0)
-    BOXES.clear()
-    ANSWERS[:] = [wx.NO]
-    # The answer waits for the box's focus to be read, as after a menu.
-    said = hear(ESSENTIAL, lambda: post(frame, uimod.ID_CLEAR_FOCUSED),
-                wait=0.8)
-    check("Delete on the track on the air asks before stopping the music",
-          len(BOXES) == 1, BOXES)
-    check("with No as the default, so Enter keeps it playing",
-          BOXES and BOXES[0][2] & wx.YES_NO and BOXES[0][2] & wx.NO_DEFAULT,
-          BOXES)
-    check("No leaves it in the running order and playing",
-          len(frame.board.playlist) == 3 and frame.player.playing
-          and frame.player.index == 0)
-    check("and says so at the essential level",
-          said and "still playing" in said[-1], said)
-    panel.select(0)
-    BOXES.clear()
-    ANSWERS[:] = [wx.YES]
-    said = hear(ESSENTIAL, lambda: post(frame, uimod.ID_CLEAR_FOCUSED),
-                wait=0.8)
-    check("Yes removes it and stops the playlist",
-          len(frame.board.playlist) == 2 and not frame.player.playing)
-    check("and the stop is said at the essential level, where it was silent",
-          said and "Removed Song 1" in said[-1] and "stopped" in said[-1],
-          said)
-
     frame.stop_playlist(quiet=True)
     frame.board.playlist.clear()
     panel.refresh()
     panel.add_paths(SONGS)
+    pump(0.1)
     frame.play_playlist(0)
     pump(0.1)
     focus_list()
-    panel.select(1)
+    panel.select(row)
+    pump(0.1)
+
+
+def delete():
+    """Delete, the way the menu bar's accelerator hands it to the frame."""
+    return hear(ESSENTIAL, lambda: post(frame, uimod.ID_CLEAR_FOCUSED))
+
+
+def still_on_air(rows=3):
+    return (len(frame.board.playlist) == rows and frame.player.playing
+            and frame.player.index == 0)
+
+
+def item_3():
+    panel = frame.playlist_panel
+    first_on_air()
+    guard("the playlist is playing its first track",
+          frame.player.playing and frame.player.index == 0)
     BOXES.clear()
-    hear(ESSENTIAL, lambda: post(frame, uimod.ID_CLEAR_FOCUSED))
-    guard("any other row goes at once, with no question",
-          not BOXES and len(frame.board.playlist) == 2
-          and frame.player.playing, (BOXES, len(frame.board.playlist)))
+    said = delete()
+    check("the first Delete on the track on the air puts up no box",
+          not BOXES, BOXES)
+    check("and says what a second one does, at the essential level",
+          said == [FIRST_DELETE], said)
+    guard("nothing is removed or stopped by it", still_on_air())
+    pump(0.2)
+    said = delete()
+    check("a second Delete on the same row, inside the window, removes it "
+          "and stops the playlist",
+          len(frame.board.playlist) == 2 and not frame.player.playing,
+          (len(frame.board.playlist), frame.player.playing))
+    check("and says so at the essential level",
+          said == ["Removed Song 1. The playlist has stopped"], said)
+
+    # The window going by starts again.
+    first_on_air()
+    window = getattr(C, "DELETE_ON_AIR_WINDOW_MS", None)
+    C.DELETE_ON_AIR_WINDOW_MS = 300
+    try:
+        delete()
+        pump(0.5)
+        said = delete()
+    finally:
+        if window is None:
+            del C.DELETE_ON_AIR_WINDOW_MS
+        else:
+            C.DELETE_ON_AIR_WINDOW_MS = window
+    check("after the window a Delete is a first press again: said, and "
+          "nothing removed", said == [FIRST_DELETE] and still_on_air(),
+          (said, len(frame.board.playlist)))
+    check("the window is a constant of its own, a few seconds long",
+          window is not None and 2000 <= window <= 6000, window)
+
+    # The cursor moving starts again, even back to the same row.
+    first_on_air()
+    delete()
+    panel.select(1)
+    panel.select(0)
+    pump(0.1)
+    said = delete()
+    check("moving off the row and back starts again",
+          said == [FIRST_DELETE] and still_on_air(),
+          (said, len(frame.board.playlist)))
+
+    # Another row in between goes at once, and starts it again.
+    first_on_air()
+    delete()
+    panel.select(2)
+    BOXES.clear()
+    delete()
+    guard("any other row goes at once, with no box", not BOXES
+          and len(frame.board.playlist) == 2 and frame.player.playing,
+          (BOXES, len(frame.board.playlist)))
+    panel.select(0)
+    said = delete()
+    check("and the track on the air then wants its two presses again",
+          said == [FIRST_DELETE] and still_on_air(2),
+          (said, len(frame.board.playlist)))
     frame.stop_playlist(quiet=True)
 
 

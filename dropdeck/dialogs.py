@@ -809,7 +809,7 @@ class SettingsDialog(wx.Dialog):
      PAGE_ONAIR, PAGE_STREAM, PAGE_VIDEO, PAGE_RECORD, PAGE_SPEECH,
      PAGE_SHOT) = range(11)
 
-    def __init__(self, parent, board, mixer, mic=None, page=None):
+    def __init__(self, parent, board, mixer, mic=None, page=None, focus=None):
         super().__init__(parent, title="Preferences")
         self.board = board
         self.mixer = mixer
@@ -844,8 +844,10 @@ class SettingsDialog(wx.Dialog):
             self.tabs.SetSelection(page)
         # Focus the first control on whichever tab opened, not the tab strip.
         # Landing on the tabs means one more keystroke before you can do the
-        # thing you opened the window for.
-        first = self._first_control()
+        # thing you opened the window for. `focus` names a control instead,
+        # for a Put it right that is about one box on the page.
+        first = getattr(self, focus, None) if focus else None
+        first = first or self._first_control()
         if first is not None:
             first.SetFocus()
 
@@ -860,7 +862,9 @@ class SettingsDialog(wx.Dialog):
 
     @staticmethod
     def _label(panel, sizer, text):
-        sizer.Add(wx.StaticText(panel, label=text), 0, wx.LEFT | wx.TOP, 10)
+        label = wx.StaticText(panel, label=text)
+        sizer.Add(label, 0, wx.LEFT | wx.TOP, 10)
+        return label
 
     @staticmethod
     def _note(panel, sizer, text):
@@ -966,7 +970,7 @@ class SettingsDialog(wx.Dialog):
             "or a fader in a DAW.")
         sizer.Add(self.stop_fade, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        self._label(panel, sizer, "Duck depth in de&cibels")
+        duck_label = self._label(panel, sizer, "Duck depth in de&cibels")
         self.duck_db = wx.Slider(panel, value=int(round(self.board.duck_db)),
                                  minValue=-24, maxValue=0,
                                  style=wx.SL_HORIZONTAL)
@@ -986,25 +990,35 @@ class SettingsDialog(wx.Dialog):
             "and back up to the ducked level a moment after you stop.")
         sizer.Add(self.talk_duck, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
         talk_row = wx.BoxSizer(wx.HORIZONTAL)
-        talk_row.Add(wx.StaticText(panel, label="By &how much, in decibels"),
-                     0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        # One set of words for the label and the name. The edit box that
+        # takes focus is named by the label in front of it, not by
+        # name_field, which names only the arrows (Jessica, 24 November
+        # 2026), so two different phrasings were two different controls.
+        talk_label = wx.StaticText(panel,
+                                   label="By &how much further, in decibels")
+        talk_row.Add(talk_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.talk_duck_db = wx.SpinCtrl(
             panel, min=int(C.MIN_TALK_DUCK_DB), max=int(C.MAX_TALK_DUCK_DB),
             initial=int(round(getattr(self.board, "talk_duck_db",
                                       C.DEFAULT_TALK_DUCK_DB))))
-        name_field(self.talk_duck_db,
-                   "By how much further, while you talk, in decibels")
+        name_field(self.talk_duck_db, "By how much further, in decibels")
         talk_row.Add(self.talk_duck_db, 0)
         sizer.Add(talk_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # The slider was fully draggable while ducking was switched off: a
         # control that looks alive and does nothing. The same goes for the
-        # second dip, which does nothing at all without the first.
+        # second dip, which does nothing at all without the first. And each
+        # LABEL goes with its control: an enabled label's access key lands
+        # on the next control that is enabled, so with Duck further off,
+        # Alt+H went to Fade beds in.
         def ducking_follows(_event=None):
             on = self.duck_on.GetValue()
-            self.duck_db.Enable(on)
+            further = on and self.talk_duck.GetValue()
+            for control in (duck_label, self.duck_db):
+                control.Enable(on)
             self.talk_duck.Enable(on)
-            self.talk_duck_db.Enable(on and self.talk_duck.GetValue())
+            for control in (talk_label, self.talk_duck_db):
+                control.Enable(further)
 
         ducking_follows()
         self.duck_on.Bind(
@@ -1195,15 +1209,18 @@ class SettingsDialog(wx.Dialog):
         # mixer on the air though."
         self._label(panel, sizer, "Which &channel the voice is on")
         self.mic_channel = wx.Choice(
-            panel, choices=["Both, mixed together", "Left only", "Right only"])
+            panel, choices=[label for _key, label in C.MIC_CHANNELS])
         name_field(self.mic_channel, "Which channel the voice is on")
+        current = getattr(self.board, "mic_channel", "mix")
         self.mic_channel.SetSelection(
-            {"mix": 0, "left": 1, "right": 2}.get(
-                getattr(self.board, "mic_channel", "mix"), 0))
+            C.MIC_CHANNEL_KEYS.index(current)
+            if current in C.MIC_CHANNEL_KEYS else 0)
         self.mic_channel.SetToolTip(
             "Only matters for a stereo input, such as a hardware mixer on a "
             "line in. If you can see the level moving but hear nothing, this "
-            "is usually why.")
+            "is usually why. Two people on one interface, one on each input, "
+            "want Both, always mixed, so neither jumps in level when they "
+            "start to talk.")
         sizer.Add(self.mic_channel, 0, wx.EXPAND | wx.ALL, 10)
 
         self._label(panel, sizer, "&Gain in decibels")
@@ -1238,8 +1255,10 @@ class SettingsDialog(wx.Dialog):
             "all of it on the main output.")
         sizer.Add(self.mic_output, 0, wx.EXPAND | wx.ALL, 10)
 
+        # "There" is What I listen on, right above it. "Through the output"
+        # did not say which, and the main output is on another page.
         self.mic_monitor = wx.CheckBox(
-            panel, label="&Hear yourself through the output (headphones only)")
+            panel, label="&Hear my own voice there (headphones only)")
         self.mic_monitor.SetValue(bool(self.board.mic_monitor))
         self.mic_monitor.SetToolTip(
             "On headphones this is how you know you are live. On speakers it "
@@ -1253,16 +1272,19 @@ class SettingsDialog(wx.Dialog):
         # other half of the same question. Still the board's stream_mic,
         # still saved with a station, still the I it had: _stream_controls
         # fills it when a station loads and Cancel puts the board back.
+        # "Other programs", not "the send": that is this app's own word for
+        # it, and a label is read by people who have not learned it yet.
         self.stream_mic = wx.CheckBox(
             panel,
-            label="Send my m&icrophone to streams, recordings and the send")
+            label="Send my m&icrophone to streams, recordings and other "
+                  "programs")
         self.stream_mic.SetValue(bool(self.board.stream_mic))
         self.stream_mic.SetToolTip(
             "Separate from hearing yourself. With this on your voice goes "
-            "into the stream, both recordings and the send whenever the "
-            "microphone is open, whether or not you are monitoring. Off, you "
-            "still hear yourself and nobody else does. A saved station "
-            "remembers it.")
+            "into the stream, both recordings and what is sent to other "
+            "programs whenever the microphone is open, whether or not you "
+            "are monitoring. Off, you still hear yourself and nobody else "
+            "does. A saved station remembers it.")
         sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         sizer.Add(wx.StaticText(panel, label=self._mic_status_text()), 0,
@@ -1537,7 +1559,10 @@ class SettingsDialog(wx.Dialog):
         """
         panel, sizer = self._page("On air sound")
         board = self.board
-        self.onair_on = wx.CheckBox(panel, label="On air sound &on")
+        # Worded as the Voice page's "Process the &microphone" is, for the
+        # show. A check box says on or off itself, so "On air sound on" put
+        # a state in the label that the tick then contradicted when off.
+        self.onair_on = wx.CheckBox(panel, label="Process the &on air sound")
         self.onair_on.SetValue(bool(getattr(board, "onair_on", False)))
         self.onair_on.SetToolTip(
             "Evens out the music and keeps every peak under the ceiling, on "
@@ -1546,8 +1571,8 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(self.onair_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(wx.StaticText(panel, label="&Even out the music"), 0,
-                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        even_label = wx.StaticText(panel, label="&Even out the music")
+        row.Add(even_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.onair_even = wx.Choice(
             panel, choices=[label for _key, label in C.ONAIR_EVEN_CHOICES])
         name_field(self.onair_even, "Even out the music")
@@ -1565,8 +1590,9 @@ class SettingsDialog(wx.Dialog):
         # A spin box in decibels, never a slider: a wx slider is read out
         # as a percentage, and a ceiling of "83 per cent" means nothing.
         row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(wx.StaticText(panel, label="&Never louder than, in dBFS"), 0,
-                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        ceiling_label = wx.StaticText(panel,
+                                      label="&Never louder than, in dBFS")
+        row.Add(ceiling_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.onair_ceiling = wx.SpinCtrlDouble(
             panel, min=C.MIN_ONAIR_CEILING_DB, max=C.MAX_ONAIR_CEILING_DB,
             inc=0.5, initial=float(getattr(board, "onair_ceiling_db",
@@ -1581,10 +1607,13 @@ class SettingsDialog(wx.Dialog):
         row.Add(self.onair_ceiling, 0)
         sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # Labels with their controls, or Alt+E and Alt+N, with the on air
+        # sound off, landed on Match the loudness. See ducking_follows.
         def follows(_event=None):
             on = self.onair_on.GetValue()
-            self.onair_even.Enable(on)
-            self.onair_ceiling.Enable(on)
+            for control in (even_label, self.onair_even, ceiling_label,
+                            self.onair_ceiling):
+                control.Enable(on)
 
         # Firm starts at minus three and the others at minus two. A ceiling
         # still at the default of the mode being left moves with the mode;
@@ -1594,9 +1623,19 @@ class SettingsDialog(wx.Dialog):
         def moved(event):
             was, now = self._onair_mode, self._onair_key()
             self._onair_mode = now
+            ceiling = C.default_onair_ceiling(now)
             if (was != now and abs(float(self.onair_ceiling.GetValue())
-                                   - C.default_onair_ceiling(was)) < 0.01):
-                self.onair_ceiling.SetValue(C.default_onair_ceiling(now))
+                                   - C.default_onair_ceiling(was)) < 0.01
+                    and abs(ceiling - C.default_onair_ceiling(was)) >= 0.01):
+                self.onair_ceiling.SetValue(ceiling)
+                # Said, queued behind the screen reader's reading of the
+                # choice: a box you are not on changed under you. It moved
+                # from minus 2 to minus 3 without a word (Jessica, 24
+                # November 2026).
+                say = getattr(self.GetParent(), "announce", None)
+                if callable(say):
+                    say("Never louder than is now minus %g" % abs(ceiling),
+                        interrupt=False)
             event.Skip()
 
         self.onair_even.Bind(wx.EVT_CHOICE, moved)
@@ -1605,8 +1644,11 @@ class SettingsDialog(wx.Dialog):
         self.onair_on.Bind(wx.EVT_CHECKBOX, lambda e: (follows(), e.Skip()))
 
         self._label(panel, sizer, "Songs and sounds")
+        # "for you and on air" in the label: unlike everything else on this
+        # page it changes what you hear, and that was in the tooltip only.
         self.match_loudness = wx.CheckBox(
-            panel, label="&Match the loudness of songs and sounds")
+            panel, label="&Match the loudness of songs and sounds, for you "
+                         "and on air")
         self.match_loudness.SetValue(bool(getattr(board, "match_loudness",
                                                   False)))
         self.match_loudness.SetToolTip(
@@ -1778,14 +1820,20 @@ class SettingsDialog(wx.Dialog):
         # Check boxes carry their own label, so nothing above can steal it.
         # Their access keys still have to be unique. Whether the microphone
         # goes out is on the Microphone page now: it decides the recordings
-        # and the send as well as the stream. See _build_mic_tab.
+        # and the send as well as the stream. See _build_mic_tab. Said where
+        # the box used to be, for whoever comes looking for it here.
+        self._note(panel, sizer, "Whether your microphone goes out is on the "
+                                 "Microphone page")
 
         # The dialog itself carries a "do not ask again", so without this
         # that would be a one way door: no way back to the summary short of
         # editing the board file. Both keys ask: Alt+Shift+B goes through
         # the same toggle_stream as Ctrl+B, so the words say both.
+        # "before going live", not "before Ctrl+B goes live": Alt+Shift+B
+        # asks it too, and that was said only in the tooltip, which a
+        # keyboard user never hears.
         self.ask_before_live = wx.CheckBox(
-            panel, label="S&ay what is going out before Ctrl+B goes live")
+            panel, label="S&ay what is going out before going live")
         self.ask_before_live.SetValue(bool(self.board.ask_before_live))
         self.ask_before_live.SetToolTip(
             "Ctrl+B and Alt+Shift+B say where the show is going, what it is "
@@ -2098,6 +2146,7 @@ class SettingsDialog(wx.Dialog):
                     getattr(self, "_station_shown", 0))
                 self._say_test(self._off_air_first("change station"))
             return
+        mic_was = bool(self.stream_mic.GetValue())
         if not self.board.load_station(name):
             return
         self._station_shown = self.stream_picker.GetSelection()
@@ -2116,7 +2165,11 @@ class SettingsDialog(wx.Dialog):
         self.live_to_video.SetValue(self.board.live_to == C.LIVE_TO_VIDEO)
         self._fill_picture_fields()
         self._apply_platform()
-        self._say_test("Loaded %s." % name)
+        # The box is on the Microphone page, out of sight from here.
+        mic_now = bool(self.stream_mic.GetValue())
+        self._say_test("Loaded %s.%s" % (
+            name, "" if mic_now == mic_was
+            else " %s." % station_mic_words(mic_now)))
 
     def _on_save_station(self, _event):
         """Remember what is in the boxes, under the station name."""
@@ -3700,6 +3753,18 @@ class TrackCrossfadeDialog(wx.Dialog):
         if self.use_default.GetValue():
             return None
         return round(float(self.seconds.GetValue()), 2)
+
+
+def station_mic_words(goes_out):
+    """What loading a station says when it changes Send my microphone.
+
+    A station still carries the box, and since the box moved to the
+    Microphone page it decides the recordings and the send as well, so a
+    load that changes it says so rather than changing them unsaid. The On
+    air menu and Preferences both load stations, so the words are here once.
+    """
+    return ("Your microphone goes out with this station" if goes_out
+            else "Your microphone is not sent with this station")
 
 
 def _say_through(frame, text):

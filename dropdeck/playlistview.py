@@ -36,6 +36,7 @@ takes you to it.
 from __future__ import annotations
 
 import os
+import time
 
 import wx
 
@@ -88,6 +89,9 @@ class PlaylistPanel(wx.Panel):
         #: bar and marks the board unsaved. Worse, the first refresh happens
         #: while the frame is still being built and has no status bar yet.
         self._syncing = False
+        #: (track, when) after one Delete on the track on the air: the next
+        #: Delete on that track inside C.DELETE_ON_AIR_WINDOW_MS removes it.
+        self._armed = None
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -180,6 +184,7 @@ class PlaylistPanel(wx.Panel):
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activated)
         self.list.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_ticked)
         self.list.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_ticked)
+        self.list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_moved)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_key)
         # Return does not reach EVT_KEY_DOWN on a list view, and Windows only
         # raises ITEM_ACTIVATED for a PLAIN Return, so Shift+Enter is
@@ -609,10 +614,13 @@ class PlaylistPanel(wx.Panel):
                 ID_PL_ROW_TICK, "&Ticked to play	Space")
             item.Check(bool(track.enabled))
             menu.AppendSeparator()
-            # One letter each. T was Ticked, Move to the top and Stop, and R
-            # was Remove and the random drop, so the second of each was a
-            # letter that only moved the highlight. Ticked and Remove keep
-            # theirs, the ones a menu user reaches for.
+            # One letter each. T was Ticked, Move to the top and Stop, so the
+            # second and third only moved the highlight; Ticked keeps it. R
+            # was the random drop and Remove, and the random drop keeps the R
+            # it had in 3.10.1. A letter that is one item's alone acts at
+            # once, so with R on Remove alone the R then Enter that used to
+            # insert a drop removed the track, unsaid, and the Enter then
+            # played the next row (Ryder, 24 November 2026). Remove is M.
             menu.Append(ID_PL_ROW_UP, "Move &up	Alt+Up")
             menu.Append(ID_PL_ROW_DOWN, "Move &down	Alt+Down")
             menu.Append(ID_PL_ROW_TOP, "Move to the t&op	Alt+Home")
@@ -623,13 +631,13 @@ class PlaylistPanel(wx.Panel):
                             track.crossfade_seconds(self.playlist.crossfade))
                            or "none"))
             menu.Append(ID_PL_ROW_RANDOM,
-                        "Insert a ra&ndom drop from the library\tAlt+D")
+                        "Insert a &random drop from the library\tAlt+D")
             menu.Append(ID_PL_ROW_DROP, "&Insert a drop before this...")
             if track.is_drop:
                 menu.Append(ID_PL_ROW_TO_LIBRARY,
                             "Add this drop to the &library")
             menu.AppendSeparator()
-            menu.Append(ID_PL_ROW_REMOVE, "&Remove from the running order	Del")
+            menu.Append(ID_PL_ROW_REMOVE, "Re&move from the running order	Del")
             menu.AppendSeparator()
 
         menu.Append(ID_PL_ROW_ADD, "&Add files to the end...")
@@ -748,24 +756,14 @@ class PlaylistPanel(wx.Panel):
             return
         # The track on the air is the one row Delete asks about, because
         # removing it stops the music, and a stray Delete mid show was a
-        # silent stop. No is the default so Enter keeps it playing. Every
-        # other row goes at once, as it always has.
+        # silent stop. It asks by wanting a second press, never with a box:
+        # the box held the pads and Escape could not close it (Jessica and
+        # Ryder, 24 November 2026). Every other row goes at once, as it
+        # always has.
         on_air = self.player.playing and self.player.index == index
-        if on_air:
-            name = self.playlist[index].display_name
-            answer = wx.MessageBox(
-                "%s is on the air. Removing it stops the playlist.\n\n"
-                "Remove it and stop the music?" % name,
-                "Remove the track on the air",
-                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION, self.frame)
-            came_back = getattr(self.frame, "_window_came_back", None)
-            if callable(came_back):
-                came_back()
-            if answer != wx.YES:
-                self.frame.announce("%s is still playing" % name)
-                return
-            # Asked again: the song may have ended while the box was up.
-            on_air = self.player.playing and self.player.index == index
+        if on_air and not self._second_delete(index):
+            return
+        self._armed = None
         track = self.playlist.remove(index)
         if track is None:
             return
@@ -784,6 +782,30 @@ class PlaylistPanel(wx.Panel):
         else:
             self.frame.announce_help("Removed %s" % track.display_name)
         self.frame.playlist_changed()
+
+    def _second_delete(self, index):
+        """Is this the second Delete on the track on the air? If not, say so.
+
+        The first one only says what a second would do, at the essential
+        level. Another row, the cursor moving (`_on_moved`) or
+        C.DELETE_ON_AIR_WINDOW_MS going by starts again.
+        """
+        track = self.playlist[index]
+        now = time.monotonic()
+        armed = self._armed
+        if (armed is not None and armed[0] is track
+                and now - armed[1] <= C.DELETE_ON_AIR_WINDOW_MS / 1000.0):
+            return True
+        self._armed = (track, now)
+        self.frame.announce("%s is on the air. Press Delete again to remove "
+                            "it and stop the music" % track.display_name)
+        return False
+
+    def _on_moved(self, event):
+        """The cursor went to a row: a Delete waiting for its second press
+        is forgotten."""
+        self._armed = None
+        event.Skip()
 
     def move_to_end(self, top):
         """Send the selected track to the top of the order, or the bottom.

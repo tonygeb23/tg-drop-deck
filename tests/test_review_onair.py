@@ -747,8 +747,10 @@ def frame_3():
     frame.board.dirty = False
     heard.clear()
     post(frame, uimod.ID_ONAIR_COMPARE)
-    check("pressed, it says On air sound off",
-          said(heard, "On air sound off"), heard)
+    # Worded for where it is heard since the polish step (test_review_polish
+    # item 8): "off" sounded like silence on the air.
+    check("pressed, it says the on air sound is bypassed",
+          said(heard, "On air sound bypassed, in what goes out"), heard)
     check("and the stream, the recorders and the send hear the show without "
           "it", not frame.send.processor.on and not frame.streamer.processor.on)
     check("and the soft clip comes back, so nothing goes out unbounded",
@@ -757,8 +759,8 @@ def frame_3():
           "off for now" in frame.onair_item.GetItemLabel())
     heard.clear()
     post(frame, uimod.ID_ONAIR_COMPARE)
-    check("pressed again, On air sound on", said(heard, "On air sound on"),
-          heard)
+    check("pressed again, On air sound back on",
+          said(heard, "On air sound back on"), heard)
     check("and it is back", frame.send.processor.on
           and frame.mixer.air_soft_clip is False)
     check("a compare, not a setting: the board is not changed by it",
@@ -1132,8 +1134,10 @@ def step3_compare_key():
           "(b157d05 had the compare first, so the sound never played)",
           owners == [mine], owners)
     label = frame.onair_item.GetItemLabel()
+    # "Alt+Shift+P plays Applause", without "No key," since the polish step
+    # (test_review_polish item 7).
     check("the menu item says it has no key, and whose the key is",
-          "\t" not in label and "Applause" in label and "No key" in label,
+          "\t" not in label and "Alt+Shift+P plays Applause" in label,
           label)
     uses = frame._app_key_uses()
     check("and the key map the hotkey box checks against does not claim it "

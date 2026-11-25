@@ -492,7 +492,10 @@ def labelled(page, label, kind=None):
             and isinstance(c, WORDED) and c.GetLabel() == label]
 
 
-MIC_OUT_LABEL = "Send my m&icrophone to streams, recordings and the send"
+#: "Other programs" rather than "the send" since the polish step
+#: (test_review_polish item 18).
+MIC_OUT_LABEL = ("Send my m&icrophone to streams, recordings and other "
+                 "programs")
 LISTEN_LABEL = "What I listen &on"
 TITLES_AS_LABEL = "Send s&ong titles as"
 
@@ -598,8 +601,10 @@ def item_0():
         prefs.Destroy()
     check("the Preferences box's tooltip says Alt+Shift+B asks too",
           "Alt+Shift+B" in tip and "Ctrl+B" in tip, tip)
-    guard("its label and its A are as they were",
-          label == "S&ay what is going out before Ctrl+B goes live", label)
+    # The polish step took Ctrl+B out of the label as well, since both keys
+    # ask: test_review_polish item 10. Its A is unchanged.
+    guard("its A is as it was",
+          label == "S&ay what is going out before going live", label)
     box = dialogs.GoLiveDialog(frame, frame.preflight())
     try:
         tip = box.again.GetToolTipText()
@@ -819,9 +824,11 @@ def item_2():
     guard("the pad keeps Alt+Shift+A: it is the only one in the table",
           owners_of(ord("A")) == [mine], owners_of(ord("A")))
     label = add_songs_item().GetItemLabel()
+    # Without "No key," and "on this board" since the polish step
+    # (test_review_polish item 7).
     check("Add songs says it has no key, and whose the key is",
-          chr(9) not in label and label == "&Add songs to the end... No key, "
-          "Alt+Shift+A plays Applause on this board", label)
+          chr(9) not in label and label == "&Add songs to the end... "
+          "Alt+Shift+A plays Applause", label)
     guard("and the key map the hotkey window checks does not claim it",
           "add songs" not in str(frame._app_key_uses().get(
               (ord("A"), ALT_SHIFT), "")).lower())
@@ -864,9 +871,9 @@ def item_2():
           uimod.ID_PL_ADD not in commands
           and uimod.ID_ONAIR_COMPARE not in commands)
     check("and both labels say whose key it is",
-          "No key, Alt+Shift+A plays Applause" in add_songs_item()
+          "Alt+Shift+A plays Applause" in add_songs_item()
           .GetItemLabel()
-          and "No key, Alt+Shift+P plays Pling" in frame.onair_item
+          and "Alt+Shift+P plays Pling" in frame.onair_item
           .GetItemLabel(),
           (add_songs_item().GetItemLabel(), frame.onair_item.GetItemLabel()))
     check("the two compare helpers became one for both keys",
@@ -903,8 +910,10 @@ def item_3():
               box is not None)
         check("and it is the board's stream_mic, the control OK reads",
               box is not None and box is prefs.stream_mic)
+        # A check box: since the polish step a static text where the box was
+        # says where it went (test_review_polish item 6).
         old = [c.GetLabel() for c in controls(stream_page)
-               if isinstance(c, WORDED)
+               if isinstance(c, wx.CheckBox)
                and "microphone" in c.GetLabel().replace("&", "").lower()]
         check("Audio streaming no longer has it", not old, old)
         letters = page_letters(mic_page)
@@ -1002,7 +1011,10 @@ def item_3():
                 box.SetValue(True)
             return wx.ID_OK
 
-        said = hear(lambda: preferences(tick_it))
+        # Said once the window coming back has been read, since the polish
+        # step (test_review_polish item 12), so it is waited for.
+        said = hear(lambda: preferences(tick_it),
+                    wait=(C.AFTER_MENU_SPEECH_MS + 300) / 1000.0)
     finally:
         frame.mic.stream = None
         DEFAULT_MIC[0] = "Microphone (Yeti Stereo Microphone)"
@@ -1073,11 +1085,12 @@ def item_4():
         check("its tooltip says it carries the beep, auditioning and the "
               "whole show", "beep" in tip and "audition" in tip
               and "whole show" in tip, tip)
+        # And since the polish step the monitoring box is "Hear my own voice
+        # there" (test_review_polish item 17), so none is left at all.
         left = [c.GetLabel() for c in controls(mic_page)
                 if isinstance(c, WORDED)
                 and "Hear yourself thr" in c.GetLabel().replace("&", "")]
-        check("the only Hear yourself through left is the monitoring box",
-              left == ["&Hear yourself through the output (headphones only)"],
+        check("no Hear yourself through is left on the page", left == [],
               left)
         at = order.index(prefs.mic_output)
         before = order[at - 1].GetLabel() if at > 0 else ""

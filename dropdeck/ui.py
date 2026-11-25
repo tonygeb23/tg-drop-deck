@@ -59,7 +59,8 @@ from .dialogs import (ColoursDialog, CueSheetDialog, GoLiveDialog,
                       SourceControlDialog, SourcesDialog, StreamHelpDialog,
                       StreamStatsDialog,
                       TrackCrossfadeDialog, TrimDialog, ask_text,
-                      audio_file_dialog, key_label, AppKey)
+                      audio_file_dialog, key_label, AppKey,
+                      station_mic_words)
 from .engine import probe
 from . import micdiag
 from . import micinput
@@ -1391,6 +1392,9 @@ class DropDeckFrame(wx.Frame):
         # else's and is never saved over; one that could not be read or
         # copied aside is never touched at all.
         board.claim_path(default, unreadable=default in untouchable)
+        # Nobody named this one either, so Ctrl+S asks, now and after a
+        # restart. See _on_save.
+        board.never_named = True
         return board
 
     @staticmethod
@@ -1437,8 +1441,36 @@ class DropDeckFrame(wx.Frame):
         # releases. A failure to speak must not also be a failure to notice.
         try:
             self._startup_line()
+            self._tell_whats_new_once()
         except Exception as exc:                        # pragma: no cover
             self.status.SetStatusText("Startup announcement failed: %s" % exc, 1)
+
+    def _tell_whats_new_once(self):
+        """The first start of this version on a machine says what moved.
+
+        Two things somebody updating would otherwise find out in the middle
+        of a show: their board has On air sound off until they turn it on,
+        and the box they knew as Put the microphone on air has a new name on
+        another page. Queued behind the startup line, at essential.
+
+        Only when it is TRUE, which is an update: never over the demo, and
+        never on a board that already has On air sound on, which one made by
+        this version does. **Written down first, and not said if that
+        fails**, the way `_trust_own_board_once` does it, so a settings
+        folder that cannot be written is not told it at every start.
+        """
+        state = board_module.machine_state()
+        if state.get("told_onair_and_mic_moved"):
+            return
+        state["told_onair_and_mic_moved"] = True
+        if not board_module.save_machine_state(state):
+            return
+        if getattr(self, "_loaded_demo", False) or self.board.onair_on:
+            return
+        self.announce("New in this version: On air sound, on its own page in "
+                      "Preferences, is off on this board until you turn it "
+                      "on. Put the microphone on air is now Send my "
+                      "microphone, on the Microphone page", interrupt=False)
 
     def _startup_line(self):
         bits = [f"{C.APP_NAME} ready"]
@@ -1717,7 +1749,13 @@ class DropDeckFrame(wx.Frame):
 
         panel.SetSizer(outer)
 
-        self.status = self.CreateStatusBar(2)
+        # Without STB_ELLIPSIZE_END, which the default style carries: wx cut
+        # each field to fit BEFORE the native control was given it, so
+        # NVDA+End read "SENDING (..." and a sentence ending "for anoth...".
+        # Jessica, 24 November 2026. The tip still shows a field that is cut.
+        self.status = self.CreateStatusBar(
+            2, style=wx.STB_SIZEGRIP | wx.STB_SHOW_TIPS
+            | wx.FULL_REPAINT_ON_RESIZE)
         # The announcement needs the room; the volume readout is short and
         # fixed. This was the other way round, so every message was cut.
         self.status.SetStatusWidths([-2, -5])
@@ -3194,11 +3232,17 @@ class DropDeckFrame(wx.Frame):
                 presses, str(presses)))
         button = getattr(self, "stop_button", None)
         if button is not None:
-            button.SetLabel("Stop everything  (%s)" % words)
-            button.SetToolTip(
-                "Stop every sound and bed. This button does it at once; %s "
-                "from the keyboard, so a stray press cannot take the show off"
-                % words)
+            label = "Stop everything  (%s)" % words
+            tip = ("Stop every sound and bed. This button does it at once; %s "
+                   "from the keyboard, so a stray press cannot take the show "
+                   "off" % words)
+            # Only when the words change. SetLabel raises a name change even
+            # for the same words, and a screen reader on the button reads it
+            # again; every Preferences OK and every board opened did that.
+            if button.GetLabel() != label:
+                button.SetLabel(label)
+            if button.GetToolTipText() != tip:
+                button.SetToolTip(tip)
         item = getattr(self, "stop_all_item", None)
         if item is not None:
             item.SetHelp("Stops every sound, bed and the running order. %s "
@@ -4445,9 +4489,20 @@ class DropDeckFrame(wx.Frame):
         holder = self._pad_holding(command)
         if holder is None:
             return words + chr(9) + key
-        return "%s%sNo key, %s plays %s on this board" % (
-            words, " " if words.endswith(".") else ". ", key,
-            holder.display_name)
+        # The pad's name escaped, or "Q&A bumper" drew as "QA bumper" with
+        # an A mnemonic of its own on the menu.
+        return "%s%s%s" % (words, " " if words.endswith(".") else ". ",
+                           _escaped(self._key_kept_by(holder, key)))
+
+    @staticmethod
+    def _key_kept_by(holder, key):
+        """Whose a key is: "Alt+Shift+A plays Applause". An emptied pad
+        keeps its key too, and "plays Empty" says nothing about which pad,
+        so that one is named by its bank and number."""
+        if holder.is_assigned:
+            return "%s plays %s" % (key, holder.display_name)
+        return "%s is kept by %s %d, which is empty" % (
+            key, holder.bank_short, holder.number)
 
     def _pad_holding(self, command):
         """The bank 4 pad that has this command's key, or None.
@@ -4472,11 +4527,17 @@ class DropDeckFrame(wx.Frame):
         notes = []
         for command, (code, what, menu) in _KEYS_PADS_KEEP.items():
             holder = self._pad_holding(command)
-            if holder is not None:
+            if holder is None:
+                continue
+            key = key_label(code, wx.ACCEL_ALT | wx.ACCEL_SHIFT)
+            if holder.is_assigned:
                 notes.append("%s plays %s on this board, so %s has no key. "
                              "It is on the %s menu"
-                             % (key_label(code, wx.ACCEL_ALT | wx.ACCEL_SHIFT),
-                                holder.display_name, what, menu))
+                             % (key, holder.display_name, what, menu))
+            else:
+                notes.append("%s, so %s has no key. Clear that pad's hotkey "
+                             "to free it" % (self._key_kept_by(holder, key),
+                                             what))
         return notes
 
     def _on_onair_compare(self, _event=None):
@@ -4491,8 +4552,18 @@ class DropDeckFrame(wx.Frame):
             return
         self._onair_bypassed = not self._onair_bypassed
         self._apply_onair()
-        self.announce("On air sound off" if self._onair_bypassed
-                      else "On air sound on")
+        # It changes only what goes out, never what you hear, so "On air
+        # sound off" sounded like silence on the air (Jessica, 24 November
+        # 2026).
+        self.announce("On air sound bypassed, in what goes out"
+                      if self._onair_bypassed else "On air sound back on")
+        if (self._onair_bypassed and self._speech_level() == C.SPEECH_ALL
+                and not getattr(self, "_told_compare_ear", False)):
+            # Once a session, queued: where to listen for the difference.
+            # Only counted once it is said, at the level that says hints.
+            self._told_compare_ear = True
+            self.announce_help("To hear the difference yourself, send the "
+                               "show and press Ctrl+Shift+H", interrupt=False)
 
     def _apply_ducking(self, board):
         """Every ducking setting the board holds, onto the mixers and the mic.
@@ -4648,19 +4719,28 @@ class DropDeckFrame(wx.Frame):
         this session, when it is not the one opened last, or when it came in
         another way, and never on the tenth press of the same microphone.
         "Music ducked" only while ducking is on: with Ctrl+D off nothing goes
-        down, and saying it did was untrue. "Not on air" while a stream, a
-        recording or the send is running and "Send my microphone" is
-        off, because the presenter hears themselves perfectly and nobody
-        else does.
+        down, and saying it did was untrue.
+
+        While a stream, a recording or the send is running and the
+        microphone does not reach it, the presenter hears themselves
+        perfectly and nobody else does, so that comes FIRST, where the next
+        key cannot cut it off, with the reason (`_mic_off_air_reason`, the
+        one the air taps use). It was "Not on air", last, which is the
+        stream's own word for its state, and it heard only Send my
+        microphone, never a mute or a solo in Source control (Ryder,
+        24 November 2026). The device waits for the next time it is news.
         """
-        parts = ["Mic on"]
-        if rerouted or missing or name != getattr(self, "_mic_named", None):
-            parts[0] += ", " + name
-        self._mic_named = name
+        kept_off = self.going_anywhere() and self._mic_off_air_reason()
+        if kept_off:
+            parts = ["Mic on, but nobody else hears it: " + kept_off]
+        else:
+            parts = ["Mic on"]
+            if rerouted or missing or name != getattr(self, "_mic_named",
+                                                       None):
+                parts[0] += ", " + name
+            self._mic_named = name
         if self.mixer.ducking:
             parts.append("Music ducked")
-        if self.going_anywhere() and not self.board.stream_mic:
-            parts.append("Not on air")
         if missing:
             parts.append("Your chosen microphone, %s, is not plugged in, so "
                          "this is the system default" % missing)
@@ -4785,7 +4865,7 @@ class DropDeckFrame(wx.Frame):
         self.board.mic_gain_db = gain_db
         self.board.mic_monitor = monitoring
         self.mic.gain_db = gain_db
-        channel = ["mix", "left", "right"][
+        channel = C.MIC_CHANNEL_KEYS[
             max(0, dialog.mic_channel.GetSelection())]
         if channel != self.mic.channel:
             self.board.mic_channel = channel
@@ -5096,7 +5176,8 @@ class DropDeckFrame(wx.Frame):
             # A place somebody chose. It is the board from now on.
             self._pinned_board = None
         self._remember(saved)
-        if not quiet:
+        if not quiet and path is None:
+            # Save board as says its own line. See _on_save_as.
             self.announce_help(f"Saved to {os.path.basename(saved)}")
         return saved
 
@@ -5136,6 +5217,9 @@ class DropDeckFrame(wx.Frame):
         fb40 straight back, with the old settings, at the next start.
         """
         remember_board_path(getattr(self, "_pinned_board", None) or saved)
+        # And the folder, for Save board as to start in. Never one that is
+        # not the user's own: see board.remember_board_folder.
+        board_module.remember_board_folder(saved)
 
     def _changed_elsewhere(self, quiet=False):
         """The board's own file was changed outside the app. Keep both.
@@ -5323,33 +5407,61 @@ class DropDeckFrame(wx.Frame):
         document that has never been saved. Meanwhile the save timer keeps
         the work safe in that file, as it always did. A board that was named
         or opened saves where it is.
+
+        Known by `Board.never_named`, which is in the board's file: the
+        session's own note of the home it gave was gone after a restart, and
+        Ctrl+S went back to saving "New board.json" (Ryder, 24 November
+        2026). The board a first run opens has never been named either.
         """
-        home = getattr(self, "_fresh_home", None)
-        if home and same_path(home, self.board.path):
+        if getattr(self.board, "never_named", False):
             self._on_save_as(None)
             return
         self._save()
 
     def _on_save_as(self, _event):
-        with wx.FileDialog(self, "Save board as", wildcard="Boards (*.json)|*.json",
+        # Started in a folder of the user's with a name already in the box,
+        # rather than wherever Windows last was.
+        with wx.FileDialog(self, "Save board as",
+                           defaultDir=self._save_as_folder(),
+                           defaultFile=self._export_name() + ".json",
+                           wildcard="Boards (*.json)|*.json",
                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return
             chosen = dialog.GetPath()
+        self._window_came_back()
         leftover = self._leftover_home()
+        # Named from now on, in the file about to be written as well.
+        was_unnamed = self.board.never_named
+        self.board.never_named = False
         saved = self._save(path=chosen)
-        if saved:
-            self._fresh_home = None
-            self._unstarted = None
-            if (leftover and not same_path(leftover, saved)
-                    and same_path(remembered_board_path(), saved)):
-                # The file this board was kept in until it had a name. It
-                # holds nothing the named one does not, so it goes, or every
-                # board ever named leaves a "New board" twin behind.
-                try:
-                    os.remove(leftover)
-                except OSError:
-                    pass
+        if not saved:
+            self.board.never_named = was_unnamed
+            return
+        self._fresh_home = None
+        self._unstarted = None
+        if (leftover and not same_path(leftover, saved)
+                and same_path(remembered_board_path(), saved)):
+            # The file this board was kept in until it had a name. It
+            # holds nothing the named one does not, so it goes, or every
+            # board ever named leaves a "New board" twin behind.
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+        # Its name and its folder by their own names, no ".json", no path.
+        self.announce_help("Saved as %s, in %s"
+                           % (_board_words(saved), _folder_words(saved)))
+
+    def _save_as_folder(self):
+        """Where Save board as starts: the folder a board was last saved in,
+        or Documents. A remembered folder that does not answer quickly, a
+        share that has gone, is Documents too."""
+        folder = board_module.remembered_board_folder()
+        if folder and _exists_quickly(folder):
+            return folder
+        from . import recorder as recording
+        return recording.documents_folder()
 
     def _leftover_home(self):
         """The file a not yet named board is in, when it is ours to remove.
@@ -5448,6 +5560,7 @@ class DropDeckFrame(wx.Frame):
         """
         home = self._new_home(name)
         board.claim_path(home)
+        board.never_named = True
         board.dirty = False
         self._fresh_home = home
         self._unstarted = board
@@ -6083,6 +6196,23 @@ class DropDeckFrame(wx.Frame):
         return any(holder.soloed for _kind, _label, holder in self.source_rows()
                    if holder is not None)
 
+    def _mic_off_air_reason(self):
+        """Why the microphone is kept out of what goes out, or "" if it is not.
+
+        The ONE answer. `_sync_air_taps` and `apply_source_mixing` set
+        `mic.on_air` from it and Ctrl+M says it, so what Ctrl+M says can
+        never disagree with what goes out. Whether anything wants the air at
+        all is the caller's half of the question.
+        """
+        if not self.board.stream_mic:
+            return "Send my microphone is off"
+        mic = getattr(self, "mic", None)
+        if mic is not None and mic.muted:
+            return "you are muted in Source control"
+        if mic is not None and self.anything_soloed() and not mic.soloed:
+            return "a source is soloed"
+        return ""
+
     def apply_source_mixing(self):
         """Push mute and solo onto the inputs. Called after either changes.
 
@@ -6098,11 +6228,8 @@ class DropDeckFrame(wx.Frame):
             # any source's Mute during a TeamTalk call took the presenter's
             # voice off the send and unmuting did not put it back. Found by
             # Mark, 10 September 2026, reproduced every time.
-            wants = bool(self.board.stream_mic) and self.going_anywhere()
-            if mic.muted or (soloed and not mic.soloed):
-                mic.on_air = False
-            else:
-                mic.on_air = wants
+            mic.on_air = (self.going_anywhere()
+                          and not self._mic_off_air_reason())
             mic.monitor = (bool(self.board.mic_monitor)
                            and not mic.muted
                            and (mic.soloed or not soloed))
@@ -7362,8 +7489,7 @@ class DropDeckFrame(wx.Frame):
         # is recorded on the same terms, and sent on the same terms.
         soloed = self.anything_soloed()
         wanted = bool(buses) or sending
-        mic.on_air = (wanted and bool(self.board.stream_mic)
-                      and not mic.muted and (mic.soloed or not soloed))
+        mic.on_air = wanted and not self._mic_off_air_reason()
         # The group goes on air whenever anything in it is wanted there. A
         # source is on air on its own terms: somebody putting a games call out
         # has not necessarily got their microphone open.
@@ -8282,8 +8408,27 @@ class DropDeckFrame(wx.Frame):
                           % self._destination_key(self.board.live_to))
             self._rebuild_station_menu()
             return
+        mic_was = bool(self.board.stream_mic)
         if self.board.load_station(name):
             self._touch()
+            # Send my microphone comes with the station and decides the
+            # recordings and the send too, so a change is said, and made
+            # true at once for whatever is already going out. Turned on into
+            # the send's own cable, it is refused the way Preferences
+            # refuses it.
+            mic_line = ""
+            if bool(self.board.stream_mic) != mic_was:
+                loops = (self._send_loops(
+                    [(_YOUR_MIC, self._mic_capture_name())])
+                    if self.board.stream_mic and self.sending()
+                    and self._mic_open() else [])
+                if loops:
+                    self.board.stream_mic = mic_was
+                    mic_line = " ".join(loops).rstrip(".")
+                else:
+                    mic_line = station_mic_words(self.board.stream_mic)
+                self._sync_air_taps()
+                self.apply_source_mixing()
             # Where it goes, not just what was loaded. A saved setup carries
             # its own destination, so loading one can move the show from the
             # radio station to the video platform without anything saying so.
@@ -8291,10 +8436,11 @@ class DropDeckFrame(wx.Frame):
             # station, which has been Alt+Shift+B's since 3.8.2.
             report = self.preflight()
             want = self.board.live_to
-            self.announce("%s. %s goes to %s"
+            self.announce("%s. %s goes to %s%s"
                           % (name, self._destination_key(want),
                              report.summary() if report is not None
-                             else self._destination_words(want)))
+                             else self._destination_words(want),
+                             ". " + mic_line if mic_line else ""))
         self._rebuild_station_menu()
         self._update_status()
 
@@ -8587,10 +8733,13 @@ class DropDeckFrame(wx.Frame):
             if answer != wx.ID_APPLY:
                 self.announce("Staying off air")
                 return False
+            # On the box the warning is about, not the microphone picker
+            # that opens the Microphone page.
             self._on_settings(page={
                 C.FIX_VIDEO: SettingsDialog.PAGE_VIDEO,
                 C.FIX_MIC: SettingsDialog.PAGE_MIC}.get(
-                    fix, SettingsDialog.PAGE_STREAM))
+                    fix, SettingsDialog.PAGE_STREAM),
+                focus="stream_mic" if fix == C.FIX_MIC else None)
             try:
                 settings = self._stream_settings()
                 confirm = bool(settings.get("key_unconfirmed"))
@@ -9073,13 +9222,14 @@ class DropDeckFrame(wx.Frame):
                 self._board_check_waiting = False
                 wx.CallAfter(self._check_board_file)
 
-    def _on_settings(self, _event=None, page=None):
+    def _on_settings(self, _event=None, page=None, focus=None):
         """Preferences. One window, five tabs, two keys into it.
 
         ``page`` is which tab it opens on: Ctrl+P lands on Output and
-        Ctrl+Shift+M on Microphone. Everything is applied on OK whichever tab
-        you were looking at, because a settings window that only saves the
-        page you happen to be on is a settings window that loses your work.
+        Ctrl+Shift+M on Microphone. ``focus`` names one control on it to
+        land on instead. Everything is applied on OK whichever tab you were
+        looking at, because a settings window that only saves the page you
+        happen to be on is a settings window that loses your work.
         """
         #: The picture as it was, so a change that has to reach a picture
         #: already going out can be told from one that does not.
@@ -9089,9 +9239,14 @@ class DropDeckFrame(wx.Frame):
         #: else, so the confirmation cannot cut it off.
         heard = []
         with self._board_held(), SettingsDialog(self, self.board, self.mixer,
-                                                mic=self.mic,
-                                                page=page) as dialog:
-            if dialog.ShowModal() != wx.ID_OK:
+                                                mic=self.mic, page=page,
+                                                focus=focus) as dialog:
+            answer = dialog.ShowModal()
+            # Before anything is said: the screen reader is about to read
+            # the main window coming back, and every line below started under
+            # that reading and was cut off by it. See _window_came_back.
+            self._window_came_back()
+            if answer != wx.ID_OK:
                 # The Voice tab has been changing the live chain all the while,
                 # so "nothing changed" is only true once it is put back.
                 undone = dialog.restore_voice()

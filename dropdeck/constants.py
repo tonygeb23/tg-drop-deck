@@ -230,6 +230,12 @@ RECORD_FORMAT_KEYS = ["wav", "mp3", "aac", "opus"]
 DEFAULT_STOP_PRESSES = 2
 MIN_STOP_PRESSES = 1
 MAX_STOP_PRESSES = 4
+#: How long a second Delete has to take the playlist track on the air out,
+#: in milliseconds, the way Escape's presses are counted. The first press
+#: only says what a second one would do: it was a box with Yes and No, which
+#: held the pads and that Escape could not close. Long enough to hear that
+#: sentence through at an ordinary speech rate before pressing again.
+DELETE_ON_AIR_WINDOW_MS = 5000
 DEFAULT_CUE_SOUND = "pip"
 
 #: Where the pip plays. Above the eighty pads and above the two playlist
@@ -485,6 +491,17 @@ RING_SLACK_LOW_SECONDS = 0.0015
 RING_SPLICE_SECONDS = 0.005
 RING_SEARCH_SECONDS = 0.005
 RING_WINDOW_SECONDS = 1.0
+
+#: Which side of a two channel input the microphone takes, as a board saves it
+#: and as the Microphone page offers it. "mix" is the side with a voice on it,
+#: the key "Both" has always been saved as, so a board that has it keeps it.
+#: "average" is both, always, at half each: two hosts on one interface, one
+#: on each input, pumped 6 dB about a second into every turn under "mix".
+MIC_CHANNELS = (("mix", "Both, the side with a voice on it"),
+                ("average", "Both, always mixed"),
+                ("left", "Left only"),
+                ("right", "Right only"))
+MIC_CHANNEL_KEYS = tuple(key for key, _label in MIC_CHANNELS)
 
 #: "mix" on a two channel input takes the louder side alone when the other is
 #: this much quieter, and goes back to both when they are within JOIN again.

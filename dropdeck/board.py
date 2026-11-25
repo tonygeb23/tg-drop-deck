@@ -313,6 +313,8 @@ def for_export(data):
     clean(out)
     for field in ("record_folder", "last_sound_dir", "last_playlist_dir"):
         out[field] = ""
+    # An export is put where somebody chose, under a name they gave it.
+    out["never_named"] = False
     # The plugin by its file name alone: its folder can be under the user's
     # own AppData, with their Windows name in it. The receiving computer
     # finds its own copy by that name (ui._resolve_plugin_name).
@@ -788,6 +790,33 @@ def remembered_board_path():
         return None
     path = data.get("path") if isinstance(data, dict) else None
     return path if isinstance(path, str) and path.strip() else None
+
+
+def remember_board_folder(path):
+    """Write down the folder a board was just saved in, for Save board as.
+
+    A folder of the user's only. The settings folder, where a board with no
+    name yet is kept and autosaved, is one nobody chose, and remembering it
+    would start Save board as in a folder the user never sees. Written only
+    when it changes, because every save comes through here.
+    """
+    if not path:
+        return False
+    folder = os.path.dirname(os.path.abspath(path))
+    if same_path(folder, config_dir()):
+        return False
+    state = machine_state()
+    known = state.get("board_folder")
+    if isinstance(known, str) and same_path(known, folder):
+        return True
+    state["board_folder"] = folder
+    return save_machine_state(state)
+
+
+def remembered_board_folder():
+    """That folder, or "" when no board has been saved in one yet."""
+    folder = machine_state().get("board_folder")
+    return folder if isinstance(folder, str) and folder.strip() else ""
 
 
 def same_path(a, b):
@@ -1310,6 +1339,12 @@ class Board:
         #: this answers, and Enter is still the next keystroke. Somebody
         #: who goes live every day turns it off inside the dialog.
         self.ask_before_live = True
+        #: Nobody has given this board a name yet: File, New, the demo pack,
+        #: an import and a first run each get a home of their own in the
+        #: settings folder, and Ctrl+S asks where to save it instead. In the
+        #: FILE, so the home is still known for one after a restart; Save
+        #: board as clears it.
+        self.never_named = False
         #: What the file at `path` looked like when this board last read or
         #: wrote it. See changed_on_disk.
         self._disk = None
@@ -1886,6 +1921,7 @@ class Board:
             "announce_playback": bool(self.announce_playback),
             "speech_level": self.speech_level,
             "ask_before_live": bool(self.ask_before_live),
+            "never_named": bool(self.never_named),
             "warn_before_end": bool(self.warn_before_end),
             "warn_seconds": float(self.warn_seconds),
             "preview_sounds": bool(self.preview_sounds),
@@ -2246,7 +2282,7 @@ class Board:
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
         channel = data.get("mic_channel")
-        board.mic_channel = channel if channel in ("mix", "left", "right") else "mix"
+        board.mic_channel = channel if channel in C.MIC_CHANNEL_KEYS else "mix"
         sound = data.get("cue_sound")
         board.cue_sound = (sound if sound in C.CUE_SOUND_KEYS
                            else C.DEFAULT_CUE_SOUND)
@@ -2292,6 +2328,7 @@ class Board:
                      else C.SPEECH_ESSENTIAL)
         board.speech_level = level
         board.ask_before_live = bool(data.get("ask_before_live", True))
+        board.never_named = data.get("never_named") is True
 
         # Keys arrive as strings out of JSON and are used as ints everywhere
         # else. Anything unparseable is dropped rather than crashing a load,

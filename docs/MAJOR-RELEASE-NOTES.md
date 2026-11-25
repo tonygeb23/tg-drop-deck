@@ -13,7 +13,7 @@ Plain sentences for the changelog and the release post, added by each step.
   send running, a board whose send is on starts it, as it does when Drop Deck
   starts, and says so.
 - Muting and soloing a source survive opening another board and File, New.
-  File, New also keeps "Put the microphone on air" as it was.
+  File, New also keeps "Send my microphone" as it was.
 - The Loaded line now says, without being cut off, which sound cards the board
   names that are not plugged in, which sources would not open, and whether the
   board turned global hotkeys on. Two pads sharing one global hotkey are said
@@ -31,8 +31,11 @@ Plain sentences for the changelog and the release post, added by each step.
 - Rename in Source control works again, with F2 and with the button.
 - Every pad and every key works while the cue sheet (Ctrl+Shift+C) has focus.
   Escape there only closes the cue sheet.
-- Turning "Put the microphone on air" on or off in Preferences takes effect
-  straight away, in the middle of a show.
+- Turning "Send my microphone" on or off in Preferences takes effect
+  straight away, in the middle of a show. So does loading a saved station
+  that turns it on or off, and the station's line then says "Your
+  microphone goes out with this station" or "Your microphone is not sent
+  with this station". Loading one inside Preferences says it too.
 - If you switch to another microphone in Preferences while yours is on and the
   new one will not open, Drop Deck now says so and Microphone on is unticked.
 - While you are on air, Preferences will not change where Ctrl+B goes or load
@@ -159,7 +162,12 @@ Plain sentences for the changelog and the release post, added by each step.
   the side with the voice on it after about a second of the other being nearly
   silent, and the moment the quiet side carries sound again, a second person
   starting to talk, both come back within 50 milliseconds. Sources still mix
-  both sides.
+  both sides. In "Which channel the voice is on" this is "Both, the side with
+  a voice on it", and a board that had "Both, mixed together" gets it.
+- New: "Both, always mixed", in the same place, for two people on one
+  interface, one on each input. Neither side is ever left out, so a voice no
+  longer jumps 6 dB about a second into its turn. "Left only" and "Right
+  only" are as they were.
 - Your microphone processing stays right when your sound card runs at a
   different rate, such as 96 kHz. The low cut used to sit an octave too high
   and make the voice thin.
@@ -184,36 +192,50 @@ Plain sentences for the changelog and the release post, added by each step.
 - New, and off unless you turn it on: "Duck further while I am talking" on the
   Sounds and beds page of Preferences. The music still ducks when your
   microphone is on, as before, and goes a little further down while you are
-  actually speaking, by the amount you set in "By how much".
-- New: On air sound, a page of its own in Preferences next to Voice. What goes
-  to your stream, your recordings and the send is evened out, so a loud song
-  and a quiet one arrive closer together, and nothing is ever louder than the
-  ceiling you set, minus 2 dBFS to start with, measured between the samples
-  as well. Firm starts at minus 3, because music limited hard all the time can
-  still go a little over. It never changes what you hear yourself, and it
-  holds still only while the music really is ducked under your microphone or
-  a drop; with ducking off it keeps evening out. "Even out the music" can be
-  Off, Gentle or Firm. A glitched file can no longer silence the stream.
-- Alt+Shift+P turns the on air sound off for a moment, and on again, so you
-  can hear what it is doing. Drop Deck says "On air sound off" and "On air
-  sound on", and fades between the two in a twentieth of a second. It is not
-  saved, so a show never starts with it off by accident. If a pad in bank 4
-  already has Alt+Shift+P, the pad keeps it: the compare is then on the On air
-  menu only, and the menu and the startup line say so.
-- New: "Match the loudness of songs and sounds", on the same page. Each song
-  and sound is measured once, in the background, and played at a matching
-  level. A file you change under the same name is measured again. A level you
-  set on a sound or a song yourself always wins, 0 dB included, which is how
-  you keep one sound exactly as recorded. Quiet files are only turned up as
-  far as they can go without distorting.
-- Both are on for a new board, the demo pack and a first start. A board you
-  already have keeps the sound it had until you turn them on.
+  actually speaking, by the amount you set in "By how much further, in
+  decibels".
+- New: On air sound, a page of its own in Preferences next to Voice, turned
+  on and off with "Process the on air sound". What goes to your stream, your
+  recordings and the send is evened out, so a loud song and a quiet one
+  arrive closer together, and nothing is ever louder than the ceiling you
+  set, minus 2 dBFS to start with, measured between the samples as well.
+  Firm starts at minus 3, because music limited hard all the time can still
+  go a little over, and choosing Firm or going back says the ceiling it
+  moved to. It never changes what you hear yourself, and it holds still only
+  while the music really is ducked under your microphone or a drop; with
+  ducking off it keeps evening out. "Even out the music" can be Off, Gentle
+  or Firm. A glitched file can no longer silence the stream.
+- Alt+Shift+P bypasses the on air sound for a moment, and puts it back, so
+  you can compare. Drop Deck says "On air sound bypassed, in what goes out"
+  and "On air sound back on", and fades between the two in a twentieth of a
+  second. It changes only what goes out, never what you hear, so to hear the
+  difference yourself, send the show to another program (Alt+Shift+O) and
+  listen to what is being sent with Ctrl+Shift+H; at the full speech level
+  the first compare of a session says so. It is not saved, so a show never
+  starts with it off by accident. If a pad in bank 4 already has
+  Alt+Shift+P, the pad keeps it: the compare is then on the On air menu
+  only, and the menu and the startup line say so.
+- New: "Match the loudness of songs and sounds, for you and on air", on the
+  same page. Each song and sound is measured once, in the background, and
+  played at a matching level, in what you hear as well as what goes out. A
+  file you change under the same name is measured again. A level you set on
+  a sound or a song yourself always wins, 0 dB included, which is how you
+  keep one sound exactly as recorded. Quiet files are only turned up as far
+  as they can go without distorting.
+- File, New and the demo pack turn On air sound and loudness matching on,
+  and so does a first start. A board you already have keeps the sound it had
+  until you turn them on, and the first time this version starts, Drop Deck
+  says so once, after its startup line: "New in this version: On air sound,
+  on its own page in Preferences, is off on this board until you turn it on.
+  Put the microphone on air is now Send my microphone, on the Microphone
+  page".
 - Drop Deck now says at startup when a sound card your board uses would not
   open, or is not plugged in, instead of quietly playing through the Windows
   default.
-- Turning on "Put the microphone on air" while you are sending, with your
+- Turning on "Send my microphone" while you are sending, with your
   microphone set to the other end of the cable you are sending into, is
-  refused and Drop Deck says why, the same as Ctrl+M.
+  refused and Drop Deck says why, the same as Ctrl+M. Loading a saved
+  station that would turn it on is refused the same way.
 
 ## Speech and keys
 
@@ -221,16 +243,19 @@ Plain sentences for the changelog and the release post, added by each step.
   microphone is named only the first time, when it is a different one, or
   when it came in another way, and "music ducked" is said only when ducking
   is on.
-- If your microphone is on while you stream, record or send, but "Send my
-  microphone to streams, recordings and the send" is off, Ctrl+M says "not
-  on air", so you know nobody else can hear you.
+- If your microphone opens while you stream, record or send and it does not
+  reach any of them, Ctrl+M says so first, and why: "Mic on, but nobody else
+  hears it: Send my microphone is off", or "you are muted in Source control",
+  or "a source is soloed", with "Music ducked" after it when ducking is on.
 - After a dropped connection comes back, Drop Deck says "Back on air"
   instead of the whole going live line and the server address again. The
   first time it says "On air" with your station or platform name.
-- Delete on the playlist track that is playing now asks before it stops the
-  music, with No as the answer Enter gives. Deleting any other track is
-  still instant. Whatever you choose is said even at the middle speech
-  level.
+- Delete on the playlist track that is playing no longer stops the music at
+  once. The first Delete says "is on the air. Press Delete again to remove it
+  and stop the music", and a second Delete on the same track within five
+  seconds does that, with no window in front of the pads. Moving to another
+  track, or waiting, starts again. Deleting any other track is still
+  instant. Both are said even at the middle speech level.
 - Choosing your radio station in Streaming location now says Alt+Shift+B
   goes live there, which is what really happens. If you press Ctrl+B with
   no video set up and a radio station that is, Drop Deck tells you to press
@@ -256,10 +281,17 @@ Plain sentences for the changelog and the release post, added by each step.
   On air menu reads "Go off air from video", letter G, or "Go off air from
   radio", letter D: the same letter that put you on air. Open the recordings
   folder keeps F. Stopping the send is I, the same letter as starting it.
-- On a playlist track's menu, Move to the top is now O, Stop the playlist Y
-  and Insert a random drop N. On a bed's menu, Loop this bed is O. In
-  Submit feedback, What will be sent is W; in Check my shot, Close is L; in
-  the colour picker, Cancel is A.
+- On a playlist track's menu, Move to the top is now O and Stop the playlist
+  Y. Insert a random drop keeps the R it had in 3.10.1, and Remove from the
+  running order is now M. On a bed's menu, Loop this bed is O. In Submit
+  feedback, What will be sent is W; in Check my shot, Close is L; in the
+  colour picker, Cancel is A.
+- A letter that is one item's alone acts the moment you press it, without
+  Enter, so these now act at once. While you are live, F opens the
+  recordings folder and G or D takes you off air. While you are sending, D
+  goes live on your radio station and I stops the send. On a track's menu, R
+  inserts a random drop and M removes the track. In Submit feedback, Alt+S
+  submits.
 - The microphone item on the On air menu is now called "Microphone", ticked
   while it is on, so it no longer reads as "Microphone on, not checked".
   Ctrl+M and the M are unchanged.
@@ -275,9 +307,15 @@ Plain sentences for the changelog and the release post, added by each step.
   and into the file with Ctrl+Shift+R.
 - The status bar names Alt+Shift+B beside Off air or ON AIR when your show
   goes to your radio station, and Ctrl+B when it goes to your video platform.
-- The tooltips on "Say what is going out before Ctrl+B goes live" and on the
-  go live window's "Do not ask again" now say they cover Alt+Shift+B as well,
-  which they always did.
+- The box in Preferences that asks before going live is now "Say what is
+  going out before going live", letter A as before, because it covers
+  Alt+Shift+B as well as Ctrl+B, which it always did. The go live window's
+  "Do not ask again" says so in its tooltip.
+- What Drop Deck says as Preferences closes is no longer cut off by the
+  screen reader reading the main window coming back: it waits for that
+  reading and follows it.
+- The Stop everything button is no longer read out again every time
+  Preferences closes or a board opens with the same number of Escapes.
 
 ## Where things are
 
@@ -286,27 +324,42 @@ Plain sentences for the changelog and the release post, added by each step.
 - "Add songs to the end" on the Playlist menu has a key: Alt+Shift+A
   (feedback 51). If a pad in bank 4 already has Alt+Shift+A, the pad keeps
   it, the same as Alt+Shift+P: Add songs is then on the menu only, and the
-  menu and the startup line say which pad has the key.
+  menu says which pad has the key, such as "Alt+Shift+A plays Applause". A
+  pad emptied with its key still on it is named by its bank and number,
+  "Alt+Shift+A is kept by Misc 3, which is empty", and the startup line says
+  to clear that pad's hotkey to free the key. A pad name with an ampersand
+  in it, such as Q&A, now reads as it is written there.
 - "Put the microphone on air" has moved from Audio streaming to the
   Microphone page, and is now called "Send my microphone to streams,
-  recordings and the send", because it decides all three. Its letter is
-  still I, and a saved station still remembers it. On the go live window,
-  Put it right on "Your microphone is not on the air" opens that page.
+  recordings and other programs", because it decides all three. Its letter
+  is still I, and a saved station still remembers it. Audio streaming says
+  "Whether your microphone goes out is on the Microphone page" where the box
+  used to be. On the go live window, Put it right on "Your microphone is not
+  on the air" opens that page with that box ready to tick.
 - "Hear yourself through", on the Microphone page, is now "What I listen
   on", because it also chooses where you hear the beep before a track ends,
   the sounds you audition and, on a card of its own, the whole show. Its
-  letter is still O. The box under it, "Hear yourself through the output",
-  is unchanged.
+  letter is still O. The box under it is now "Hear my own voice there
+  (headphones only)", letter H as before.
 - The ducking box on Sounds and beds now says what it does: "Duck the music
   under sounds, drops and the microphone". Its letter is still D, and Ctrl+D
   is unchanged.
 - The status bar starts with what matters most: whether your microphone is
   on, whether you are on air, recording or sending. The three volumes and
-  ducking come after, so the state is no longer cut off or read last.
+  ducking come after, so the state is no longer cut off or read last. And
+  your screen reader now reads both parts of it whole, where a narrow window
+  cut each one short with three dots.
 - Ctrl+S on a board that has never had a name, one from File, New, the demo
-  pack or an import, now asks where to save it, as Save board as does. It
-  used to save "New board.json" in the settings folder and say so, dot json
-  and all. A board you have named or opened saves where it is, as before.
+  pack, an import or a first start, now asks where to save it, as Save board
+  as does, and still does after Drop Deck is restarted. It used to save "New
+  board.json" in the settings folder and say so, dot json and all. Save board
+  as starts in the folder you last saved a board in, or in Documents, with a
+  name ready in the box, and then says "Saved as" the name, "in" the folder,
+  with no dot json. A board you have named or opened saves where it is, as
+  before.
+- With a setting off, the letters of the boxes that depend on it, such as
+  Even out the music while On air sound is off, no longer jump to whatever
+  box comes next.
 - New: "Send song titles as", on the Audio streaming page under "Send the
   track title" (feedback 39). Title by Artist, as before, Artist - Title, or
   Artist - Title - Album, each read out with an example. Anything a song's

@@ -1022,10 +1022,12 @@ class MicInput:
 
     def _mix_down(self, pair):
         """Both sides averaged, or the louder one alone: "mix" on a two
-        channel input. See `pick_louder`. Never raises, being in the callback.
+        channel input. See `pick_louder`. "average" is "mix" with no side
+        ever picked, and the weights never move. Never raises, being in the
+        callback.
         """
         try:
-            if not self.pick_louder:
+            if not self.pick_louder or self.channel == "average":
                 return pair.mean(axis=1)
             side = self._judge_sides(pair)
             if side is None:
