@@ -1037,8 +1037,10 @@ def item_3():
 
     # Put it right on the go live warning opens the Microphone page.
     report = frame.preflight()
+    # Worded as the other two reasons are since the final audit.
     notes = [note for note in report.notes
-             if note.text.startswith("Your microphone is not on the air")]
+             if note.text == "Microphone: NOT going out, Send my "
+                            "microphone is off"]
     check("the warning that the microphone is not on the air points at the "
           "Microphone page", notes
           and notes[0].fix == getattr(C, "FIX_MIC", "not there"),

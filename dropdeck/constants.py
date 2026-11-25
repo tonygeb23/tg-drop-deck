@@ -234,8 +234,9 @@ MAX_STOP_PRESSES = 4
 #: in milliseconds, the way Escape's presses are counted. The first press
 #: only says what a second one would do: it was a box with Yes and No, which
 #: held the pads and that Escape could not close. Long enough to hear that
-#: sentence through at an ordinary speech rate before pressing again.
-DELETE_ON_AIR_WINDOW_MS = 5000
+#: sentence through at an ordinary speech rate before pressing again: ten
+#: seconds rather than five since the final audit, 24 November 2026.
+DELETE_ON_AIR_WINDOW_MS = 10000
 DEFAULT_CUE_SOUND = "pip"
 
 #: Where the pip plays. Above the eighty pads and above the two playlist
@@ -493,17 +494,21 @@ RING_SEARCH_SECONDS = 0.005
 RING_WINDOW_SECONDS = 1.0
 
 #: Which side of a two channel input the microphone takes, as a board saves it
-#: and as the Microphone page offers it. "mix" is the side with a voice on it,
-#: the key "Both" has always been saved as, so a board that has it keeps it.
-#: "average" is both, always, at half each: two hosts on one interface, one
-#: on each input, pumped 6 dB about a second into every turn under "mix".
-MIC_CHANNELS = (("mix", "Both, the side with a voice on it"),
-                ("average", "Both, always mixed"),
+#: and as the Microphone page offers it. "mix" is both, always, at half each:
+#: the plain average, which is what 3.10.1's "Both, mixed together" did and
+#: what the Mac's "mix" does, so a board saved with it sounds exactly as it
+#: did. "voice" is the side with a voice on it (MicInput.pick_louder), a key
+#: of its own so it cannot change what an existing board sends, and the
+#: default for a board made by this version. Two hosts on one interface,
+#: one on each input, want "mix".
+MIC_CHANNELS = (("voice", "Both, the side with a voice on it"),
+                ("mix", "Both, always mixed"),
                 ("left", "Left only"),
                 ("right", "Right only"))
 MIC_CHANNEL_KEYS = tuple(key for key, _label in MIC_CHANNELS)
+DEFAULT_MIC_CHANNEL = "voice"
 
-#: "mix" on a two channel input takes the louder side alone when the other is
+#: "voice" on a two channel input takes the louder side alone when the other is
 #: this much quieter, and goes back to both when they are within JOIN again.
 #: Levels are smoothed over SMOOTH, a change waits for HOLD of sound pointing
 #: the same way, and nothing is judged while the louder side is under FLOOR
@@ -613,12 +618,12 @@ BANK 3: Music Beds (loop by default)
   A bed and the playlist never play together either: both are music. Starting
   a playlist track fades the bed out, and a bed will not start over a running
   playlist. Stop the playlist first.
-  Right-click               Turn looping off or on for one bed
+  Applications key          Its menu turns looping off or on for one bed
   A bed starts exactly where the file does and fades out when you stop it.
   Preferences, Ctrl+P, sets both fades in seconds.
 
 BANK 4: Miscellaneous
-  Right-click a button      Assign a sound file and your own hotkey
+  Applications key          Its menu assigns a sound file and your own hotkey
   A pad's hotkey cannot be one of Drop Deck's own keys, such as Ctrl+S or
   F5. The hotkey window says what that key already does.
 
@@ -629,6 +634,31 @@ PER BUTTON
   Applications key          Context menu: play, rename, properties, clear
   Delete                    Clear the focused slot
   Shift+Delete              Take the slot off the board altogether
+
+GLOBAL
+  Ctrl+F                    Search every bank by name (Ctrl+E also works)
+                            It says how many match once you stop typing.
+                            Alt+P in there plays a match without closing it,
+                            so you can try each one. Enter jumps and closes.
+  Ctrl+D                    Ducking on or off
+  Ctrl+L                    What is playing right now
+  Ctrl+G                    Global hotkeys on or off
+  Ctrl+Space                Stop the sound you started last, and leave
+                            everything else playing. Press it again for the
+                            one before that
+  Escape twice              Stop everything. More than one press because a
+                            single key that silences a live show is a single
+                            key away from silencing it by accident; how many,
+                            and whether it fades or cuts, are in Preferences,
+                            Sounds and beds. The Stop everything button does
+                            it in one press
+  Ctrl+R                    Start and stop recording
+  Alt+Shift+R               Pause and resume the recording
+  Alt+Shift+P               On air sound off and on, to compare
+  F1                        This help
+  Help, User manual         The full manual on the web: every feature,
+                            every setting, a contents and an FAQ
+  Ctrl+Tab                  Next bank
 
 BANK NAMES
   Ctrl+F2                   Rename the bank you are looking at
@@ -651,15 +681,16 @@ FINDING A SOUND BY EAR
 
 HOW MANY SLOTS A BANK HAS
   Twenty, until you say otherwise. Shift+Delete takes the slot you are on off
-  the board, and it is in the Sounds menu, the right-click menu and
-  Properties as well. Delete clears the sound; Shift+Delete removes the slot.
+  the board, and it is in the Sounds menu, the menu the Applications key
+  opens and Properties as well. Delete clears the sound; Shift+Delete removes
+  the slot.
   Removing one NEVER moves the others: take slot 5 away and 6 is still on the
   6 key. The slot keeps its sound, its name and its hotkeys while it is off.
   Sounds menu, Put a removed slot back, or Put this bank's slots back.
   Want ten instead of twenty? Remove 11 to 20.
 
 A FOLDER INSTEAD OF A FILE
-  Sounds menu, or right-click a button, then Assign a folder.
+  Sounds menu, or the Applications key on a button, then Assign a folder.
   The slot plays a different sound from that folder every time you press it,
   never the same one twice running. Drop another file into the folder and it
   joins in; the app rescans when the folder changes.
@@ -670,7 +701,7 @@ VOLUME: three independent masters, plus the microphone's own gain
   F5 / F6                   Bed volume down / up (bank 3)
   F7 / F8                   Playlist volume down / up
 
-THE TWO VIEWS - soundboard and playlist
+THE TWO VIEWS: the soundboard and the playlist
   Ctrl+Shift+S              Go to the soundboard
                             (Save the board to a new file is Ctrl+F12)
   Ctrl+Shift+P              Go to the playlist
@@ -679,7 +710,12 @@ THE TWO VIEWS - soundboard and playlist
                             two keys above, this one still works, and so
                             does the Playlist menu.
 
-THE PLAYLIST - a running order that cues itself
+THE PLAYLIST: a running order that cues itself
+  Each song hands over to the next before it ends. The overlap is the
+  crossfade, three seconds unless you change it, and that handover point is
+  the song's cue. A drop does not crossfade unless you give it one: it plays
+  out and then the next song starts.
+
   Ctrl+V                    Paste songs copied in File Explorer
                             Works from anywhere and brings you to the list.
                             You can drag files onto the list as well.
@@ -709,7 +745,7 @@ THE PLAYLIST - a running order that cues itself
   starts, and its own crossfade if you have given it one. The title and the
   artist come out of the file's tags, and fall back to the file name.
   Applications key          Everything above, in a menu, plus Segue to this
-                            now - which crosses to it at the crossfade
+                            now, which crosses to it at the crossfade
                             length instead of waiting for the cue
   Ctrl+Shift+D              Choose a file and put it in as a drop
   Alt+D                     Put a RANDOM drop in, from your drops library,
@@ -721,8 +757,8 @@ THE PLAYLIST - a running order that cues itself
                             every cue moves with it.
                             The Playlist menu takes you straight to it.
                             A single track can be given a crossfade of its
-                            own from its right-click menu, or handed back to
-                            the playlist's.
+                            own from the menu the Applications key opens on
+                            it, or handed back to the playlist's.
   Playlist menu             Add songs, drops every so many songs, the cue
                             sheet, crossfade length, tick or untick
                             everything, next, previous, stop, save, open,
@@ -743,32 +779,19 @@ A BEEP BEFORE A TRACK ENDS
 
 ON AIR SOUND
   What goes out, to the stream, both recordings and the send, can be evened
-  out and kept under a ceiling: Preferences, On air sound. It never changes
-  what you hear yourself. Alt+Shift+P bypasses it for a moment and puts it
-  back, to compare, and that is never saved. It changes only what goes out,
-  so to hear the difference yourself, send the show with Alt+Shift+O and
-  listen to what is being sent with Ctrl+Shift+H. A bank 4 pad that already
+  out and held to a ceiling: Preferences, On air sound. Ordinary music stays
+  under it with Even out the music on Gentle or Firm; with it Off, or with
+  hard material such as noise, the loudest moments can still come out up to
+  about a decibel over. It never changes what you hear yourself.
+  Alt+Shift+P bypasses it for a moment and puts it back, to compare, and
+  that is never saved. It changes only what goes out. To hear the
+  difference, record a minute with Ctrl+R, or send the show with
+  Alt+Shift+O and press Ctrl+Shift+H. While it is bypassed, the status bar,
+  Ctrl+Shift+B and the go live summary say so. A bank 4 pad that already
   had Alt+Shift+P keeps it, and the compare is then on the On air menu only.
   The same page can match the loudness of your songs and sounds, which does
   change what you hear. A level you set on a pad yourself always wins, 0 dB
   included, which is how you keep one sound exactly as recorded.
-
-RECORDING THE SHOW
-  Ctrl+R starts and stops it, and it says Recording started and Recording
-  stopped at every speech level, because a file being written makes no sound.
-  Alt+Shift+R pauses it and carries on into the same file; nothing that plays
-  while it is paused is in the file. It pauses the picture recording as well,
-  if that is running. It records the same mix that goes on air: every
-  sound card, the running order, and your microphone if that is set to go out.
-  The cue before a track ends and previews are never in it, because those are
-  for you rather than for the show.
-  It does NOT need you to be on air. Recording and streaming can run together
-  and neither takes audio from the other.
-  Files go to Documents, in a folder called TG Drop Deck, named Drop Deck
-  Stream 001 and counting up, so nothing you have recorded is written over.
-  Preferences, Recording tab, sets WAV, MP3, AAC or Ogg Opus, the bitrate and
-  the folder. WAV if it is going into an editor; MP3 for everything else.
-  Closing the app finishes the file first, so a recording always opens.
 
 WHAT THE STREAM IS SHOWING
   Alt+Shift+V, or the On air menu, Video source. Up and down read the
@@ -821,23 +844,6 @@ OTHER THINGS ON THE AIR
   Sources are never ducked and never go through the voice processing. Both of
   those belong to your microphone.
 
-FEEDING TEAMTALK, ZOOM, OBS, OR ANY OTHER PROGRAM
-  Alt+Shift+O, Send this show to another program. Point it at a virtual audio
-  cable and set the other program's microphone to the other end of that same
-  cable. It sends the whole show: pads, beds, running order, your microphone
-  if Send my microphone is on, and every source you are catching, and it does
-  not need you to be on air.
-  It can leave one source out, so sending to a program you are also capturing
-  does not hand that program its own audio back. And it will not send into a
-  virtual cable while your microphone or a source listens to the other end of
-  that same cable, because the show would go round and round; it says which
-  input to change. A real sound card's own microphone is never refused.
-  Ctrl+Shift+H hears exactly what is going. Ctrl+Shift+O says whether it is
-  arriving cleanly. Ctrl+Shift+W reads out where everything is going.
-  Do NOT point Preferences, Output at a cable for this. That output carries
-  your sounds and NOT your microphone, so the other program would get a
-  soundboard with no voice on it.
-
 WHERE YOUR AUDIO GOES
   Three separate questions, and Ctrl+Shift+W answers all three at once.
   Preferences, Output is where your SOUNDS play, and a bank can have a card
@@ -863,11 +869,6 @@ YOUR DROPS LIBRARY
   order without you having to go and find a file. Insert a drop every so many
   songs can use it too, and then every gap gets a different one.
   The library travels with the board, because a board is a show.
-
-  Each song hands over to the next before it ends. The overlap is the
-  crossfade, three seconds unless you change it, and that handover point is
-  the song's cue. A drop does not crossfade unless you give it one: it plays
-  out and then the next song starts.
 
 THE MICROPHONE
   Ctrl+M                    Microphone on or off
@@ -932,7 +933,7 @@ PROCESSING YOUR VOICE
   out.
 
   It is one list. Up and down choose a setting, left and right change it, and
-  each change is spoken. Page up and page down move in bigger steps.
+  each change is spoken. Hold Shift with Left or Right for a bigger step.
 
   Process the microphone turns the whole chain off and on, which is the
   fastest way to hear what it is doing.
@@ -1000,22 +1001,46 @@ GIVING ANOTHER PROGRAM ON THIS MACHINE YOUR SHOW
   Ctrl+Shift+W              Where is everything going: your sounds, what you
                             hear, what is being sent, and your picture and
                             what is using it, all in one go
+  It sends the whole show: pads, beds, running order, your microphone if Send
+  my microphone is on, and every source you are catching, and it does not
+  need you to be on air.
+  It can leave one source out, so sending to a program you are also capturing
+  does not hand that program its own audio back. And it will not send into a
+  virtual cable while your microphone or a source listens to the other end of
+  that same cable, because the show would go round and round; it says which
+  input to change. A real sound card's own microphone is never refused.
+  Do NOT point Preferences, Output at a cable for this. That output carries
+  your sounds and NOT your microphone, so the other program would get a
+  soundboard with no voice on it.
 
-RECORDING THE PICTURE AS WELL AS THE SOUND
-  Ctrl+R                    Record the sound
+RECORDING THE SHOW
+  Ctrl+R                    Record the sound. It says Recording started and
+                            Recording stopped at every speech level, because
+                            a file being written makes no sound
   Alt+Shift+R               Pause the recording, and carry on into the same
-                            file. Sound and picture pause together
+                            file. Sound and picture pause together, and
+                            nothing that plays while it is paused is in it
   Ctrl+Shift+R              Record the picture AND the sound, to one MP4.
-                            It does not need you to be on air, and it takes
-                            whatever Alt+Shift+V is set to. It says which
-                            picture that is when it starts. If you are
+                            It takes whatever Alt+Shift+V is set to. It says
+                            which picture that is when it starts. If you are
                             already live it takes the identical frames the
                             stream is sending, so one camera serves both
-  Both say what is really in the recording when they start, including
-  anything you can hear but is NOT on the air and therefore not in the file.
+  A recording is the same mix that goes on air: every sound card, the running
+  order, and your microphone if that is set to go out. The cue before a track
+  ends and previews are never in it, because those are for you rather than for
+  the show. Both say what is really in the recording when they start,
+  including anything you can hear but is NOT on the air and therefore not in
+  the file.
+  Neither needs you to be on air. Recording and streaming can run together
+  and neither takes audio from the other.
+  Files go to Documents, in a folder called TG Drop Deck, named Drop Deck
+  Stream 001 and counting up, so nothing you have recorded is written over.
+  Preferences, Recording tab, sets WAV, MP3, AAC or Ogg Opus, the bitrate and
+  the folder. WAV if it is going into an editor; MP3 for everything else.
   Both also write a .cue track list beside the recording, with the same file
   name, listing every running order track that went out and the moment it
   started. Hand the pair to Mixcloud and the track list is already done.
+  Closing the app finishes the file first, so a recording always opens.
 
 WHAT IS COMING UP
   Ctrl+Shift+C              The cue sheet: everything ticked in the running
@@ -1072,31 +1097,6 @@ THE STREAM
   Nothing goes out until you press Ctrl+B or Alt+Shift+B. It is never on when
   the app opens.
 
-GLOBAL
-  Ctrl+F                    Search every bank by name (Ctrl+E also works)
-                            It says how many match once you stop typing.
-                            Alt+P in there plays a match without closing it,
-                            so you can try each one. Enter jumps and closes.
-  Ctrl+D                    Ducking on or off
-  Ctrl+L                    What is playing right now
-  Ctrl+G                    Global hotkeys on or off
-  Ctrl+Space                Stop the sound you started last, and leave
-                            everything else playing. Press it again for the
-                            one before that
-  Escape twice              Stop everything. More than one press because a
-                            single key that silences a live show is a single
-                            key away from silencing it by accident; how many,
-                            and whether it fades or cuts, are in Preferences,
-                            Sounds and beds. The Stop everything button does
-                            it in one press
-  Ctrl+R                    Start and stop recording
-  Alt+Shift+R               Pause and resume the recording
-  Alt+Shift+P               On air sound off and on, to compare
-  F1                        This help
-  Help, User manual         The full manual on the web: every feature,
-                            every setting, a contents and an FAQ
-  Ctrl+Tab                  Next bank
-
 HOW MUCH THE APP SAYS
   Preferences, Ctrl+P, has a Spoken feedback setting with three levels.
   Everything is the default. Only what I cannot hear drops the confirmations
@@ -1104,8 +1104,8 @@ HOW MUCH THE APP SAYS
   commentary to your screen reader and the status bar entirely, and still
   answers a key you press to ask a question, which is Ctrl+L.
 
-GLOBAL HOTKEYS - firing a sound from another program
-  Right-click a sound, or press Alt+Enter on it, or use the Sounds menu.
+GLOBAL HOTKEYS: firing a sound from another program
+  Press the Applications key on a sound, or Alt+Enter, or use the Sounds menu.
   Any slot in any bank can have one.
   A global hotkey works while your DAW, browser or call software has focus,
   which is the whole point of a soundboard on a live show.
@@ -1835,6 +1835,9 @@ FIX_VIDEO = "video"
 #: Whether the microphone goes out is on the Microphone page, not Audio
 #: streaming, since the major release after 3.10.1.
 FIX_MIC = "mic"
+#: Not a settings page: a mute or a solo that keeps the microphone out is
+#: put right in Source control, where it was made.
+FIX_SOURCE_CONTROL = "source control"
 
 SCREEN_ALL = "all"
 SCREEN_MAIN = "main"

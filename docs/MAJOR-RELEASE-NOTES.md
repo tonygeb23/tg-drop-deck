@@ -38,9 +38,9 @@ Plain sentences for the changelog and the release post, added by each step.
   with this station". Loading one inside Preferences says it too.
 - If you switch to another microphone in Preferences while yours is on and the
   new one will not open, Drop Deck now says so and Microphone is unticked.
-- While you are on air, Preferences will not change where Ctrl+B goes or load
-  a saved station. It says "Come off air first" instead, the same as the On
-  air menu.
+- While you are on air, Preferences will not change the Streaming location or
+  load a saved station. It says "Come off air first" instead, the same as the
+  On air menu.
 - Cancel in Preferences now puts back everything a saved station changed,
   including the screen, the camera corner, the words on the picture and the
   colours. A station saved or forgotten before Cancel shows on the On air
@@ -78,15 +78,16 @@ Plain sentences for the changelog and the release post, added by each step.
   pointing somewhere else is stopped before it goes live, with a sentence
   saying why, and the go live summary names the server whenever it is not
   the platform's own.
-- Stream keys saved by 3.10.1 keep working, custom servers included, with
-  nothing to retype. The first time this version starts, each key is tied
-  to the server the board you have open names for it. For YouTube and
-  Facebook that is their own secure address, and that is all. For any other
-  server, the first Ctrl+B shows where the key will go, even if you have
-  turned that question off, and Go live there confirms it for good.
-- A key your board does not name still works with YouTube's and Facebook's
-  own secure addresses. For any other server, Restream included, type it
-  again once on the Video streaming page.
+- The first time this version starts, each stream key saved by 3.10.1 is
+  tied to the server that the board you have open names for its station. If
+  the board names YouTube or Facebook, the key is tied to their own secure
+  address and works with nothing to retype. If it names any other server,
+  custom servers included, the key works too, and the first Ctrl+B shows
+  where it will go, even if you have turned that question off; Go live there
+  confirms it for good.
+- A key for a station that board does not have is not tied. It still works
+  with YouTube's and Facebook's own secure addresses, but for any other
+  server, Restream included, type it again once on the Video streaming page.
 - Forgetting a saved station no longer deletes the stream key of the station
   you are using, so a show on the air keeps its key.
 - Exporting a board with its sounds leaves out your passwords, any stream
@@ -119,7 +120,8 @@ Plain sentences for the changelog and the release post, added by each step.
   reads as AltGr and uses for characters such as @ and the euro sign. A
   combination with two keys besides the modifiers is refused too, and so is
   a symbol your keyboard types only with Shift. A board that already has one
-  keeps it on the pad, but it is not used, and Drop Deck says which and why.
+  keeps it on the pad, but it is not used, and Drop Deck says which and why,
+  grouped, in one sentence for each reason.
 - If Windows will not keep your AI provider key, Drop Deck now says so
   instead of dropping it without a word.
 - Going live to YouTube, Facebook or any rtmps server now checks that the
@@ -157,17 +159,24 @@ Plain sentences for the changelog and the release post, added by each step.
 - With "What I listen on" set to another card, auditioning a sound plays there,
   not out of your main output, so nobody listening to your main output hears
   you choosing sounds.
-- A microphone plugged into one input of a two input interface now comes
-  through at its full level, without the other input's hiss. Drop Deck takes
-  the side with the voice on it after about a second of the other being nearly
-  silent, and the moment the quiet side carries sound again, a second person
-  starting to talk, both come back within 50 milliseconds. Sources still mix
-  both sides. In "Which channel the voice is on" this is "Both, the side with
-  a voice on it", and a board that had "Both, mixed together" gets it.
-- New: "Both, always mixed", in the same place, for two people on one
-  interface, one on each input. Neither side is ever left out, so a voice no
-  longer jumps 6 dB about a second into its turn. "Left only" and "Right
-  only" are as they were.
+- "Which channel the voice is on" has four choices, in this order: "Both, the
+  side with a voice on it", "Both, always mixed", "Left only" and "Right
+  only".
+- New: "Both, the side with a voice on it", the default for the demo pack
+  and a first start; File, New keeps the choice you had, with the rest of
+  your microphone. A microphone plugged into one input of a two
+  input interface comes through at its full level, without the other input's
+  hiss: Drop Deck takes the side with the voice on it after about a second of
+  the other being nearly silent, and the moment the quiet side carries sound
+  again, a second person starting to talk, both come back within 50
+  milliseconds. Sources still mix both sides.
+- "Both, mixed together" is now called "Both, always mixed" and does exactly
+  what it did in 3.10.1, and it is what a board you already have keeps, so an
+  existing board's microphone sounds exactly as it did. It is the one for two
+  people on one interface, one on each input: neither side is ever left out.
+  If yours is one microphone on one input of a two input interface, choose
+  "Both, the side with a voice on it", for its full level without the other
+  input's hiss. "Left only" and "Right only" are as they were.
 - Your microphone processing stays right when your sound card runs at a
   different rate, such as 96 kHz. The low cut used to sit an octave too high
   and make the voice thin.
@@ -197,24 +206,30 @@ Plain sentences for the changelog and the release post, added by each step.
 - New: On air sound, a page of its own in Preferences next to Voice, turned
   on and off with "Process the on air sound". What goes to your stream, your
   recordings and the send is evened out, so a loud song and a quiet one
-  arrive closer together, and nothing is ever louder than the ceiling you
-  set, minus 2 dBFS to start with, measured between the samples as well.
-  Firm starts at minus 3, because music limited hard all the time can still
-  go a little over, and choosing Firm or going back says the ceiling it
-  moved to. It never changes what you hear yourself, and it holds still only
-  while the music really is ducked under your microphone or a drop; with
-  ducking off it keeps evening out. "Even out the music" can be Off, Gentle
+  arrive closer together, and kept under the ceiling you set in "Never louder
+  than", minus 2 dBFS to start with, measured between the samples as well.
+  With "Even out the music" on Gentle or Firm, ordinary music stays under
+  it; with it Off, or with hard material such as noise or a master limited
+  flat out, the loudest moments can still come out up to about a decibel
+  over. Firm
+  starts at minus 3, because music limited hard all the time needs the extra
+  room, and choosing Firm or going back says the ceiling it moved to. It
+  never changes what you hear yourself, and it holds still only while the
+  music really is ducked under your microphone or a drop; with ducking off
+  it keeps evening out. "Even out the music" can be Off, Gentle
   or Firm. A glitched file can no longer silence the stream.
 - Alt+Shift+P bypasses the on air sound for a moment, and puts it back, so
   you can compare. Drop Deck says "On air sound bypassed, in what goes out"
   and "On air sound back on", and fades between the two in a twentieth of a
-  second. It changes only what goes out, never what you hear, so to hear the
-  difference yourself, send the show to another program (Alt+Shift+O) and
-  listen to what is being sent with Ctrl+Shift+H; at the full speech level
-  the first compare of a session says so. It is not saved, so a show never
-  starts with it off by accident. If a pad in bank 4 already has
-  Alt+Shift+P, the pad keeps it: the compare is then on the On air menu
-  only, and the menu and the startup line say so.
+  second. It changes only what goes out, never what you hear, so at the full
+  speech level the first compare of a session says "To hear the difference,
+  record a minute with Ctrl+R, or send the show with Alt+Shift+O and press
+  Ctrl+Shift+H". It is not saved, so a show never starts with it off by
+  accident, and while it is bypassed the go live window warns "On air sound
+  is bypassed. Alt+Shift+P puts it back", and Ctrl+Shift+B and the status
+  bar say so too. If a pad in bank 4 already has Alt+Shift+P, the pad keeps
+  it: the compare is then on the On air menu only, and the menu and the
+  startup line say so.
 - New: "Match the loudness of songs and sounds, for you and on air", on the
   same page. Each song and sound is measured once, in the background, and
   played at a matching level, in what you hear as well as what goes out. A
@@ -226,9 +241,9 @@ Plain sentences for the changelog and the release post, added by each step.
   and so does a first start. A board you already have keeps the sound it had
   until you turn them on, and the first time this version starts, Drop Deck
   says so once, after its startup line: "New in this version: On air sound,
-  on its own page in Preferences, is off on this board until you turn it on.
-  Put the microphone on air is now Send my microphone, on the Microphone
-  page".
+  which evens out the music your listeners get, is not switched on for this
+  board yet. Put the microphone on air is now Send my microphone, on the
+  Microphone page".
 - Drop Deck now says at startup when a sound card your board uses would not
   open, or is not plugged in, instead of quietly playing through the Windows
   default.
@@ -247,15 +262,26 @@ Plain sentences for the changelog and the release post, added by each step.
   reach any of them, Ctrl+M says so first, and why: "Mic on, but nobody else
   hears it: Send my microphone is off", or "you are muted in Source control",
   or "a source is soloed", with "Music ducked" after it when ducking is on.
+- When your microphone is not going out, the go live window says so with the
+  reason, such as "Microphone: NOT going out, you are muted in Source
+  control" (or "a source is soloed"), where it used to say "on the air", and
+  Put it right opens Source control. With Send my microphone off it says
+  "NOT going out" as before, and Put it right opens the Microphone page.
+  While you stream, record or send with your microphone open and not going
+  out, the status bar says "Mic ON, not going out".
 - After a dropped connection comes back, Drop Deck says "Back on air"
   instead of the whole going live line and the server address again. The
   first time it says "On air" with your station or platform name.
 - Delete on the playlist track that is playing no longer stops the music at
-  once. The first Delete says "is on the air. Press Delete again to remove it
-  and stop the music", and a second Delete on the same track within five
-  seconds does that, with no window in front of the pads. Moving to another
-  track, or waiting, starts again. Deleting any other track is still
-  instant. Both are said even at the middle speech level.
+  once. The first Delete says the track's name and "is on air. Delete again
+  removes it and stops the music", and a second Delete on the same track
+  within 10 seconds does that, with no window in front of the pads. If the
+  song changed in between, it still removes that track and says so. Moving
+  to another track, or waiting, starts again. Deleting any other track is
+  still instant. Both are said even at the middle speech level.
+- Menus now say "Delete", not "Del", for the key that clears a slot or takes
+  a track out, and "Shift+Delete" for the one that takes a slot off the
+  board.
 - Choosing your radio station in Streaming location now says Alt+Shift+B
   goes live there, which is what really happens. If you press Ctrl+B with
   no video set up and a radio station that is, Drop Deck tells you to press
@@ -398,8 +424,7 @@ Plain sentences for the changelog and the release post, added by each step.
   and right mode it no longer has, names Streaming location, Load a saved
   setup where it said Station, says Escape is two presses unless you changed
   it, says the music ducks under the microphone only while ducking is on,
-  and says how to hear the on air sound: send the show and press
-  Ctrl+Shift+H.
+  and says how to hear the on air sound.
 - Getting started says Ctrl+Shift+W reads out where everything is going, not
   Ctrl+Shift+R, which records the picture, and that the first Ctrl+S on a new
   board asks where to keep it. The readme teaches Alt+Shift+B for your radio
@@ -408,3 +433,29 @@ Plain sentences for the changelog and the release post, added by each step.
   page now points to the Video streaming page for the picture, Check my shot
   with no key set up points to AI Provider, and Ctrl+Shift+B, when nothing
   has left the machine, points to Preferences, Output.
+
+## The guide, final pass
+
+- The guide's six key tables in Every key have headings, so a screen
+  reader's table and heading keys name each one, and the digit keys are
+  written in full, such as Shift+1 to Shift+0. The cue sheet and Ctrl+Shift+R
+  are in the tables they belong in.
+- The streaming chapter reads like the rest of the guide: keys written as
+  keys, a heading over each part of each platform, a paragraph rather than a
+  list of one, and "YouTube will not take sound" only under YouTube. It is
+  still made from the app's own steps.
+- The cue sheet, holding a source back and recording the picture each come
+  after their chapter's own text, and the size of a picture recording is back
+  with the picture recording.
+- The guide says a portable copy keeps its settings in a userdata folder
+  beside itself, and an installed copy in AppData.
+- Setting a cable's two ends to one sample rate starts from Windows+R and
+  mmsys.cpl, which goes straight to the Playback and Recording tabs.
+- The guide lists the old names beside the new ones, such as Hear yourself
+  through, Put the microphone on air and Both, mixed together, so anybody
+  searching for an old name finds it.
+- Links to other chapters name the chapter, so a list of links reads as more
+  than "chapter 32". The voice chain's stages are a numbered list, in the
+  order your voice goes through them.
+- Getting started names Ctrl+M, Ctrl+B and Alt+Shift+B, and says Ctrl+P opens
+  Preferences. The readme lists Alt+Shift+V once.

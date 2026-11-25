@@ -1,6 +1,6 @@
 """Fact-check the published user guide against the app it describes.
 
-    python tools/check_guide.py [path to drop-deck-guide.md]
+    python tools/check_guide.py [path to drop-deck-guide.md] [--with-plugins]
 
 A user guide is documentation that lives somewhere else, which is the kind that
 goes stale silently. This reads the guide, pulls every keystroke out of it, and
@@ -9,6 +9,13 @@ the specific numbers the guide quotes.
 
 It is derived, not a list: add a key to the app and this finds it in the guide
 or does not, without anybody remembering to update a checklist.
+
+**It reaches nothing outside this process.** The frame it builds reads no
+credential from Windows, opens no sound card and checks for no update. And
+the one check that loads every installed VST3 plugin, to find an instrument
+the guide says is refused, runs only with `--with-plugins`: loading them all
+hung this for 200 seconds once and left Waves helper processes running
+(Mark, 24 November 2026).
 """
 
 import os
@@ -31,8 +38,50 @@ os.makedirs(os.environ["TGDROPDECK_DATA"], exist_ok=True)
 import wx                                                       # noqa: E402
 
 from dropdeck import constants as C                             # noqa: E402
+from dropdeck import secrets                                    # noqa: E402
+from dropdeck import ui as _ui                                  # noqa: E402
 from dropdeck.board import Board, demo_board_path               # noqa: E402
+from dropdeck.mixer import MixerGroup                           # noqa: E402
 from dropdeck.ui import DropDeckFrame                           # noqa: E402
+
+# Stood in here, not only by whoever runs this: the credential store is a
+# dictionary for the run, so a vision or stream key is neither read from
+# Windows nor written to it.
+_KEPT = {}
+
+
+def _read(target):
+    return _KEPT.get(target)
+
+
+def _write(target, text, user, comment):
+    _KEPT[target] = (text, user)
+    return True
+
+
+def _delete(target):
+    _KEPT.pop(target, None)
+    return True
+
+
+secrets._read, secrets._write, secrets._delete = _read, _write, _delete
+secrets.available = lambda: True
+# No update check, which goes out over the network.
+DropDeckFrame._start_update_check = lambda self: None
+
+
+class _QuietGroup(MixerGroup):
+    """The real mixers, opening no sound card."""
+
+    def __init__(self, *args, **kw):
+        kw["open_stream"] = False
+        super().__init__(*args, **kw)
+
+
+_ui.MixerGroup = _QuietGroup
+
+#: Loads every installed VST3 plugin into this process. Asked for by name.
+WITH_PLUGINS = "--with-plugins"
 
 DEFAULT_GUIDE = os.path.join(
     os.path.expanduser("~"), "Dropbox", "Websites", "tgstudios.app",
@@ -265,7 +314,9 @@ def contradictions(raw, menu_bar):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_GUIDE
+    args = [arg for arg in sys.argv[1:] if arg != WITH_PLUGINS]
+    with_plugins = WITH_PLUGINS in sys.argv[1:]
+    path = args[0] if args else DEFAULT_GUIDE
     if not os.path.exists(path):
         raise SystemExit("No guide at %s" % path)
     raw = open(path, encoding="utf-8").read()
@@ -569,19 +620,24 @@ def main():
 
         # "Instruments are refused." Asked of the loader rather than assumed,
         # and skipped rather than guessed at on a machine with no plugins.
-        from dropdeck import vst
-        instrument = None
-        for name, path in vst.installed():
-            try:
-                plugin = vst.load(path)
-            except vst.LoadFailed as exc:
-                if "instrument" in str(exc):
-                    instrument = name
-                    break
-            except Exception:
-                continue
-        if instrument:
-            check("an instrument really is refused", True, instrument)
+        # Only when asked: it loads every installed plugin into this process.
+        if with_plugins:
+            from dropdeck import vst
+            instrument = None
+            for name, plugin_path in vst.installed():
+                try:
+                    vst.load(plugin_path)
+                except vst.LoadFailed as exc:
+                    if "instrument" in str(exc):
+                        instrument = name
+                        break
+                except Exception:
+                    continue
+            if instrument:
+                check("an instrument really is refused", True, instrument)
+        else:
+            print("  (no plugin was loaded to check that an instrument is "
+                  "refused: %s does that)" % WITH_PLUGINS)
 
     # The guide says a screen reader is in the sources list even when it is
     # silent, and that a program with no window can be there at all. Both are

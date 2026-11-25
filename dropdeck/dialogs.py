@@ -1211,7 +1211,7 @@ class SettingsDialog(wx.Dialog):
         self.mic_channel = wx.Choice(
             panel, choices=[label for _key, label in C.MIC_CHANNELS])
         name_field(self.mic_channel, "Which channel the voice is on")
-        current = getattr(self.board, "mic_channel", "mix")
+        current = getattr(self.board, "mic_channel", C.DEFAULT_MIC_CHANNEL)
         self.mic_channel.SetSelection(
             C.MIC_CHANNEL_KEYS.index(current)
             if current in C.MIC_CHANNEL_KEYS else 0)
@@ -1565,9 +1565,9 @@ class SettingsDialog(wx.Dialog):
         self.onair_on = wx.CheckBox(panel, label="Process the &on air sound")
         self.onair_on.SetValue(bool(getattr(board, "onair_on", False)))
         self.onair_on.SetToolTip(
-            "Evens out the music and keeps every peak under the ceiling, on "
-            "the stream, in recordings and in the send. Alt+Shift+P turns it "
-            "off and on for a moment, to compare.")
+            "Evens out the music and holds its peaks to a ceiling, on the "
+            "stream, in recordings and in the send. Alt+Shift+P turns it off "
+            "and on for a moment, to compare.")
         sizer.Add(self.onair_on, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
@@ -1599,10 +1599,17 @@ class SettingsDialog(wx.Dialog):
                                            C.DEFAULT_ONAIR_CEILING_DB)))
         self.onair_ceiling.SetDigits(1)
         name_field(self.onair_ceiling, "Never louder than, in dBFS")
+        # Only what was measured. Jackson, 24 November 2026: with Even out the
+        # music off, peaks up to 0.32 dB over the ceiling, and bright noise
+        # at a ceiling of minus 2 came out at -1.14 dBTP on Gentle and -1.41
+        # on Firm. "The loudest any moment of the show can be" was untrue.
         self.onair_ceiling.SetToolTip(
-            "The loudest any moment of the show can be, between the samples "
-            "as well. Minus two leaves room for MP3 and AAC, which come back "
-            "out louder than they went in; Firm starts at minus three, because "
+            "The ceiling for the show's peaks, between the samples as well. "
+            "Ordinary music stays under it with Even out the music on Gentle "
+            "or Firm; with it Off, or with hard material such as noise, the "
+            "loudest moments can still come out up to about a decibel over. "
+            "Minus two leaves room for MP3 and AAC, which come back out "
+            "louder than they went in; Firm starts at minus three, because "
             "music limited hard all the time can still go a little over.")
         row.Add(self.onair_ceiling, 0)
         sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
@@ -4892,7 +4899,7 @@ class SourcesDialog(wx.Dialog):
         self.monitor.SetToolTip(
             "Off, it goes out and you do not hear it, which is right when the "
             "sound is already coming out of your speakers from the program "
-            "itself. On, it comes back through your monitor output.")
+            "itself. On, it comes back on What I listen on.")
         self.monitor.Bind(wx.EVT_CHECKBOX, self._on_edit)
         outer.Add(self.monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 

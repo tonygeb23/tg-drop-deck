@@ -479,8 +479,8 @@ heading("3. Delete on the track on the air wants a second press, not a box")
 # 6fa5dad, where Delete put the box up.
 
 SONGS = [wav("Song %d" % n, 6.0) for n in (1, 2, 3)]
-FIRST_DELETE = ("Song 1 is on the air. Press Delete again to remove it and "
-                "stop the music")
+# Worded as the final audit asked, 24 November 2026.
+FIRST_DELETE = "Song 1 is on air. Delete again removes it and stops the music"
 
 
 def focus_list():
@@ -551,8 +551,8 @@ def item_3():
     check("after the window a Delete is a first press again: said, and "
           "nothing removed", said == [FIRST_DELETE] and still_on_air(),
           (said, len(frame.board.playlist)))
-    check("the window is a constant of its own, a few seconds long",
-          window is not None and 2000 <= window <= 6000, window)
+    check("the window is a constant of its own, ten seconds since the "
+          "final audit", window == 10000, window)
 
     # The cursor moving starts again, even back to the same row.
     first_on_air()

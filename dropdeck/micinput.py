@@ -582,12 +582,12 @@ class MicInput:
         #:
         #: JamminJerry, on Mastodon, 4 September 2026, with four sound cards
         #: into a mixer: "I can't get my microphone from my mixer on the air
-        #: though."
-        self.channel = "mix"
-        #: In "mix", whether a side that is all but silent is left out.
+        #: though." See C.MIC_CHANNELS for the four keys.
+        self.channel = C.DEFAULT_MIC_CHANNEL
+        #: In "voice", whether a side that is all but silent is left out.
         #:
         #: A microphone on input 1 of a two input interface used to arrive
-        #: 6 dB down, because "mix" averaged it with input 2, and input 2 is
+        #: 6 dB down, because both sides were averaged, and input 2 is
         #: nothing but that preamp's hiss. So when one side is
         #: C.MIC_SIDE_SPLIT_DB quieter than the other for about a second,
         #: the louder side is taken alone, gliding across so nothing
@@ -964,8 +964,8 @@ class MicInput:
         if block.ndim == 2:
             if block.shape[1] >= 2:
                 # Which half of a stereo input the voice is actually on.
-                # "mix" averages rather than sums, so choosing it never makes
-                # a centred voice 6 dB louder than choosing a side.
+                # Both sides are averaged rather than summed, so choosing
+                # both never makes a centred voice 6 dB louder than a side.
                 if self.channel == "left":
                     block = block[:, 0]
                 elif self.channel == "right":
@@ -1021,13 +1021,15 @@ class MicInput:
                 self._air.write(stereo)
 
     def _mix_down(self, pair):
-        """Both sides averaged, or the louder one alone: "mix" on a two
-        channel input. See `pick_louder`. "average" is "mix" with no side
-        ever picked, and the weights never move. Never raises, being in the
-        callback.
+        """Both sides averaged, or the louder one alone, on a two channel
+        input. "voice" picks the side with a voice on it (`pick_louder`).
+        "mix" is the plain average, every block, with no side ever picked
+        and the weights never moving: what 3.10.1's "Both, mixed together"
+        did and the Mac's "mix" does, so a board saved with it sends exactly
+        what it did. Never raises, being in the callback.
         """
         try:
-            if not self.pick_louder or self.channel == "average":
+            if not self.pick_louder or self.channel != "voice":
                 return pair.mean(axis=1)
             side = self._judge_sides(pair)
             if side is None:

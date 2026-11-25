@@ -339,6 +339,56 @@ def _count(number, noun):
     return "%d %s%s" % (number, noun, "" if number == 1 else "s")
 
 
+def _and_list(words):
+    """'1', '1 and 2', '1, 2 and 3'."""
+    words = list(words)
+    if len(words) < 3:
+        return " and ".join(words)
+    return "%s and %s" % (", ".join(words[:-1]), words[-1])
+
+
+def _keys_words(keys):
+    """'Ctrl+Alt+1, 2 and 3': the modifiers said once when every key shares
+    them, otherwise each key whole."""
+    heads = {key.rsplit("+", 1)[0].lower() if "+" in key else None
+             for key in keys}
+    if len(keys) > 1 and len(heads) == 1 and None not in heads:
+        return _and_list([keys[0]] + [key.rsplit("+", 1)[1]
+                                      for key in keys[1:]])
+    return _and_list(keys)
+
+
+def _pads_words(slots):
+    """'SFX 1 to 3', 'SFX 1 and 5, and Misc 2': pads by bank, in order, with
+    a run of three or more said as from one to the other."""
+    banks = []
+    for slot in slots:
+        if banks and banks[-1][0] == slot.bank_short:
+            banks[-1][1].append(slot.number)
+        else:
+            banks.append((slot.bank_short, [slot.number]))
+    parts = []
+    for name, numbers in banks:
+        runs = []
+        for number in numbers:
+            if runs and number == runs[-1][1] + 1:
+                runs[-1][1] = number
+            else:
+                runs.append([number, number])
+        said = []
+        for first, last in runs:
+            if last - first >= 2:
+                said.append("%d to %d" % (first, last))
+            else:
+                said.extend(str(n) for n in range(first, last + 1))
+        parts.append("%s %s" % (name, _and_list(said)))
+    if len(parts) > 1 and any(" and " in part for part in parts):
+        # A comma before the last bank's "and", so "SFX 1 and 5, and Misc
+        # 2" is not heard as three pads in one bank.
+        return "%s, and %s" % (", ".join(parts[:-1]), parts[-1])
+    return _and_list(parts)
+
+
 def _duration(seconds):
     """'2 seconds', '1 minute 5 seconds', '1 hour 3 minutes'. No zeros."""
     seconds = int(seconds)
@@ -649,8 +699,15 @@ def _escaped(label):
     Escaping happens here, at the wx boundary, and nowhere else. slot.py keeps
     returning the real text, so search labels, announcements and the tests are
     all unaffected.
+
+    **And every control character becomes a space.** A pad's name reaches
+    menu labels ("Alt+Shift+A plays Applause"), and a tab in a menu label is
+    where its shortcut starts: a name with a tab and then a key in it bound
+    that key, a bare 1 among them (Mark, 24 November 2026). Board files are
+    plain JSON that people send each other.
     """
-    return label.replace("&", "&&")
+    return "".join(" " if ord(char) < 32 or ord(char) == 127 else char
+                   for char in label).replace("&", "&&")
 
 
 class SoundButton(wx.Button):
@@ -1260,7 +1317,13 @@ class DropDeckFrame(wx.Frame):
         if board is None or board is self.board:
             return True
         try:
-            if board.path and not board.changed_on_disk():
+            # Never one nobody changed that was never written: File, Load
+            # demo pack and then File, New before its pass finished wrote
+            # "Demo board.json" for a board nobody had touched. Its
+            # measurements are simply taken again next time.
+            fresh = (getattr(board, "_disk", None) is board_module.NOTHING_THERE
+                     and not board.dirty)
+            if board.path and not fresh and not board.changed_on_disk():
                 board.save()
         except Exception:
             errorlog.record_current()
@@ -1278,11 +1341,32 @@ class DropDeckFrame(wx.Frame):
             return
         try:
             self.playlist_panel.refresh(keep=self.playlist_panel.selection())
-            self._touch()
+            self._keep_measurements()
         except Exception:
             pass
         # Anything pasted while that pass was running.
         self.scan_playlist_metadata()
+
+    def _keep_measurements(self):
+        """What the background pass measured: saved quietly, or not at all.
+
+        A board with changes of its own is saved shortly, measurements and
+        all, as any change is. One with none is written now, and a write
+        that fails says nothing and leaves the board as it was, unchanged:
+        nobody changed anything, and the pass measures again next time. A
+        read only 3.10.1 board with a running order said it could not be
+        saved at every start, because its albums were read and `_touch`
+        then tried to write them (Mark, 24 November 2026).
+
+        **And a new board nobody has touched is not written at all.** File,
+        Load demo pack, looking and closing wrote "Demo board.json" and made
+        it the board that opened next time, where 3.10.1 wrote nothing.
+        """
+        board = self.board
+        if board.dirty:
+            self._touch()
+        elif board is not getattr(self, "_unstarted", None):
+            self._save(quiet=True, measured=True)
 
     def _size_window(self):
         """Size in DIP, then clamp to the screen.
@@ -1467,9 +1551,9 @@ class DropDeckFrame(wx.Frame):
             return
         if getattr(self, "_loaded_demo", False) or self.board.onair_on:
             return
-        self.announce("New in this version: On air sound, on its own page in "
-                      "Preferences, is off on this board until you turn it "
-                      "on. Put the microphone on air is now Send my "
+        self.announce("New in this version: On air sound, which evens out the "
+                      "music your listeners get, is not switched on for this "
+                      "board yet. Put the microphone on air is now Send my "
                       "microphone, on the Microphone page", interrupt=False)
 
     def _startup_line(self):
@@ -1801,13 +1885,13 @@ class DropDeckFrame(wx.Frame):
         sounds.Append(ID_LOOP, "Toggle loo&ping", "Bank three only")
         sounds.Append(ID_PROPERTIES, "P&roperties...\tAlt+Enter",
                       "Name, level and both hotkeys for this sound, in one place")
-        sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDel")
+        sounds.Append(ID_CLEAR_FOCUSED, "&Clear this slot\tDelete")
         sounds.AppendSeparator()
         # Twenty slots a bank is what it ships with, not what everybody wants.
         # Removing one keeps its sound and its keys and simply takes it off
         # the board, and it never renumbers anything else.
         sounds.Append(ID_REMOVE_SLOT,
-                      "Re&move this slot from the board	Shift+Del",
+                      "Re&move this slot from the board	Shift+Delete",
                       "Take this pad off the board. Nothing else moves, and "
                       "you can put it back")
         sounds.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...",
@@ -2043,7 +2127,7 @@ class DropDeckFrame(wx.Frame):
             ID_SEND_MONITOR, "Hear what is &being sent" + chr(9)
             + "Ctrl+Shift+H",
             "Listen to exactly what the other program is being handed. It "
-            "goes to your monitor output and never back into the send")
+            "goes to What I listen on and never back into the send")
         air.Append(ID_ROUTING,
                    "Where is ever&ything going" + chr(9) + "Ctrl+Shift+W",
                    "Every output at once: your sounds, what you hear, and "
@@ -2389,19 +2473,20 @@ class DropDeckFrame(wx.Frame):
         for modifiers, key_code, index in fixed_accelerators():
             entries.append(wx.AcceleratorEntry(modifiers or wx.ACCEL_NORMAL,
                                                key_code, ID_SLOT_BASE + index))
+        # A hidden pad holds none of those keys (see _pad_holding): its
+        # command has the key back, so the pad is not in the table for it.
+        kept = {(wx.ACCEL_ALT | wx.ACCEL_SHIFT, code)
+                for code, _what, _menu in _KEYS_PADS_KEEP.values()}
         for slot in self.board.bank_slots(C.BANK_MISC):
             if slot.key_code:
+                if slot.hidden and ((slot.modifiers or 0),
+                                    slot.key_code) in kept:
+                    continue
                 entries.append(wx.AcceleratorEntry(slot.modifiers or wx.ACCEL_NORMAL,
                                                    slot.key_code,
                                                    ID_SLOT_BASE + slot.index))
         self._accelerators = entries
-        # Each of those labels carries its key, or says whose it is now.
-        for item, label in ((getattr(self, "onair_item", None),
-                             self._onair_label),
-                            (getattr(self, "pl_add_item", None),
-                             self._add_songs_label)):
-            if item is not None:
-                item.SetItemLabel(label())
+        self._refresh_keyed_labels()
         # The same map with every bare printable key taken out, for while
         # somebody is typing into a box. See _apply_accelerators.
         self._typing_accelerators = [
@@ -2514,28 +2599,36 @@ class DropDeckFrame(wx.Frame):
             if s.global_hotkey and not globalhotkeys.refusal(s.global_hotkey)})
 
     def _unsafe_hotkey_notes(self):
-        """The sentence for this board's global hotkeys that are not used.
+        """The sentences for this board's global hotkeys that are not used,
+        one for each reason, with its keys and pads run together.
 
         Said in the startup line, the Loaded line and when Ctrl+G turns them
         on, which are the moments they would otherwise have been registered.
+        A sentence for each key repeated the same reason for every one of
+        them, at every start: three pads on Ctrl+Alt and a digit made 81
+        words.
         """
-        held = []
+        reasons = {}
         for slot in self.board.slots:
             text = slot.global_hotkey
             why = globalhotkeys.why_not(text) if text else ""
             if why:
-                held.append("%s on %s %d, which %s"
-                            % (text, slot.bank_short, slot.number, why))
-        if not held:
-            return []
-        many = len(held) > 1
-        return ["%s not used: %s. %s on %s until you change %s"
-                % ("These global hotkeys are" if many
-                   else "This global hotkey is",
-                   "; ".join(held),
-                   "They stay" if many else "It stays",
-                   "their pads" if many else "its pad",
-                   "them" if many else "it")]
+                reasons.setdefault(why, []).append(slot)
+        notes = []
+        for why, slots in reasons.items():
+            many = len(slots) > 1
+            keys = _keys_words([slot.global_hotkey for slot in slots])
+            pads = _pads_words(slots)
+            reason = ("Windows reads Ctrl+Alt as AltGr"
+                      if why == globalhotkeys.ALTGR
+                      else "%s %s" % ("each" if many else "it", why))
+            if many:
+                notes.append("%s, on %s, are not used: %s. Alt+Enter on a pad "
+                             "changes it" % (keys, pads, reason))
+            else:
+                notes.append("%s on %s is not used: %s. Alt+Enter on that pad "
+                             "changes it" % (keys, pads, reason))
+        return notes
 
     def _on_hotkey_problem(self, message):
         """A hotkey Windows would not give us. Say so rather than swallow it.
@@ -2974,7 +3067,13 @@ class DropDeckFrame(wx.Frame):
         The key after the air state is the one for where the show goes,
         Alt+Shift+B for the radio station, and not always Ctrl+B.
         """
-        parts = [f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)",
+        mic = f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)"
+        if (self._mic_open() and self.going_anywhere()
+                and self._mic_off_air_reason()):
+            # The answer Ctrl+M gives, so the bar cannot say the microphone
+            # is on while a mute, a solo or Send my microphone keeps it out.
+            mic = "Mic ON, not going out (Ctrl+M)"
+        parts = [mic,
                  "%s (%s)" % (self._air_label(),
                               self._destination_key(self.board.live_to))]
         if self.recording():
@@ -2985,6 +3084,9 @@ class DropDeckFrame(wx.Frame):
         sending = self._send_label()
         if sending:
             parts.append(sending)
+        if self._bypass_words():
+            parts.append("ON AIR SOUND BYPASSED (%s)" % self._compare_key(
+                short=True))
         parts += [
             f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)",
             f"Beds {percent(self.mixer.bed_gain)} (F5, F6)",
@@ -3371,6 +3473,9 @@ class DropDeckFrame(wx.Frame):
         if playing is None:
             playing = self.mixer.is_playing(slot.index)
         button.refresh(playing)
+        if slot.bank == C.BANK_MISC and slot.key_code:
+            # A bank 4 pad may be the one a menu item names for its key.
+            self._refresh_keyed_labels()
 
     # ------------------------------------------------ how many slots there are
     #
@@ -3410,6 +3515,7 @@ class DropDeckFrame(wx.Frame):
         following = self._neighbour_of(slot)
         slot.hidden = True
         self.mixer.stop_slot(slot.index, fade_out=C.FADE_OUT_SFX)
+        self._keys_follow_hidden(slot.bank)
         page = self.pages[slot.bank]
         page.refresh_visibility()
         if following is not None:
@@ -3422,6 +3528,12 @@ class DropDeckFrame(wx.Frame):
                self.board.bank_name(slot.bank)))
         self._touch()
         return True
+
+    def _keys_follow_hidden(self, bank):
+        """A bank 4 pad taken off or put back may hold a key of ours, which
+        goes back to its command while the pad is away (_pad_holding)."""
+        if bank == C.BANK_MISC:
+            self._build_accelerators()
 
     def _neighbour_of(self, slot):
         """The button to land on once ``slot`` goes. The next one, or the one
@@ -3455,6 +3567,7 @@ class DropDeckFrame(wx.Frame):
 
     def _restore(self, slot):
         slot.hidden = False
+        self._keys_follow_hidden(slot.bank)
         page = self.pages[slot.bank]
         page.refresh_visibility()
         self._sync_button(slot)
@@ -3473,6 +3586,7 @@ class DropDeckFrame(wx.Frame):
             return 0
         for slot in gone:
             slot.hidden = False
+        self._keys_follow_hidden(bank)
         self.pages[bank].refresh_visibility()
         for slot in gone:
             self._sync_button(slot)
@@ -4476,6 +4590,28 @@ class DropDeckFrame(wx.Frame):
         return self._keyed_label("&Quick compare, on air sound is %s" % state,
                                  ID_ONAIR_COMPARE)
 
+    def _compare_key(self, short=False):
+        """What reaches the compare: Alt+Shift+P, or its menu while a pad on
+        this board has the key (see _KEYS_PADS_KEEP). `short` for the status
+        bar's brackets."""
+        if self._pad_holding(ID_ONAIR_COMPARE) is None:
+            return key_label(_KEYS_PADS_KEEP[ID_ONAIR_COMPARE][0],
+                             wx.ACCEL_ALT | wx.ACCEL_SHIFT)
+        return "On air menu" if short else "Quick compare, on the On air menu,"
+
+    def _bypass_words(self):
+        """The sentence for a compare that has the on air sound bypassed,
+        or "" when it has not.
+
+        Said in the go live summary, in Ctrl+Shift+B's answer and on the
+        status bar, because a compare left bypassed sends the show out
+        unprocessed and nothing else anywhere says so.
+        """
+        if not (getattr(self.board, "onair_on", False)
+                and getattr(self, "_onair_bypassed", False)):
+            return ""
+        return "On air sound is bypassed. %s puts it back" % self._compare_key()
+
     def _add_songs_label(self):
         return self._keyed_label("&Add songs to the end...", ID_PL_ADD)
 
@@ -4519,9 +4655,31 @@ class DropDeckFrame(wx.Frame):
         code = _KEYS_PADS_KEEP[command][0]
         wanted = wx.ACCEL_ALT | wx.ACCEL_SHIFT
         for slot in board.bank_slots(C.BANK_MISC):
-            if slot.key_code == code and (slot.modifiers or 0) == wanted:
+            # Not one taken off the board. Its key does nothing, so it holds
+            # nothing, and the command has its key back while it is away.
+            if (slot.key_code == code and (slot.modifiers or 0) == wanted
+                    and not slot.hidden):
                 return slot
         return None
+
+    def _refresh_keyed_labels(self):
+        """Put the key, or whose it is, back on the two menu items a pad can
+        hold a key for. Only a label that has changed is written.
+
+        After the holding pad is renamed, cleared or taken off the board as
+        well as when the table is rebuilt: "Alt+Shift+A plays Applause" went
+        on naming a pad that had been renamed, emptied or hidden (Mark, 24
+        November 2026).
+        """
+        for item, label in ((getattr(self, "onair_item", None),
+                             self._onair_label),
+                            (getattr(self, "pl_add_item", None),
+                             self._add_songs_label)):
+            if item is None:
+                continue
+            words = label()
+            if item.GetItemLabel() != words:
+                item.SetItemLabel(words)
 
     def _pad_key_notes(self):
         """For the startup line, once each: which of our keys is a sound here."""
@@ -4553,6 +4711,7 @@ class DropDeckFrame(wx.Frame):
             return
         self._onair_bypassed = not self._onair_bypassed
         self._apply_onair()
+        self._update_status()
         # It changes only what goes out, never what you hear, so "On air
         # sound off" sounded like silence on the air (Jessica, 24 November
         # 2026).
@@ -4561,10 +4720,13 @@ class DropDeckFrame(wx.Frame):
         if (self._onair_bypassed and self._speech_level() == C.SPEECH_ALL
                 and not getattr(self, "_told_compare_ear", False)):
             # Once a session, queued: where to listen for the difference.
-            # Only counted once it is said, at the level that says hints.
+            # Only counted once it is said, at the level that says hints. A
+            # recording carries the on air sound (_onair_consumers), so a
+            # minute of one is a way to hear it with no send set up at all.
             self._told_compare_ear = True
-            self.announce_help("To hear the difference yourself, send the "
-                               "show and press Ctrl+Shift+H", interrupt=False)
+            self.announce_help("To hear the difference, record a minute with "
+                               "Ctrl+R, or send the show with Alt+Shift+O and "
+                               "press Ctrl+Shift+H", interrupt=False)
 
     def _apply_ducking(self, board):
         """Every ducking setting the board holds, onto the mixers and the mic.
@@ -5127,7 +5289,7 @@ class DropDeckFrame(wx.Frame):
             menu.Append(ID_CLEAR_FOCUSED, "&Clear slot")
         menu.AppendSeparator()
         menu.Append(ID_REMOVE_SLOT,
-                    "Re&move this slot from the board	Shift+Del")
+                    "Re&move this slot from the board	Shift+Delete")
         if self.board.hidden_slots(slot.bank):
             menu.Append(ID_RESTORE_SLOT, "Put a remo&ved slot back...")
 
@@ -5158,19 +5320,22 @@ class DropDeckFrame(wx.Frame):
             return self._save(quiet=True)
         return None
 
-    def _save(self, quiet=False, path=None):
+    def _save(self, quiet=False, path=None, measured=False):
         """Write the board. The path written, or None if nothing was.
 
         Never over a board file somebody changed outside the app while it was
         open: see `_changed_elsewhere`. A path chosen in Save board as is a
-        decision somebody made, and that one is honoured.
+        decision somebody made, and that one is honoured. `measured` is a
+        save only the background pass asked for, which fails in silence:
+        see `_keep_measurements`.
         """
         if path is None and self.board.changed_on_disk():
             return self._changed_elsewhere(quiet=quiet)
         try:
             saved = self.board.save(path)
         except Exception as exc:
-            self._save_failed(exc, quiet)
+            if not measured:
+                self._save_failed(exc, quiet)
             return None
         self._save_failure_said = False
         if path is not None:
@@ -5440,9 +5605,11 @@ class DropDeckFrame(wx.Frame):
         if not saved:
             self.board.never_named = was_unnamed
             return
-        self._fresh_home = None
         self._unstarted = None
-        if (leftover and not same_path(leftover, saved)
+        # The same FILE, not the same spelling: Save as onto the board's own
+        # file by another name for the settings folder, a junction, used to
+        # delete the file it had just written (Mark, 24 November 2026).
+        if (leftover and not board_module.same_file(leftover, saved)
                 and same_path(remembered_board_path(), saved)):
             # The file this board was kept in until it had a name. It
             # holds nothing the named one does not, so it goes, or every
@@ -5468,13 +5635,19 @@ class DropDeckFrame(wx.Frame):
     def _leftover_home(self):
         """The file a not yet named board is in, when it is ours to remove.
 
-        Only a file this session gave this very board, that the board itself
-        wrote, and that nothing has changed since. Anything else at that path
-        is somebody's own and is left alone.
+        Only when that is provable from the file itself: it is in the
+        settings folder, where `_give_new_home` puts a board nobody has
+        named, the board says it has never been named, and nothing has
+        changed the file since this session read or wrote it. Asked of the
+        file rather than of this session's memory, or a restart between
+        File, New and Save board as left the "New board" twin behind for good
+        (Mark, 24 November 2026). Anything else is somebody's own and is
+        left alone.
         """
-        home = getattr(self, "_fresh_home", None)
         board = self.board
-        if not home or not same_path(home, board.path):
+        home = board.path
+        if not (home and getattr(board, "never_named", False)
+                and board_module.in_config_dir(home)):
             return None
         stamp = getattr(board, "_disk", None)
         if not isinstance(stamp, tuple) or not os.path.exists(home):
@@ -5564,7 +5737,6 @@ class DropDeckFrame(wx.Frame):
         board.claim_path(home)
         board.never_named = True
         board.dirty = False
-        self._fresh_home = home
         self._unstarted = board
         # A board pinned earlier in the session is not this one.
         self._pinned_board = None
@@ -5676,7 +5848,6 @@ class DropDeckFrame(wx.Frame):
             return False
         if not self._load_into(path):
             return False
-        self._fresh_home = None
         self._unstarted = None
         self._view_for_board()
         return True
@@ -5978,8 +6149,18 @@ class DropDeckFrame(wx.Frame):
         if refusal:
             notes.append(refusal)
         folder = board.record_folder or ""
-        if (folder and not board_module.usable_record_folder(folder)
+        # Once a session as well as once a computer: when this computer.json
+        # cannot be written, nothing is remembered, and the note came at
+        # every start and every reload. It still comes once at each start,
+        # because nothing here can claim it was written down.
+        said = getattr(self, "_record_folders_said", None)
+        if said is None:
+            said = self._record_folders_said = set()
+        key = os.path.normcase(os.path.normpath(folder.strip())) if folder else ""
+        if (folder and key not in said
+                and not board_module.usable_record_folder(folder)
                 and not board_module.record_folder_said(folder)):
+            said.add(key)
             board_module.note_record_folder_said(folder)
             # Never the path itself: it is the board author's text, and read
             # aloud it is a run of backslashes.
@@ -6513,8 +6694,8 @@ class DropDeckFrame(wx.Frame):
         notes = self._adopt(board)
         # Whatever was known about a not yet named board was about the one
         # that just left. A board copied in over "New board" and reloaded
-        # from disk used to be taken for ours, and Save board as removed it.
-        self._fresh_home = None
+        # from disk used to be taken for ours, and Save board as removed it;
+        # `_leftover_home` asks the file now.
         self._unstarted = None
         if keep_path:
             # So the next start opens this board, not board.json. fb40. A
@@ -7675,10 +7856,12 @@ class DropDeckFrame(wx.Frame):
             send.confidence.start()
             self.board.send_monitor = True
             self._sync_send_menu()
-            where = ("your monitor output" if self.mixer.monitor_device is not None
-                     else "your main output, because you have no separate "
-                          "monitor output set")
-            self.announce("You are hearing the send, through %s. It arrives "
+            # By today's names: What I listen on, on the Microphone page,
+            # and its Same as the soundboard.
+            where = ("What I listen on" if self.mixer.monitor_device is not None
+                     else "your main output, because What I listen on is Same "
+                          "as the soundboard")
+            self.announce("You are hearing the send, on %s. It arrives "
                           "about a quarter of a second late, so it is for "
                           "checking rather than for talking over." % where)
         self._update_status()
@@ -8681,7 +8864,8 @@ class DropDeckFrame(wx.Frame):
             settings, self.board,
             audio_running=bool(getattr(self.mixer, "is_running", True)),
             mic_open=self._mic_open(), screen_ready=ready,
-            screen_reason=reason)
+            screen_reason=reason, mic_kept_off=self._mic_off_air_reason(),
+            onair_bypassed=self._bypass_words())
 
     def _cleared_to_go(self, settings=None):
         """Say what is about to go out, and let the presenter change it.
@@ -8735,13 +8919,17 @@ class DropDeckFrame(wx.Frame):
             if answer != wx.ID_APPLY:
                 self.announce("Staying off air")
                 return False
-            # On the box the warning is about, not the microphone picker
-            # that opens the Microphone page.
-            self._on_settings(page={
-                C.FIX_VIDEO: SettingsDialog.PAGE_VIDEO,
-                C.FIX_MIC: SettingsDialog.PAGE_MIC}.get(
-                    fix, SettingsDialog.PAGE_STREAM),
-                focus="stream_mic" if fix == C.FIX_MIC else None)
+            if fix == C.FIX_SOURCE_CONTROL:
+                # A mute or a solo is put right where it was made.
+                self._on_source_control()
+            else:
+                # On the box the warning is about, not the microphone picker
+                # that opens the Microphone page.
+                self._on_settings(page={
+                    C.FIX_VIDEO: SettingsDialog.PAGE_VIDEO,
+                    C.FIX_MIC: SettingsDialog.PAGE_MIC}.get(
+                        fix, SettingsDialog.PAGE_STREAM),
+                    focus="stream_mic" if fix == C.FIX_MIC else None)
             try:
                 settings = self._stream_settings()
                 confirm = bool(settings.get("key_unconfirmed"))
@@ -9098,6 +9286,14 @@ class DropDeckFrame(wx.Frame):
         return "%s.%s" % (said, self._picture_in_the_recording())
 
     def stream_status(self):
+        """Ctrl+Shift+B's answer, and a compare left bypassed after it."""
+        said = self._stream_state_words()
+        bypassed = self._bypass_words()
+        if bypassed:
+            said = "%s. %s" % (said.rstrip(" ."), bypassed)
+        return said
+
+    def _stream_state_words(self):
         streamer = getattr(self, "streamer", None)
         if streamer is None or not streamer.running:
             # ASKED OF THE TARGET THAT IS ACTUALLY TICKED. This read
@@ -9384,10 +9580,14 @@ class DropDeckFrame(wx.Frame):
             self.board.video_bitrate = picture_settings["video_bitrate"]
             self.board.framing_level = picture_settings["framing_level"]
             mic_out = bool(dialog.stream_mic.GetValue())
-            if mic_out and not self.board.stream_mic and self.sending() \
-                    and self._mic_open():
+            if mic_out and self.sending() and self._mic_open():
                 # Refused the way Ctrl+M refuses: the microphone would put
                 # the far end of the send's own cable back into the send.
+                # Whether it was on before is not part of the question. That
+                # was asked of the board, and a station picked in this window
+                # is loaded into the board while it is open, so the guard
+                # never ran and the microphone went into its own cable
+                # (Mark and Jackson, 24 November 2026).
                 loops = self._send_loops(
                     [(_YOUR_MIC, self._mic_capture_name())])
                 if loops:

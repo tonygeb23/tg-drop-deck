@@ -308,4 +308,4 @@ def _explain(reasons, settings):
             "/status-json.xsl; if yours is missing that file, or your "
             "listeners are on a different address from the one you stream "
             "to, put the right one in Where listeners connect on the "
-            "Streaming tab." % where)
+            "Audio streaming page of Preferences." % where)

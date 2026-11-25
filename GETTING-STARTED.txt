@@ -51,7 +51,10 @@ EVERYTHING ELSE
   F2                        Rename the sound you are on
   Alt + Enter               Properties for the sound you are on
   Delete                    Clear the slot you are on
-  Ctrl + P                  Choose the audio output device
+  Ctrl + M                  Microphone on and off
+  Ctrl + B                  Go live on your video platform, and off again
+  Alt + Shift + B           Go live on your radio station, and off again
+  Ctrl + P                  Preferences: sound cards, microphone, streaming
   Ctrl + S / Ctrl + O       Save or open a board
   Ctrl + N                  Start an empty board
 
@@ -120,8 +123,9 @@ other program would get your soundboard with no voice on it, and you would
 stop hearing your own soundboard. Ctrl+Shift+W reads out where everything
 is going at any time.
 
-Ctrl+P chooses where your sounds come out, which is a different question:
-your speakers, your headphones, or a card per bank if you mix on a desk.
+Ctrl+P, Output, chooses where your sounds come out, which is a different
+question: your speakers, your headphones, or a card per bank if you mix on a
+desk.
 
 Every device is remembered by its name, so plugging in a headset later will
 not silently move your sound somewhere you did not expect.

@@ -267,16 +267,22 @@ def mismatch_for(playback_name, found=None):
             return ""
         if (render.rate, render.bits) == (capture.rate, capture.bits):
             return ""
+        # The route `muted_for` gives, because Sound settings has no Playback
+        # or Recording tab to find either end under.
         return (
             "%s and %s are the two sides of one device and Windows has them "
             "set differently: %s going in, %s coming out. Nothing in Windows "
-            "keeps those two in step, so it is worth setting both the same. "
-            "48000 hertz is a good choice, in Sound settings under each "
-            "one's Properties and then Advanced. It works as it is, it just "
+            "keeps those two in step, so it is worth setting both the same, "
+            "and 48000 hertz is a good choice. Press Windows and R, type "
+            "mmsys.cpl and press Enter. Choose %s on the Playback tab and "
+            "press Properties, then set it on the Advanced tab, and do the "
+            "same for %s on the Recording tab. It works as it is, it just "
             "converts twice for no reason."
             % (render.name or "the playback end",
                capture.name or "the recording end",
-               render.said(), capture.said()))
+               render.said(), capture.said(),
+               render.name or "the playback end",
+               capture.name or "the recording end"))
     return ""
 
 

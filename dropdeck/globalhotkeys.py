@@ -170,6 +170,11 @@ WINDOWS_KEYS = {
 #: because the window used to compare against it.
 TYPES = "types a character in every program"
 
+#: What `why_not` says for Ctrl+Alt plus a character. A name, so the startup
+#: line can say it the short way for several pads at once.
+ALTGR = ("is AltGr to Windows, which types characters such as @ and the "
+         "euro sign on many keyboards")
+
 
 def why_not(text):
     """Why this may not be a GLOBAL hotkey, as a clause after "it", or "".
@@ -203,8 +208,7 @@ def why_not(text):
     if mods == MOD_CONTROL | MOD_ALT and len(key) == 1:
         # Windows reads Ctrl+Alt as AltGr, and on most European layouts
         # AltGr is how @, the euro sign and the braces are typed.
-        return ("is AltGr to Windows, which types characters such as @ and "
-                "the euro sign on many keyboards")
+        return ALTGR
     return ""
 
 

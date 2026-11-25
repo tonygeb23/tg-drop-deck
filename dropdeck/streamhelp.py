@@ -30,10 +30,12 @@ BEFORE = [
     "their own address and lock it, because there is only one each.",
 ]
 
+#: Every platform's last steps. Something said about one platform goes in
+#: its own entry below, never here: "YouTube will not take sound" was said
+#: under Facebook, Restream and your own server as well.
 AFTER = [
     "Choose what to show in the Show box. A card with your station name on "
-    "it is the default and is what most radio shows want. YouTube will not "
-    "take sound on its own, so something has to be on the screen.",
+    "it is the default and is what most radio shows want.",
     "Press Check my stream key. It asks the platform whether your key is "
     "right and tells you what the platform said. It sends no sound and no "
     "picture, so nothing is broadcast and nothing is posted.",
@@ -46,10 +48,13 @@ AFTER = [
 PLATFORMS = {
     "youtube": {
         "title": "YouTube",
+        #: Said after the first of the AFTER steps, under YouTube only.
+        "show": ("YouTube will not take sound on its own, so something has "
+                 "to be on the screen."),
         "before_you_start": [
             "Your channel has to be verified, and you must have had no live "
             "streaming restrictions in the last ninety days.",
-            "The FIRST time you ever enable live streaming, YouTube can take "
+            "The first time you ever enable live streaming, YouTube can take "
             "up to twenty four hours to switch it on. Do this the day before, "
             "not an hour before.",
         ],
@@ -61,7 +66,7 @@ PLATFORMS = {
             "Paste it into Stream key in Drop Deck.",
         ],
         "warning": (
-            "PRESSING CONTROL B PUTS YOU LIVE STRAIGHT AWAY. YouTube creates "
+            "Pressing Control B puts you live straight away. YouTube creates "
             "the watch page the moment your stream arrives, tells your "
             "subscribers, and saves the video to your channel afterwards. "
             "There is no preview and nothing to confirm."),
@@ -94,7 +99,7 @@ PLATFORMS = {
             "Copy the stream key and paste it into Stream key in Drop Deck.",
         ],
         "warning": (
-            "Facebook shows you a preview first. NOTHING IS POSTED until you "
+            "Facebook shows you a preview first. Nothing is posted until you "
             "press Go Live Now on Facebook's own page, so going live in Drop "
             "Deck is safe to try."),
         "testing": (
@@ -115,9 +120,9 @@ PLATFORMS = {
             "several places at once.",
         ],
         "steps": [
-            "Create the RTMP stream on the Restream website FIRST. Drop Deck "
+            "Create the RTMP stream on the Restream website first. Drop Deck "
             "cannot do this part for you and the key alone is not enough.",
-            "Copy BOTH the address and the key Restream gives you.",
+            "Copy both the address and the key Restream gives you.",
             "Paste the address over the one in the Address box. Restream's "
             "address can differ by account and by region, so the one filled "
             "in is only the usual one.",
@@ -127,7 +132,7 @@ PLATFORMS = {
             "Whether anybody sees this is up to you: Restream sends it on to "
             "whichever channels you have switched on there."),
         "testing": (
-            "Turn every channel OFF in Restream first. The stream then "
+            "Turn every channel off in Restream first. The stream then "
             "reaches Restream and goes no further, which makes this the "
             "safest way to test the whole thing end to end without anybody "
             "seeing it."),
@@ -248,7 +253,10 @@ def steps_for(platform):
     out = []
     if spec["before_you_start"]:
         out.append(("Before you start", list(spec["before_you_start"])))
-    out.append(("Setting it up", BEFORE + list(spec["steps"]) + AFTER))
+    after = list(AFTER)
+    if spec.get("show"):
+        after[0] = "%s %s" % (after[0], spec["show"])
+    out.append(("Setting it up", BEFORE + list(spec["steps"]) + after))
     out.append(("What happens when you go live", [spec["warning"]]))
     out.append(("Trying it safely", [spec["testing"]]))
     out.append(("Picture quality", [spec["bitrate"]]))

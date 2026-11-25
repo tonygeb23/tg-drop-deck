@@ -637,7 +637,7 @@ class PlaylistPanel(wx.Panel):
                 menu.Append(ID_PL_ROW_TO_LIBRARY,
                             "Add this drop to the &library")
             menu.AppendSeparator()
-            menu.Append(ID_PL_ROW_REMOVE, "Re&move from the running order	Del")
+            menu.Append(ID_PL_ROW_REMOVE, "Re&move from the running order	Delete")
             menu.AppendSeparator()
 
         menu.Append(ID_PL_ROW_ADD, "&Add files to the end...")
@@ -763,6 +763,10 @@ class PlaylistPanel(wx.Panel):
         on_air = self.player.playing and self.player.index == index
         if on_air and not self._second_delete(index):
             return
+        # The second press of two, after the song changed between them: the
+        # track the first press was about is not on the air any more, and it
+        # still goes, said at the level the first press was said at.
+        second = not on_air and self._still_armed(index)
         self._armed = None
         track = self.playlist.remove(index)
         if track is None:
@@ -779,6 +783,14 @@ class PlaylistPanel(wx.Panel):
             # none, and it used to be said at "all" only.
             self.frame.announce("Removed %s. The playlist has stopped"
                                 % track.display_name)
+        elif second:
+            # Essential too: the first press said it would stop the music,
+            # so whether it did is the news. Said at "all" only, this was
+            # silence at essential (Mark, 24 November 2026).
+            self.frame.announce(
+                "Removed %s%s" % (track.display_name,
+                                  ". The playlist carries on"
+                                  if self.player.playing else ""))
         else:
             self.frame.announce_help("Removed %s" % track.display_name)
         self.frame.playlist_changed()
@@ -790,16 +802,22 @@ class PlaylistPanel(wx.Panel):
         level. Another row, the cursor moving (`_on_moved`) or
         C.DELETE_ON_AIR_WINDOW_MS going by starts again.
         """
-        track = self.playlist[index]
-        now = time.monotonic()
-        armed = self._armed
-        if (armed is not None and armed[0] is track
-                and now - armed[1] <= C.DELETE_ON_AIR_WINDOW_MS / 1000.0):
+        if self._still_armed(index):
             return True
-        self._armed = (track, now)
-        self.frame.announce("%s is on the air. Press Delete again to remove "
-                            "it and stop the music" % track.display_name)
+        track = self.playlist[index]
+        self._armed = (track, time.monotonic())
+        self.frame.announce("%s is on air. Delete again removes it and stops "
+                            "the music" % track.display_name)
         return False
+
+    def _still_armed(self, index):
+        """Is the track at `index` the one a first Delete was about, inside
+        C.DELETE_ON_AIR_WINDOW_MS."""
+        armed = self._armed
+        return (armed is not None and 0 <= index < len(self.playlist)
+                and armed[0] is self.playlist[index]
+                and time.monotonic() - armed[1]
+                <= C.DELETE_ON_AIR_WINDOW_MS / 1000.0)
 
     def _on_moved(self, event):
         """The cursor went to a row: a Delete waiting for its second press

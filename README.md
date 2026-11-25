@@ -47,10 +47,9 @@ Three faders, because a bed, a drop and a song should never fight over one:
 | `Ctrl+L` | What is playing right now |
 | `Ctrl+B` | Go live on your video platform, and come off air |
 | `Alt+Shift+B` | Go live on your radio station, and come off air |
-| `Alt+Shift+V` | Change what the stream is showing, on air or off |
+| `Alt+Shift+V` | The picture: a card, artwork, a camera, your screen, or both, changed on air or off |
 | `Ctrl+R` | Start and stop recording |
 | `Ctrl+Shift+R` | Record the picture as well as the sound, to one MP4 |
-| `Alt+Shift+V` | The picture: a card, artwork, a camera, your screen, or both |
 | `Ctrl+M` | Microphone on and off |
 | `Ctrl+D` | Ducking on or off |
 | `Alt+Enter` | Properties: name, level and both hotkeys in one place |
@@ -97,7 +96,10 @@ Nothing goes out until you press `Ctrl+B` or `Alt+Shift+B`.
 **On air sound.** What goes to the stream, the recordings and the send can be
 evened out, so a loud song and a quiet one arrive closer together, and kept
 under a ceiling you choose, measured between the samples as well as on them.
-Your own output is never touched, so a key sounds as soon as it always did.
+Ordinary music stays under it with Even out the music on Gentle or Firm;
+with it Off, or with hard material such as noise, the loudest moments can
+still come out up to about a decibel over. Your own
+output is never touched, so a key sounds as soon as it always did.
 `Alt+Shift+P` bypasses it for a moment, to compare. Songs and pads can have
 their loudness matched as well, each measured once in the background, and a
 level you set on a pad yourself always wins.
@@ -111,11 +113,11 @@ passwords, any stream key and your own folders.
 equaliser, a compressor and a limiter, in that order, plus VST3
 effects. Every parameter is a row in a list, in plain words with real units,
 read out as you change it, so a plugin whose own window no screen reader can
-read becomes a list any screen reader can. Beds and the playlist duck while
-the microphone is open and come back when you close it, and you can hear
-yourself through an output of its own. Whether your voice goes out at all is
-one box on the Microphone page: Send my microphone to streams, recordings and
-other programs.
+read becomes a list any screen reader can. While ducking is on, beds and the
+playlist go down whenever the microphone is open and come back when you close
+it, and you can hear yourself on an output of its own, What I listen on.
+Whether your voice goes out at all is one box on the Microphone page: Send my
+microphone to streams, recordings and other programs.
 
 Nothing opens your microphone but you pressing `Ctrl+M`.
 

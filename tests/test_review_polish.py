@@ -837,9 +837,10 @@ def item_4():
     check("M is Remove from the running order, and its alone",
           found.get("m") == [("Re&move from the running order",
                               ID_PL_ROW_REMOVE)], found.get("m"))
-    check("and Remove still shows its Del",
+    check("and Remove still shows its key, written Delete since the final "
+          "audit",
           [label for label, command in items if command == ID_PL_ROW_REMOVE]
-          == ["Re&move from the running order" + chr(9) + "Del"], items)
+          == ["Re&move from the running order" + chr(9) + "Delete"], items)
     guard("Move to the top keeps the O the last step gave it",
           [c for _t, c in found.get("o", [])] == [uimod.ID_PL_ROW_TOP],
           found.get("o"))
@@ -1083,8 +1084,9 @@ def item_8():
     check("at the all level the first bypass also says where to listen, "
           "queued behind it, the essential presses not having used it up",
           first == [("On air sound bypassed, in what goes out", True),
-                    ("To hear the difference yourself, send the show and "
-                     "press Ctrl+Shift+H", False)], first)
+                    ("To hear the difference, record a minute with Ctrl+R, "
+                     "or send the show with Alt+Shift+O and press "
+                     "Ctrl+Shift+H", False)], first)
     press_all()
     again = press_all()
     check("and only once a session",
@@ -1357,7 +1359,7 @@ def item_13():
               choices == ["Both, the side with a voice on it",
                           "Both, always mixed", "Left only", "Right only"],
               choices)
-        guard("a board saved with mix opens on the first",
+        guard("a board made by this version opens on the first",
               prefs.mic_channel.GetSelection() == 0)
     finally:
         prefs.Destroy()
@@ -1373,18 +1375,19 @@ def item_13():
         return script
 
     preferences(choose("Both, always mixed"))
-    check("choosing Both, always mixed saves a key of its own, onto the "
-          "board and the microphone",
-          frame.board.mic_channel == "average"
-          and frame.mic.channel == "average",
+    check("choosing Both, always mixed saves mix, the plain average, onto "
+          "the board and the microphone",
+          frame.board.mic_channel == "mix"
+          and frame.mic.channel == "mix",
           (frame.board.mic_channel, frame.mic.channel))
     weights = feed_voice(frame.mic)
     check("and it never moves the weights: half each, all three seconds, "
           "with one input silent", set(weights) == {(0.5, 0.5)},
           sorted(set(weights))[:4])
     preferences(choose("Both, the side with a voice on it"))
-    guard("the side with a voice on it is the old key, mix",
-          frame.board.mic_channel == "mix" and frame.mic.channel == "mix")
+    guard("the side with a voice on it is the key voice",
+          frame.board.mic_channel == "voice"
+          and frame.mic.channel == "voice")
     weights = feed_voice(frame.mic)
     guard("which still takes the talking side alone after a second",
           weights[-1] == (1.0, 0.0), weights[-1])
@@ -1396,15 +1399,15 @@ def item_13():
     data["mic_channel"] = "average"
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle)
-    check("a board file with it opens with it",
-          Board.load(path).mic_channel == "average",
+    check("a board file with the unreleased average opens as mix, the "
+          "same thing", Board.load(path).mic_channel == "mix",
           Board.load(path).mic_channel)
     data["mic_channel"] = "sideways"
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle)
-    guard("anything else in a board file opens as the side with a voice",
-          Board.load(path).mic_channel == "mix")
-    frame.board.mic_channel = frame.mic.channel = "mix"
+    guard("anything else in a board file opens as the plain average, as "
+          "3.10.1 opened it", Board.load(path).mic_channel == "mix")
+    frame.board.mic_channel = frame.mic.channel = "voice"
 
 
 section("13", item_13)
@@ -1557,9 +1560,10 @@ section("17 and 18", item_17_18)
 # ===========================================================================
 heading("19. What moved, said once on the first start of this version")
 
-NOTICE = ("New in this version: On air sound, on its own page in Preferences, "
-          "is off on this board until you turn it on. Put the microphone on "
-          "air is now Send my microphone, on the Microphone page")
+NOTICE = ("New in this version: On air sound, which evens out the music "
+          "your listeners get, is not switched on for this board yet. Put "
+          "the microphone on air is now Send my microphone, on the "
+          "Microphone page")
 
 
 def legacy_board(name):

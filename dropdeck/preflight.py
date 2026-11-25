@@ -307,13 +307,17 @@ def _check_screen_text(settings, board, notes):
 
 
 def check(settings, board, audio_running=True, mic_open=False,
-          screen_ready=True, screen_reason=""):
+          screen_ready=True, screen_reason="", mic_kept_off="",
+          onair_bypassed=""):
     """Work out what Ctrl+B would do with these settings.
 
     `settings` is what `_stream_settings` builds, so this sees exactly what
     the streamer will see rather than a second reading of the board. The live
     facts are passed in rather than fetched, which is what keeps this callable
-    from a test with nothing running.
+    from a test with nothing running: `mic_kept_off` is why the microphone is
+    kept out of what goes out, `_mic_off_air_reason` on the frame, and
+    `onair_bypassed` the sentence saying the compare has the on air sound
+    bypassed, or "".
     """
     notes = []
     lines = []
@@ -354,15 +358,22 @@ def check(settings, board, audio_running=True, mic_open=False,
     # Said every time, not only when it is wrong. "Microphone on air" is the
     # line a presenter wants to hear before they start talking, and a warning
     # that only appears when something is broken teaches nobody where to look.
-    if board.stream_mic:
+    if not board.stream_mic or mic_kept_off:
+        # Why, in the same words whatever the reason, as Ctrl+M says it:
+        # Send my microphone is off, or something live keeps the microphone
+        # out all the same, a mute or another source soloed. This said "on
+        # the air" over both of those (Mark, 24 November 2026). Put it right
+        # goes where the reason was made: the Microphone page for the box,
+        # Source control for a mute or a solo.
+        why = ("Send my microphone is off" if not board.stream_mic
+               else mic_kept_off)
+        lines.append(("Microphone", "NOT going out, %s" % why))
+        notes.append(Note(WARN, "Microphone: NOT going out, %s" % why,
+                          C.FIX_MIC if not board.stream_mic
+                          else C.FIX_SOURCE_CONTROL))
+    else:
         lines.append(("Microphone", "on the air" if mic_open
                       else "on the air when you open it, Ctrl+M"))
-    else:
-        lines.append(("Microphone", "NOT going out"))
-        # Put it right opens the Microphone page, where that box is now.
-        notes.append(Note(WARN, "Your microphone is not on the air, so "
-                                "listeners will not hear you at all",
-                          C.FIX_MIC))
 
     # ------------------------------------------------------------- the faults
     if video and settings.get("key_held"):
@@ -398,6 +409,10 @@ def check(settings, board, audio_running=True, mic_open=False,
     warning = going_live_warning(board)
     if warning:
         notes.append(Note(WARN, warning, ""))
+    if onair_bypassed:
+        # A compare left on is a show that goes out unprocessed with nothing
+        # anywhere to say so. The key puts it back, so there is no page.
+        notes.append(Note(WARN, onair_bypassed, ""))
     return Preflight(board.live_to, lines, notes)
 
 

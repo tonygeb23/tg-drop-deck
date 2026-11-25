@@ -144,8 +144,10 @@ def texts(report):
 # 1. The microphone. Nothing anywhere said this, ever, and a show with the
 # presenter missing sounds perfect from where the presenter is sitting.
 off = preflight.check(video_settings(), video_board(stream_mic=False))
+# Worded since the final audit the way the other two reasons are:
+# "Microphone: NOT going out, Send my microphone is off".
 check("a microphone that is not on the air is a warning",
-      any("microphone is not on the air" in n.text.lower()
+      any("microphone: not going out" in n.text.lower()
           for n in off.warnings), texts(off))
 check("and the summary says so rather than implying it",
       any("NOT going out" in value for _l, value in off.lines),

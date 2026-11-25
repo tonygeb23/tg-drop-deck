@@ -309,6 +309,13 @@ class Track:
             tail = None if tail is None else max(0.0, float(tail))
         except (TypeError, ValueError):
             tail = None
+        # Text or nothing: a board file is not a trusted document, and
+        # anything else went to a radio station as its text, a dict's
+        # braces and all (Mark, 24 November 2026). Nothing means it is read
+        # from the file's tags again.
+        album = data.get("album")
+        if not isinstance(album, str):
+            album = None
         return cls(
             filepath=data.get("filepath") or "",
             name=data.get("name") or None,
@@ -320,7 +327,7 @@ class Track:
             enabled=bool(data.get("enabled", True)),
             artist=data.get("artist"),
             title=data.get("title"),
-            album=data.get("album"),
+            album=album,
             tail_silence=tail,
         )._take_loudness(data)
 

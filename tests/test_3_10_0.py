@@ -694,8 +694,18 @@ frame._on_new(None)
 frame._playlist_metadata_ready(old)      # a pass for the board that left
 check("a pass for a board that has gone does not touch the one that is open",
       not frame.board.dirty and not frame._save_timer.IsRunning())
+# Since the final audit of the major release, a pass for a new board nobody
+# has touched marks nothing and writes nothing: it is measured again next
+# time (tests/test_review_final.py, item 1). One with changes of its own is
+# still saved shortly, measurements and all.
 frame._playlist_metadata_ready(frame.board)
-check("a pass for the open board still does", frame.board.dirty)
+check("a pass for the open board, new and untouched, writes nothing",
+      not frame.board.dirty and not frame._save_timer.IsRunning()
+      and not os.path.exists(frame.board.path))
+frame.board.dirty = True
+frame._playlist_metadata_ready(frame.board)
+check("a pass for the open board with changes of its own still saves it "
+      "shortly", frame._save_timer.IsRunning())
 frame.board.dirty = False
 frame._save_timer.Stop()
 

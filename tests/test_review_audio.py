@@ -1462,7 +1462,8 @@ def step3_two_talkers():
 
     mic = MicInput(device=None)
     mic.samplerate = RATE
-    mic.channel = "mix"
+    # "voice" since the final audit: "mix" is the plain average again.
+    mic.channel = "voice"
     turns = []
     for who in (0, 1, 0, 1):
         n = 4 * RATE
@@ -1525,7 +1526,8 @@ def step3_not_a_number():
                rms(np.nan_to_num(tail))))
     mic = MicInput(device=None)
     mic.samplerate = RATE
-    mic.channel = "mix"
+    # "voice" since the final audit: "mix" is the plain average again.
+    mic.channel = "voice"
     broken = np.zeros((BLOCK, 2), np.float32)
     broken[3, 1] = float("nan")
     mic._mix_down(broken)

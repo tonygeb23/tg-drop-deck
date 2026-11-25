@@ -275,9 +275,10 @@ def on_air_sound(processor, block):
     Called by the stream, the two recorders and the send, each with its own
     `dsp.ProgramChain`, after the cards were summed by its own bus: on the
     stream's and the recorders' threads, and in the send's own card's
-    callback, where it costs 0.2 ms of a 43 ms block. Never on a callback that
-    feeds the presenter, and never raises: a processor that fails hands the
-    block back untouched.
+    callback, where Jackson measured a median of 0.61 ms and a worst of
+    1.19 ms of a 43 ms block at 48 kHz (24 November 2026). Never on a
+    callback that feeds the presenter, and never raises: a processor that
+    fails hands the block back untouched.
     """
     if processor is None or block is None or not len(block):
         return block

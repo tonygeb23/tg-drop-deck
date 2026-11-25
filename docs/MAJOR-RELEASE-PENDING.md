@@ -78,6 +78,37 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   sentence, the first start note, the pad held labels, the label renames),
   Delete twice on the track on air instead of any box, and the status bar
   read whole if AppKit truncates it.
+- Final audit fixes (this pass): read and keep the new mic channel key
+  `voice` (Windows `mix` now means always mixed, which is also the Mac's
+  meaning); stop Save As carrying `never_named`, or honour it only in the
+  settings folder; the microphone reasons in the go live window and status
+  bar; the bypassed compare shown in three places; Delete twice with ten
+  seconds and the new words; grouped refused hotkeys; the first start note;
+  the ceiling and streaming help wording; album must be text; control
+  characters in pad names never reach a menu label; an untouched demo is
+  never written; the background save fails silently; leftover removal by
+  file identity. Check whether `mac/check_guide.py` reaches outside the way
+  the Windows one did (Credential Manager, the default output, the update
+  check, every plugin).
+
+## CLAUDE.md corrections from Jackson's final audit
+- The on air sound paragraph: "a true peak ceiling" becomes "aimed at the
+  true peak, 56 samples of lookahead (1.2 ms at 48 kHz); ordinary music on
+  Gentle or Firm stays under it, and Off or hard material such as noise can
+  come out up to about a decibel over".
+- Add: "`_mic_off_air_reason` is the one answer to whether the microphone
+  goes out: both air functions set `mic.on_air` from it, and Ctrl+M, the go
+  live summary and the status bar say it. A guard asks whether a loop would
+  exist, never what a setting used to be."
+- Add: "Mic channel `mix` is the plain average, exactly 3.10.1's Both, mixed
+  together; `voice` picks the side with a voice on it and is the default for
+  the demo and a first start only; File, New keeps the board's choice."
+- Add: "The real time risk is the GIL, not CPU: at 96 kHz the microphone's
+  5.3 ms block finished 95 per cent through under load in an offline test.
+  Count late blocks on a real 96 kHz card before trusting it."
+- Add: "`tools/check_guide.py` stands in secrets, streams and the update
+  check, and loads plugins only with `--with-plugins`: an audit run loaded
+  every VST3 and left Waves helper processes running."
 
 ## Open points
 
@@ -100,3 +131,6 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   (dialogs.py, about line 2763) is stale. Since 3.8.2 Ctrl+B always goes to
   the video platform, and the box only moves the Streaming location dot. It is
   kept because a learned control is not taken away; reword or retire it?
+- Tony to check before release, on real hardware: late blocks on a 96 kHz
+  card with the on air sound and a recording running; Alt+Shift+A pressed
+  for real; the "Go live here when I press Ctrl+B" box (reword or retire).

@@ -827,6 +827,29 @@ def same_path(a, b):
             == os.path.normcase(os.path.abspath(b)))
 
 
+def same_file(a, b):
+    """Two paths to one file however they are spelled: through a junction,
+    a second name for a folder or a hard link, by what the file system says,
+    and by `same_path` when it cannot say (one of them is not there)."""
+    if not a or not b:
+        return False
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return same_path(a, b)
+
+
+def in_config_dir(path):
+    """Is `path` a file directly in the settings folder, however spelled."""
+    if not path:
+        return False
+    try:
+        folder = os.path.dirname(os.path.abspath(path))
+    except (TypeError, ValueError):
+        return False
+    return same_file(folder, config_dir())
+
+
 def remember_board_path(path):
     """Write down which board is open. True if it is now remembered.
 
@@ -1293,8 +1316,8 @@ class Board:
         self.framing_level = "problems"
         #: Which half of a stereo input carries the voice. A hardware
         #: mixer feeding a line input puts it on one side, and taking the
-        #: wrong one is silence.
-        self.mic_channel = "mix"
+        #: wrong one is silence. See C.MIC_CHANNELS.
+        self.mic_channel = C.DEFAULT_MIC_CHANNEL
 
         #: The microphone chain: gate, equaliser, compressor, limiter.
         #: Empty means the defaults, which are chosen for a spoken voice.
@@ -2281,7 +2304,16 @@ class Board:
                                      else C.DEFAULT_TITLE_FORMAT)
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
-        channel = data.get("mic_channel")
+        # "mix" is the plain average, 3.10.1's "Both, mixed together" and the
+        # Mac's "mix", so a board saved with it sounds as it did, and so does
+        # one from before there was a choice or with something unreadable
+        # there. The unreleased "average" was the same thing. The demo is a
+        # new board to whoever opens it, as above, and gets a new board's
+        # "voice".
+        channel = data.get("mic_channel",
+                           C.DEFAULT_MIC_CHANNEL if fresh else "mix")
+        if channel == "average":
+            channel = "mix"
         board.mic_channel = channel if channel in C.MIC_CHANNEL_KEYS else "mix"
         sound = data.get("cue_sound")
         board.cue_sound = (sound if sound in C.CUE_SOUND_KEYS
@@ -2328,7 +2360,13 @@ class Board:
                      else C.SPEECH_ESSENTIAL)
         board.speech_level = level
         board.ask_before_live = bool(data.get("ask_before_live", True))
-        board.never_named = data.get("never_named") is True
+        # Only a board in the settings folder can be one the app gave a home
+        # that nobody has named. Anywhere else, somebody chose the place,
+        # whatever the file says: a Mac Save As copies the flag across, and
+        # Ctrl+S then asked for a name while the save timer wrote the file
+        # where it was (Mark, 24 November 2026).
+        board.never_named = (data.get("never_named") is True
+                             and in_config_dir(path))
 
         # Keys arrive as strings out of JSON and are used as ints everywhere
         # else. Anything unparseable is dropped rather than crashing a load,
