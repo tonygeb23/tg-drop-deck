@@ -55,6 +55,20 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   stop event for measuring, the compare key yielding to a pad, the 50 ms
   compare crossfade, the true peak ceiling, the ring rescue, trim_set.
 - Earlier steps (wiring, security, RTMPS): collect from the final audit.
+- Speech and keys (15785c8): the short mic lines (MainWindowAir.swift:56 and
+  :111, menu title AppDelegate.swift:511), Back on air, the Delete question
+  on the track on air, the radio hint in Preflight.swift, F7 and F8 saying
+  what you hear only for a recording or the send, Alt+Enter on a row, the
+  global hotkey sentence off a pad, the search count delay
+  (Panels.swift:206). The Escape count and the Streaming location sentence
+  are already right on the Mac.
+- Where options live (9061234): the Command B wording, the cue sheet on the
+  Playlist menu, an Add songs key that yields to a pad, the mic box moved
+  and renamed, What I listen on, the ducking label, the status order, the
+  Command S rule for a board never named. MOST IMPORTANT: the third title
+  value `artist_title_album` and the album tag. The Mac treats that value
+  as its default and writes `title_by_artist` back over it, so a board
+  shared through Dropbox loses the choice.
 
 ## Open points
 
@@ -62,3 +76,7 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   at -3). AAC 128k on a brickwalled master can still decode over full scale,
   which no ceiling before the encoder can promise.
 - Preferences is eleven tabs now; the guide says ten.
+- Noticed in Area 5, not fixed: with titles off, the video card gets the
+  first song at go live and never updates; after a restart a board that was
+  never named is not recognised as one, so Ctrl+S saves it in place; "Saved
+  to X.json" still says the extension after Save as.
