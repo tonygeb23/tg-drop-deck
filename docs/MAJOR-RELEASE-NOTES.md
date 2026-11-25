@@ -156,8 +156,10 @@ Plain sentences for the changelog and the release post, added by each step.
   you choosing sounds.
 - A microphone plugged into one input of a two input interface now comes
   through at its full level, without the other input's hiss. Drop Deck takes
-  the side with the voice on it when the other is nearly silent, and goes back
-  to both when both carry sound. Sources still mix both sides.
+  the side with the voice on it after about a second of the other being nearly
+  silent, and the moment the quiet side carries sound again, a second person
+  starting to talk, both come back within 50 milliseconds. Sources still mix
+  both sides.
 - Your microphone processing stays right when your sound card runs at a
   different rate, such as 96 kHz. The low cut used to sit an octave too high
   and make the voice thin.
@@ -168,11 +170,17 @@ Plain sentences for the changelog and the release post, added by each step.
   right pitch and without crackles.
 - Your microphone and your sources no longer drift late or tick over a long
   show when two sound cards run at slightly different speeds. Drop Deck keeps
-  the delay steady and makes any correction too small to hear.
+  the delay steady and makes any correction too small to hear. A sound card
+  that is a few milliseconds late now and again is covered with a few
+  milliseconds of what was just heard, rather than a gap.
 - Hearing the send through Ctrl+Shift+H no longer has small gaps in it.
 - Drop Deck refuses a setup that would feed your show back into itself: a send
   into a virtual cable while your microphone or a source listens to the other
-  end of the same cable. It says which input to change.
+  end of the same cable. It knows VB-Audio's CABLE and CABLE A to D,
+  VoiceMeeter, Virtual Audio Cable, and a Loopback or Stereo Mix input on the
+  card you send into, and it says which input to change. A real sound card's
+  own microphone is never refused: sending into a headset's earphones while a
+  guest talks into the same headset works.
 - New, and off unless you turn it on: "Duck further while I am talking" on the
   Sounds and beds page of Preferences. The music still ducks when your
   microphone is on, as before, and goes a little further down while you are
@@ -180,16 +188,24 @@ Plain sentences for the changelog and the release post, added by each step.
 - New: On air sound, a page of its own in Preferences next to Voice. What goes
   to your stream, your recordings and the send is evened out, so a loud song
   and a quiet one arrive closer together, and nothing is ever louder than the
-  ceiling you set, minus 2 dBFS to start with. It never changes what you hear
-  yourself, and it holds still while your microphone or a drop has the music
-  ducked. "Even out the music" can be Off, Gentle or Firm.
+  ceiling you set, minus 2 dBFS to start with, measured between the samples
+  as well. Firm starts at minus 3, because music limited hard all the time can
+  still go a little over. It never changes what you hear yourself, and it
+  holds still only while the music really is ducked under your microphone or
+  a drop; with ducking off it keeps evening out. "Even out the music" can be
+  Off, Gentle or Firm. A glitched file can no longer silence the stream.
 - Alt+Shift+P turns the on air sound off for a moment, and on again, so you
   can hear what it is doing. Drop Deck says "On air sound off" and "On air
-  sound on". It is not saved, so a show never starts with it off by accident.
+  sound on", and fades between the two in a twentieth of a second. It is not
+  saved, so a show never starts with it off by accident. If a pad in bank 4
+  already has Alt+Shift+P, the pad keeps it: the compare is then on the On air
+  menu only, and the menu and the startup line say so.
 - New: "Match the loudness of songs and sounds", on the same page. Each song
   and sound is measured once, in the background, and played at a matching
-  level. A level you set on a sound or a song yourself always wins. Quiet
-  files are only turned up as far as they can go without distorting.
+  level. A file you change under the same name is measured again. A level you
+  set on a sound or a song yourself always wins, 0 dB included, which is how
+  you keep one sound exactly as recorded. Quiet files are only turned up as
+  far as they can go without distorting.
 - Both are on for a new board, the demo pack and a first start. A board you
   already have keeps the sound it had until you turn them on.
 - Drop Deck now says at startup when a sound card your board uses would not

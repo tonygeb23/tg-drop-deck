@@ -406,8 +406,13 @@ def tags(path):
 
 
 # -------------------------------------------------------------- loudness ---
-def measure_loudness(path):
+def measure_loudness(path, stop=None):
     """How loud a whole file is, and its loudest sample. (LUFS, dBFS).
+
+    ``stop`` is a threading.Event, looked at before every 100 ms piece, so
+    closing the app in the middle of an hour long file is not kept waiting
+    for the rest of it: once it is set this returns (None, None) at once,
+    and the caller must not take that for an answer.
 
     Either can be None: None loudness for a file too short or too quiet for
     BS.1770 to have an answer (under 400 ms, or nothing above -70 LUFS), and
@@ -429,6 +434,8 @@ def measure_loudness(path):
         energies, counts = [], []
         peak = 0.0
         while True:
+            if stop is not None and stop.is_set():
+                return None, None
             data = handle.read(piece)
             if not len(data):
                 break

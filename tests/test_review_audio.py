@@ -17,6 +17,15 @@ in the order of the brief:
   9. "System default" opened through MME, about 200 ms;
  10. duck while talking, a second stage under the open microphone's duck.
 
+Step 3, Mark's findings on e26e98d and b157d05, each with checks that fail
+on b157d05:
+
+  S1. the send's loop guard refused working sends: it is decided by the
+      virtual cable's own naming now, and a physical card is never refused;
+  S2. two talkers on two inputs: the second lost the first 2 s of each turn;
+  S3. one inf or NaN sample silenced the monitor card's conversion for good;
+  S10. a read a few ms short was a 21 ms hole and 10.7 ms more delay after.
+
 Nothing here opens a sound card or a microphone and nothing makes a sound.
 The mixers run with no stream and are read off `render`; where a stream is
 opened, `sounddevice` is a stand-in that records what it was asked for;
@@ -322,11 +331,16 @@ def item_4():
     check("and the voice after the pause is straight back at its level",
           abs(db(rms(back[int(0.1 * RATE):])) - own) < 0.2,
           "%+.2f" % (db(rms(back[int(0.1 * RATE):])) - own))
-    held = run(mic, 2.0, voice, down12, start=6 * RATE)
-    check("a second input 12 dB down does not bring the average back "
-          "(hysteresis)", getattr(mic, "_side", "none") == 0
-          and abs(db(rms(held[int(1.5 * RATE):])) - db(rms(
-              voice(np.arange(RATE))))) < 0.5)
+    sides = []
+    for i in range(int(2.0 * RATE) // BLOCK):
+        n = np.arange(6 * RATE + i * BLOCK, 6 * RATE + (i + 1) * BLOCK)
+        feed(mic, np.stack([voice(n), down12(n)], axis=1).astype(np.float32))
+        mic.read(BLOCK)
+        sides.append(getattr(mic, "_side", "none"))
+    changes = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
+    check("a second input coming up 12 dB under the first is a second "
+          "talker: both are back at once and it stays that way, no flapping",
+          sides[0] is None and changes == 0, (sides[:3], changes))
     both = run(mic, 2.5, voice, second, start=8 * RATE)
     # Two different voices at one level, averaged, sit 3 dB under either.
     averaged = db(rms(both[int(2.0 * RATE):])) - own
@@ -399,23 +413,60 @@ CABLE_IN = "CABLE Input (VB-Audio Virtual Cable)"
 CABLE_OUT = "CABLE Output (VB-Audio Virtual Cable)"
 
 
+#: Real names, as Windows and PortAudio give them. The three physical cards
+#: are the ones Mark's repro had refused (S1).
+YETI_OUT = "Speakers (Yeti Stereo Microphone)"
+YETI_MIC = "Microphone (Yeti Stereo Microphone)"
+REALTEK_OUT = "Speakers (Realtek(R) Audio)"
+REALTEK_MIC = "Microphone (Realtek(R) Audio)"
+REALTEK_MIX = "Stereo Mix (Realtek(R) Audio)"
+DVR_OUT = "Speakers (Audio Control (DVR))"
+DVR_MIC = "Microphone (Audio Control (DVR))"
+LOOPS = [
+    (CABLE_IN, CABLE_OUT),
+    ("CABLE-A Input (VB-Audio Cable A)", "CABLE-A Output (VB-Audio Cable A)"),
+    ("CABLE-D Input (VB-Audio Cable D)", "CABLE-D Output (VB-Audio Cable D)"),
+    ("VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)",
+     "VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)"),
+    ("VoiceMeeter Aux Input (VB-Audio VoiceMeeter AUX VAIO)",
+     "VoiceMeeter Aux Output (VB-Audio VoiceMeeter AUX VAIO)"),
+    ("Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
+     "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)"),
+    ("Line 1 (Virtual Audio Cable)", "Line 1 (Virtual Audio Cable)"),
+    ("Speakers (Focusrite USB Audio)", "Loopback 1 + 2 (Focusrite USB Audio)"),
+    (REALTEK_OUT, REALTEK_MIX),
+    # MME's 31 characters, which can end on a space.
+    (CABLE_IN[:31], CABLE_OUT[:31]),
+]
+NOT_LOOPS = [
+    (YETI_OUT, YETI_MIC), (REALTEK_OUT, REALTEK_MIC), (DVR_OUT, DVR_MIC),
+    ("Speakers (Focusrite USB Audio)", "Analogue 1 + 2 (Focusrite USB Audio)"),
+    (CABLE_IN, "CABLE-A Output (VB-Audio Cable A)"),
+    ("CABLE-A Input (VB-Audio Cable A)", "CABLE-B Output (VB-Audio Cable B)"),
+    ("Line 1 (Virtual Audio Cable)", "Line 2 (Virtual Audio Cable)"),
+    ("VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)",
+     "VoiceMeeter Aux Output (VB-Audio VoiceMeeter AUX VAIO)"),
+    (YETI_OUT, CABLE_OUT), (CABLE_IN, YETI_MIC),
+]
+
+
 def item_6_rules():
     found = routing.captures_itself(
-        CABLE_OUT, [("Your microphone", "Microphone (Yeti Stereo Microphone)"),
-                    ("Games call", CABLE_OUT)], CABLE_IN)
+        CABLE_IN, [("Your microphone", YETI_MIC), ("Games call", CABLE_OUT)])
     check("a source on the far end of the send's cable is a loop",
           len(found) == 1 and "Games call" in found[0], found)
     check("the sentence names the input, the cable and what to do",
           found and CABLE_OUT in found[0] and CABLE_IN in found[0]
           and "back into itself" in found[0], found)
-    check("MME's 31 character name is the same device",
-          routing.captures_itself(CABLE_OUT, [("S", CABLE_OUT[:31])], CABLE_IN))
-    check("so is the registry's short name",
-          routing.captures_itself("CABLE Output", [("S", CABLE_OUT)], CABLE_IN))
-    check("another device is not", not routing.captures_itself(
-        CABLE_OUT, [("S", "CABLE-A Output (VB-Audio Cable A)")], CABLE_IN))
+    wrong = [pair for pair in LOOPS if not routing.loops_back(*pair)]
+    check("every known virtual cable's own other end is a loop: VB-Audio "
+          "CABLE and A to D, VoiceMeeter, Virtual Audio Cable, a Focusrite "
+          "Loopback and Stereo Mix, MME's cut names too", not wrong, wrong)
+    wrong = [pair for pair in NOT_LOOPS if routing.loops_back(*pair)]
+    check("S1: a physical card's own microphone is never one, and neither "
+          "is another cable's end", not wrong, wrong)
     check("and nothing is known, nothing is refused",
-          not routing.captures_itself("", [("S", CABLE_OUT)], CABLE_IN))
+          not routing.captures_itself("", [("S", CABLE_OUT)]))
 
 
 section("item 6, the rule", item_6_rules)
@@ -933,9 +984,24 @@ sourcesmod.resolve_input = lambda spec: None
 uimod.DropDeckFrame._start_update_check = lambda self: None
 RATES = {901: 48000, 960: 96000, 903: 44100, 911: 48000}
 Mixer._device_rate = staticmethod(lambda device: RATES.get(device, 48000))
-FAR = {CABLE_IN: CABLE_OUT}
-from dropdeck import cabletest                          # noqa: E402
-cabletest.capture_for = lambda name, found=None: FAR.get(name, "")
+from dropdeck import endpoints                          # noqa: E402
+
+
+def _machine():
+    E, R, P = endpoints.Endpoint, endpoints.RENDER, endpoints.CAPTURE
+    found = []
+    for side, full in ((R, YETI_OUT), (P, YETI_MIC), (R, REALTEK_OUT),
+                       (P, REALTEK_MIC), (P, REALTEK_MIX), (R, DVR_OUT),
+                       (P, DVR_MIC), (R, CABLE_IN), (P, CABLE_OUT)):
+        name, card = full.split(" (", 1)
+        found.append(E(side, name, card[:-1], 48000, 24, 2,
+                       guid="{%08d}" % len(found)))
+    return found
+
+
+MACHINE = _machine()
+endpoints.endpoints = lambda: list(MACHINE)
+CARDS.update({YETI_OUT: 921, REALTEK_OUT: 922, DVR_OUT: 923})
 DEFAULT_MIC = ["Microphone (Yeti Stereo Microphone)"]
 micinput.default_input_name = lambda: DEFAULT_MIC[0]
 
@@ -1318,6 +1384,235 @@ def frame_10():
 
 
 section("item 10, through the window", frame_10)
+
+# ===========================================================================
+heading("S1. The loop guard, through the window, on a realistic machine")
+
+
+def step3_loopguard():
+    frame._stop_send(quiet=True)
+    frame.board.send_device_name = YETI_OUT
+    frame.board.send_device_hostapi = "Windows WASAPI"
+    frame.board.send_on = True
+    frame.apply_sources([{"name": "Guest", "kind": "device",
+                          "device_name": YETI_MIC, "on_air": True}],
+                        touch=False, quiet=True)
+    check("a send into the Yeti's headphone jack with a guest on the Yeti's "
+          "microphone starts (b157d05 refused it: the registry pairs the two "
+          "by the card)", frame._start_send(quiet=True) is True,
+          frame.send_failed)
+    frame._stop_send(quiet=True)
+    for out, mic in ((REALTEK_OUT, REALTEK_MIC), (DVR_OUT, DVR_MIC)):
+        frame.board.send_device_name = out
+        frame.apply_sources([{"name": "Guest", "kind": "device",
+                              "device_name": mic, "on_air": True}],
+                            touch=False, quiet=True)
+        check("so does %s against its own microphone" % out,
+              frame._start_send(quiet=True) is True, frame.send_failed)
+        frame._stop_send(quiet=True)
+    frame.board.send_device_name = REALTEK_OUT
+    frame.apply_sources([{"name": "Room", "kind": "device",
+                          "device_name": REALTEK_MIX, "on_air": True}],
+                        touch=False, quiet=True)
+    check("Stereo Mix on the card the show is sent into is still refused: it "
+          "IS what that card plays", frame._start_send(quiet=True) is False
+          and "back into itself" in (frame.send_failed or ""))
+    frame.apply_sources([], touch=False, quiet=True)
+
+    frame.board.send_device_name = YETI_OUT
+    frame._start_send(quiet=True)
+    tried = []
+    real_start = MicInput.start
+
+    def counting(self, device=None, other_routes=True):
+        tried.append(device)
+        self.last_error = "not opened in a test"
+        return False
+
+    MicInput.start = counting
+    DEFAULT_MIC[0] = YETI_MIC
+    frame.board.stream_mic = True
+    heard.clear()
+    try:
+        post(frame, uimod.ID_MIC_TOGGLE)
+    finally:
+        MicInput.start = real_start
+        DEFAULT_MIC[0] = "Microphone (Yeti Stereo Microphone)"
+    check("Ctrl+M with the Yeti as the microphone, sending into the Yeti's "
+          "jack, goes on to open it (a stand in that opens nothing)",
+          len(tried) == 1 and not any("back into itself" in line
+                                      for line in heard), (tried, heard))
+    frame._stop_send(quiet=True)
+    frame.board.send_on = False
+
+
+section("S1, through the window", step3_loopguard)
+
+# ===========================================================================
+heading("S2. Two talkers on two inputs: the second is heard within 50 ms")
+
+
+def step3_two_talkers():
+    rnd = np.random.default_rng(1)
+
+    def speech(n, level_db):
+        t = np.arange(n) / RATE
+        env = 0.55 + 0.45 * np.sin(2 * np.pi * 4 * t)
+        return (rnd.standard_normal(n) * env * 10 ** (level_db / 20.0))
+
+    mic = MicInput(device=None)
+    mic.samplerate = RATE
+    mic.channel = "mix"
+    turns = []
+    for who in (0, 1, 0, 1):
+        n = 4 * RATE
+        talker = speech(n, -20.0)
+        pair = np.zeros((n, 2), dtype=np.float32)
+        pair[:, who] = talker
+        pair[:, 1 - who] = rnd.standard_normal(n) * 10 ** (-70 / 20.0)
+        out = np.concatenate([mic._mix_down(pair[i:i + BLOCK])
+                              for i in range(0, n, BLOCK)])
+
+        def share(a, b):
+            o, t = out[int(a * RATE):int(b * RATE)], talker[int(a * RATE):
+                                                            int(b * RATE)]
+            return db(abs(np.dot(o, t)) / max(np.dot(t, t), 1e-12))
+
+        turns.append((share(0.05, 0.10), share(0.10, 0.50), share(3.0, 4.0)))
+    print("     measured, the talker's level per turn (50 to 100 ms, 100 to "
+          "500 ms, last second): %s" % "; ".join(
+              "%+.1f %+.1f %+.1f dB" % t for t in turns))
+    late = [t for t in turns[1:] if t[0] < -7.0 or t[1] < -7.0]
+    check("every new turn is at least at the average (-6 dB) from 50 ms "
+          "in; b157d05 had it at -98 to -101 dB for two seconds",
+          not late, turns)
+    check("and once one input has been talking alone for a second it has "
+          "the whole level, as before: the split is still slow",
+          all(abs(t[2]) < 0.5 for t in turns), turns)
+    check("the split is not quick: the first 100 to 500 ms of the very "
+          "first turn is still the average", abs(turns[0][1] + 6.0) < 0.5,
+          turns[0])
+
+
+section("S2", step3_two_talkers)
+
+# ===========================================================================
+heading("S3. One inf or NaN does not silence what comes after it")
+
+
+def step3_not_a_number():
+    for bad in (float("inf"), float("nan")):
+        adapter = mixermod.RateAdapter(48000, 44100)
+        tone = sine(440.0, 3.0, 0.3)
+        tone[4800, 0] = bad
+        at = [0]
+
+        def fetch(count):
+            piece = tone[at[0]:at[0] + count]
+            at[0] += count
+            if len(piece) < count:
+                piece = np.concatenate(
+                    [piece, np.zeros((count - len(piece), CHANNELS),
+                                     np.float32)])
+            return piece
+
+        out = np.concatenate([adapter.read(fetch, 441) for _ in range(200)])
+        tail = out[44100:]
+        check("the monitor card's rate conversion after one %s: finite and "
+              "still carrying the tone" % bad,
+              bool(np.all(np.isfinite(tail))) and rms(tail) > 0.1,
+              (bool(np.all(np.isfinite(tail))),
+               rms(np.nan_to_num(tail))))
+    mic = MicInput(device=None)
+    mic.samplerate = RATE
+    mic.channel = "mix"
+    broken = np.zeros((BLOCK, 2), np.float32)
+    broken[3, 1] = float("nan")
+    mic._mix_down(broken)
+    n = np.arange(2 * RATE)
+    pair = np.stack([VOICE_AMP * np.sin(2 * np.pi * 220.0 * n / RATE),
+                     np.random.default_rng(2).normal(0.0, HISS, len(n))],
+                    axis=1).astype(np.float32)
+    for i in range(0, len(pair), BLOCK):
+        mic._mix_down(pair[i:i + BLOCK])
+    check("and the two input judge still takes the talking side after a NaN",
+          mic._side == 0, mic._side)
+
+
+section("S3", step3_not_a_number)
+
+# ===========================================================================
+heading("S10. A read a few ms short is a repeat, not a 21 ms hole")
+
+
+def step3_ring():
+    ring = micinput._Ring(rate=RATE)
+    w = 2 * np.pi * 440.0 / RATE
+    phase = [0]
+
+    def write():
+        n = np.arange(phase[0], phase[0] + 512)
+        ring.write(np.repeat((0.5 * np.sin(w * n)).astype(np.float32)[:, None],
+                             2, axis=1))
+        phase[0] += 512
+
+    out = []
+    for i in range(400):                         # about four seconds
+        write()
+        out.append(ring.read(480)[:, 0])
+        if i % 15 == 14:
+            out.append(ring.read(480)[:, 0])     # an extra read: less in hand
+    extra = ring._extra
+    # A late callback: a write that has not come yet when the read after it
+    # does, at a moment when the read before leaves 2 to 8 ms in hand. So the
+    # read is a few ms short, which is what one 4 ms late callback is.
+    for _ in range(200):
+        if 480 + 100 <= ring.available <= 480 + 400:
+            break
+        if ring.available > 480 + 400:
+            out.append(ring.read(480)[:, 0])
+        else:
+            write()
+    out.append(ring.read(480)[:, 0])
+    in_hand = ring.available
+    before = (ring.holes, ring._extra)
+    out.append(ring.read(480)[:, 0])
+    short = out[-1]
+    after = (ring.holes, ring._extra)
+    for _ in range(200):
+        write()
+        out.append(ring.read(480)[:, 0])
+    x = np.concatenate(out)[RATE // 2:]
+    zeros = 0
+    longest = 0
+    for value in x:
+        zeros = zeros + 1 if value == 0.0 else 0
+        longest = max(longest, zeros)
+    residual = np.abs(x[2:] - 2 * np.cos(w) * x[1:-1] + x[:-2])
+    print("     measured: a read %.1f ms short; holes %d to %d, margin learnt "
+          "%d to %d frames, rescues %d, longest run of zeros %.1f ms, worst "
+          "step against the tone %.3f"
+          % ((480 - in_hand) / RATE * 1e3, before[0], after[0], before[1],
+             after[1], getattr(ring, "rescues", 0), longest / RATE * 1e3,
+             float(residual.max())))
+    check("the case is real: the read had less than it asked for",
+          32 <= in_hand < 480, in_hand)
+    check("a read that comes up short is made whole: no hole, and no "
+          "margin learnt from it (b157d05: a hole and 512 frames, 10.7 ms, "
+          "more delay for the rest of the session)",
+          after == before and extra == 0 and float(np.abs(short).max()) > 0.4,
+          (before, after, extra))
+    check("and what it plays is the tone, spliced in phase: no zeros, no step",
+          longest == 0 and float(residual.max()) < 0.05,
+          (longest, float(residual.max())))
+    holes = ring.holes
+    for _ in range(40):
+        ring.read(480)
+    check("a writer that has really stopped is still a hole",
+          ring.holes > holes)
+
+
+section("S10", step3_ring)
 
 check("nothing in this file even tried to open a microphone or a source",
       OPENED == [], OPENED)

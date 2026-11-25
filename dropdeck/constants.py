@@ -326,6 +326,30 @@ DEFAULT_ONAIR_CEILING_DB = -2.0
 MIN_ONAIR_CEILING_DB = -12.0
 MAX_ONAIR_CEILING_DB = 0.0
 ONAIR_CEILING_RELEASE_MS = 100.0
+#: The ceiling looks for the TRUE peak, at four times the rate: an
+#: interpolator HALF taps either side, the gain held flat that far and SMOOTH
+#: more, and the estimate taken PAD hot. See dsp.TruePeakCeiling for what it
+#: does and does not promise.
+ONAIR_TP_HALF = 12
+ONAIR_TP_SMOOTH = 32
+ONAIR_TP_PAD_DB = 0.2
+#: Firm limits harder than Gentle, and a true peak ceiling in the sample
+#: domain is not a guarantee on material limited hard all the time, so Firm
+#: starts a decibel lower. A ceiling the user chose is theirs.
+DEFAULT_ONAIR_FIRM_CEILING_DB = -3.0
+
+
+def default_onair_ceiling(even):
+    """"Never louder than" for a board that has not chosen one."""
+    return (DEFAULT_ONAIR_FIRM_CEILING_DB if even == "firm"
+            else DEFAULT_ONAIR_CEILING_DB)
+#: Turning the on air sound off and on, the compare key included, is a
+#: crossfade this long rather than a 10 dB jump in one sample.
+ONAIR_FADE_SECONDS = 0.05
+#: Anything past this, or not a number at all, is not audio. Six times full
+#: scale, far above any real sum of cards, and a glitched file's inf stops
+#: here instead of silencing the stream for the rest of the session.
+ONAIR_SANE_LEVEL = 6.0
 #: Nothing quieter than this is levelled: a gap, a fade, room tone. Without
 #: it the leveller would spend every pause winding itself up to full boost.
 ONAIR_FLOOR_LUFS = -45.0
@@ -444,9 +468,14 @@ MIC_RING_FRAMES = 12000
 #: scheduling jitter on either side, and every millisecond of it is delay in
 #: the presenter's headphones. More than RING_SLACK_HIGH above it and the
 #: excess is dropped; less than RING_SLACK_LOW and a little is played twice.
-#: Simulated over an hour at 30 and 100 ppm apart either way: no holes, no
-#: steps, never more than 22 ms held, where the ring without a target was
-#: 239 ms late after an hour at +100 and had 541 holes at -100.
+#: Simulated over an hour at 30 and 100 ppm apart either way, where the ring
+#: without a target was 239 ms late after an hour at +100 and had 541 holes
+#: at -100. Mark measured what this left, with 1 per cent of callbacks 4 ms
+#: late: one 21 ms hole an hour with the microphone slow, after which the
+#: ring held 10.7 ms more for the rest of the session. A read that short is
+#: now made whole with a repeat instead (micinput._Ring._rescued). Mark's
+#: same hour, three seeds each at 30 and 100 ppm slow: no holes, 6 to 13
+#: repeats an hour, no margin learnt, delay unchanged.
 RING_MARGIN_SECONDS = 0.005
 RING_SLACK_HIGH_SECONDS = 0.005
 RING_SLACK_LOW_SECONDS = 0.0015
@@ -469,6 +498,13 @@ MIC_SIDE_SMOOTH_SECONDS = 0.3
 MIC_SIDE_HOLD_SECONDS = 1.0
 MIC_SIDE_FLOOR_DB = -65.0
 MIC_SIDE_GLIDE_SECONDS = 0.05
+#: And back to both AT ONCE when the side left out starts carrying sound:
+#: RISE above its own noise floor (which creeps up FLOOR_RISE a second when
+#: nothing quieter comes along), and no longer SPLIT under the side kept.
+#: The handover then glides over JOIN_GLIDE rather than GLIDE.
+MIC_SIDE_RISE_DB = 10.0
+MIC_SIDE_FLOOR_RISE_DB = 3.0
+MIC_SIDE_JOIN_GLIDE_SECONDS = 0.01
 
 #: How long an open microphone has to send something before the app says it
 #: has not. A real microphone is never digitally silent: even in a quiet room

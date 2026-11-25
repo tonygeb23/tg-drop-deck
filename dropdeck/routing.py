@@ -111,54 +111,122 @@ _MME_NAME = 31
 def same_device(a, b):
     """Are two names the same sound device, however Windows spelled them.
 
-    Equal; or one is the other cut to 31 characters, which is how MME
-    offers every device; or one is the endpoint's short name and the other
-    that name with its card in brackets, "CABLE Output" against "CABLE
-    Output (VB-Audio Virtual Cable)", which is what the registry and
-    PortAudio each call the same thing.
+    Equal, or one is the other cut to 31 characters, which is how MME offers
+    every device. Nothing looser: a short name standing for any device that
+    starts with it called "Microphone" the same card as every microphone on
+    the machine.
     """
     raw = (a or "", b or "")
-    a, b = raw[0].strip(), raw[1].strip()
-    if not a or not b:
+    if not raw[0].strip() or not raw[1].strip():
         return False
-    if a == b:
+    if raw[0].strip() == raw[1].strip():
         return True
     # Unstripped: the cut can end on a space, "CABLE Output (VB-Audio
     # Virtual " is exactly 31, and that space is part of MME's name.
     short, full = sorted(raw, key=len)
-    if len(short) == _MME_NAME and full.startswith(short):
-        return True
-    short, full = sorted((a, b), key=len)
-    return full.startswith(short + " (")
+    return len(short) == _MME_NAME and full.startswith(short)
 
 
-def captures_itself(far_end, captures, sent_to=""):
-    """Every input that would pick the send's own far end back up.
+def _split(name):
+    """The endpoint and its card: "CABLE Input (VB-Audio Virtual Cable)" is
+    ("CABLE Input", "VB-Audio Virtual Cable"). A name MME cut short keeps
+    whatever it has left of the card."""
+    name = (name or "").strip()
+    at = name.find(" (")
+    if at < 0:
+        return name, ""
+    return name[:at].strip(), name[at + 2:].rstrip(")").strip()
 
-    ``far_end`` is the recording device at the other end of the cable the
-    whole show is sent into ("CABLE Output (VB-Audio Virtual Cable)"), as
-    `cabletest.capture_for` finds it from the cable's own pairing, and
-    ``sent_to`` the playback end it is sent into. ``captures`` is a list of
-    (who, device name) pairs: the microphone and every source.
+
+def _same_card(a, b):
+    """Two card names from inside the brackets, either possibly cut by MME."""
+    a, b = a.strip().lower(), b.strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
+#: Virtual cables this app knows by name, as (pattern for the end a program
+#: plays into, pattern for the end a program records from). Each is matched
+#: against the endpoint's own name, the part before the card in brackets, and
+#: the card must be the same on both sides. A group named "which" must agree,
+#: so CABLE-A is never taken for CABLE-B.
+_CABLES = (
+    # VB-Audio CABLE and its A, B, C and D: "CABLE Input" and "CABLE Output",
+    # "CABLE-A Input" and "CABLE-A Output".
+    (r"cable(?P<which>-[a-d])? in(put)?\b", r"cable(?P<which>-[a-d])? output\b"),
+    # VoiceMeeter's virtual inputs and the B buses they feed by default:
+    # "VoiceMeeter Input" against "VoiceMeeter Output", the Aux and VAIO3
+    # pairs the same way, and the newer "Voicemeeter Out B1" spelling.
+    (r"voicemeeter(?P<which> aux| vaio3)? input\b",
+     r"voicemeeter(?P<which> aux| vaio3)? (output|out b\d)\b"),
+)
+
+#: Virtual Audio Cable names a line the same at both ends: "Line 1 (Virtual
+#: Audio Cable)" is the playback and the recording.
+_SAME_NAME_CARDS = ("virtual audio cable",)
+
+#: Recording endpoints that ARE what the same card plays: a Focusrite style
+#: "Loopback" input, Realtek's "Stereo Mix" and the like. Only ever a loop on
+#: the card the show is being sent INTO.
+_LOOPBACK_INPUT = r"(loopback|stereo mix|what u hear|wave out mix)\b"
+
+
+def loops_back(sent_to, heard_from):
+    """Would recording ``heard_from`` pick up what is sent into ``sent_to``.
+
+    Decided by the cable's naming and nothing else, and only for something
+    that IS a loop by construction: a known virtual cable's other end, or a
+    loopback input on the card the show is sent into. **A physical card's
+    microphone is never a loop here**, whatever Windows pairs it with. A
+    false refusal is worse than a missed loop: it takes a guest on a USB
+    headset off the air, where a missed loop is an echo somebody hears and
+    can stop. The registry pairs the two ends of a device by the card's
+    description, and a headset's speakers and microphone share one, so the
+    registry cannot be what decides (Mark, 24 November 2026).
+    """
+    import re
+    if not sent_to or not heard_from:
+        return False
+    out_name, out_card = _split(sent_to)
+    in_name, in_card = _split(heard_from)
+    if not _same_card(out_card, in_card):
+        return False
+    out_name, in_name = out_name.lower(), in_name.lower()
+    for plays, records in _CABLES:
+        played = re.match(plays, out_name)
+        recorded = re.match(records, in_name)
+        if (played and recorded and (played.group("which") or "")
+                == (recorded.group("which") or "")):
+            return True
+    if any(card in out_card.lower() for card in _SAME_NAME_CARDS):
+        return same_device(sent_to, heard_from) or out_name == in_name
+    return bool(re.match(_LOOPBACK_INPUT, in_name))
+
+
+def captures_itself(sent_to, captures, _unused=""):
+    """Every input that would pick the send's own audio back up.
+
+    ``sent_to`` is the device the whole show is sent into ("CABLE Input
+    (VB-Audio Virtual Cable)"), and ``captures`` a list of (who, device
+    name) pairs: the microphone and every source. `loops_back` says what
+    counts, and it is deliberately narrow.
 
     **This is the loop, and nothing used to stop it.** The send carries the
-    microphone and every source, so a source listening to the far end of
-    the send's own cable hears the show, puts it on the air, and the send
+    microphone and every source, so an input on the other end of the cable
+    the show goes into hears the show, puts it on the air, and the send
     carries it round again a cable's delay later: an echo that feeds itself.
-    A microphone set to the far end is the same thing. Returns one sentence
-    per input that would do it, to be said as the reason it was refused.
+    Returns one sentence per input that would do it.
     """
     found = []
-    if not far_end:
-        return found
     for who, name in captures or []:
-        if same_device(name, far_end):
+        if loops_back(sent_to, name):
             found.append(
-                "%s listens to %s, which is the other end of %s, where your "
-                "show is being sent. That would send the show back into "
-                "itself, round and round, so it is refused. Choose a "
-                "different input for %s, or send the show to another card."
-                % (who, name, sent_to or "that cable", _object(who)))
+                "%s listens to %s, which hears everything sent into %s, "
+                "where your show is being sent. That would send the show "
+                "back into itself, round and round, so it is refused. "
+                "Choose a different input for %s, or send the show "
+                "somewhere else." % (who, name, sent_to, _object(who)))
     return found
 
 

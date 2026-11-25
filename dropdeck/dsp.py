@@ -597,8 +597,145 @@ EVEN_OUT = {
 }
 
 
+def _tp_kernels(half, beta=7.0):
+    """Windowed sinc interpolators for the three points between two samples
+    at four times the rate: 2 * half taps each, unity at DC."""
+    grid = np.linspace(-half, half, 2 * half + 1)
+    window = np.kaiser(2 * half + 1, beta)
+    out = []
+    for t in (0.25, 0.5, 0.75):
+        u = t - np.arange(-half + 1, half + 1)
+        c = np.sinc(u) * np.interp(u, grid, window)
+        out.append((c / c.sum()).astype(np.float64))
+    return out
+
+
+def _sliding_min(values, width):
+    """min(values[i:i + width]) for every i that fits, in log2(width) passes."""
+    out = values.copy()
+    span = 1
+    while span * 2 <= width:
+        out = np.minimum(out[:-span], out[span:])
+        span *= 2
+    rest = width - span
+    if rest:
+        out = np.minimum(out[:len(out) - rest], out[rest:])
+    return out
+
+
+class TruePeakCeiling:
+    """`Ceiling`, aimed at the true peak, so "never louder than" means dBTP.
+
+    A sample peak limiter holds every SAMPLE under the ceiling and lets the
+    wave between them go over: measured by Mark on a brickwalled master,
+    sample peak -2.00 dBFS and true peak -0.22 dBTP. So the peak is looked
+    for at four times the rate, the way BS.1770 measures it, with a 24 tap
+    interpolator for each point between two samples.
+
+    **The gain is HELD flat over everything that interpolator leans on**,
+    C.ONAIR_TP_HALF samples either side of a peak plus C.ONAIR_TP_SMOOTH,
+    then averaged over C.ONAIR_TP_SMOOTH, so the attack is a short ramp and
+    still at or under what every peak needs. That needs lookahead, 56 samples
+    at 48 kHz, 1.2 ms, on the stream, the recorders and the send and nowhere
+    near the presenter. About 2.3 ms of work per 250 ms of stereo.
+
+    **What it does not promise.** Measured against soxr's 4x, worst of three
+    ten second runs at a -2 ceiling: music mastered to full scale -2.11
+    dBTP, the same pushed 6 dB into the ceiling -2.03, but a brickwalled
+    master -1.66 and bright noise -0.85. Gains that change from one sample
+    to the next, which is what limiting all the time is, lean on samples far
+    beyond any short interpolator. Only limiting at four times the rate
+    would close that, at several times the cost on four chains at once, so
+    Firm, which limits hardest, starts at -3 instead. On Mark's master the
+    sample peak ceiling this replaced let through -0.22 dBTP.
+    """
+
+    def __init__(self, samplerate, ceiling_db=-2.0, release_ms=100.0):
+        from . import constants as C
+        self.samplerate = float(samplerate)
+        self.ceiling_db = float(ceiling_db)
+        self.release_ms = max(1.0, float(release_ms))
+        self._half = int(C.ONAIR_TP_HALF)
+        self._smooth = int(C.ONAIR_TP_SMOOTH)
+        self._hold = self._half + self._smooth
+        self._pad = float(C.ONAIR_TP_PAD_DB)
+        self._kernels = _tp_kernels(self._half)
+        #: How late its output is, in samples.
+        self.delay = self._half + self._hold
+        self._xkeep = 2 * self._half - 1 + self._hold
+        self._gkeep = self._smooth - 1 + 2 * self._hold
+        self.reset()
+
+    def reset(self):
+        self._x = None
+        self._g = np.zeros(self._gkeep)
+        self._gain_db = 0.0
+
+    def process(self, block):
+        frames = len(block)
+        if not frames:
+            return block
+        H, M, L = self._half, self._hold, self._smooth
+        data = np.asarray(block, dtype=np.float64)
+        if self._x is None or self._x.shape[1] != data.shape[1]:
+            self._x = np.zeros((self._xkeep, data.shape[1]))
+        z = np.concatenate([self._x, data])
+        self._x = z[-self._xkeep:]
+        # The intervals whose interpolation has just become possible: the
+        # newest is j to j+1 with j = len(z) - 1 - H.
+        first = len(z) - frames - H
+        span = z[first - H + 1:first + frames + H]
+        env = np.maximum(np.abs(z[first:first + frames]),
+                         np.abs(z[first + 1:first + frames + 1])).max(axis=1)
+        for kernel in self._kernels:
+            for channel in range(z.shape[1]):
+                np.maximum(env, np.abs(np.correlate(span[:, channel], kernel,
+                                                    mode="valid")), out=env)
+        env *= 10.0 ** (self._pad / 20.0)
+        ceiling = 10.0 ** (self.ceiling_db / 20.0)
+        with np.errstate(divide="ignore"):
+            wanted = np.minimum(
+                0.0, -20.0 * np.log10(np.maximum(env, 1e-12) / ceiling))
+        # Instant attack and the release, exactly as Ceiling does it.
+        rise = 20.0 / (self.release_ms * 0.001 * self.samplerate)
+        ramp = rise * np.arange(frames, dtype=np.float64)
+        seeded = np.empty(frames + 1, dtype=np.float64)
+        seeded[0] = self._g[-1] + rise
+        seeded[1:] = wanted - ramp
+        fresh = np.minimum(ramp + np.minimum.accumulate(seeded)[1:], 0.0)
+        g = np.concatenate([self._g, fresh])
+        self._g = g[-self._gkeep:]
+        self._gain_db = float(g[-1])
+        held = _sliding_min(g, 2 * M + 1)
+        sums = np.concatenate([[0.0], np.cumsum(held)])
+        smoothed = (sums[L:L + frames] - sums[:frames]) / L
+        end = len(z) - self.delay
+        out = z[end - frames:end]
+        return (out * (10.0 ** (smoothed / 20.0))[:, None]).astype(np.float32)
+
+
+class _Delay:
+    """A fixed delay, block by block, so the untouched sound lines up with
+    the processed one it is crossfaded against."""
+
+    def __init__(self, frames):
+        self.frames = int(frames)
+        self._held = None
+
+    def reset(self):
+        self._held = None
+
+    def process(self, block):
+        if self._held is None or self._held.shape[1] != block.shape[1]:
+            self._held = np.zeros((self.frames, block.shape[1]),
+                                  dtype=np.float32)
+        both = np.concatenate([self._held, block])
+        self._held = both[-self.frames:] if self.frames else both[:0]
+        return both[:len(block)]
+
+
 class ProgramChain:
-    """The on air sound: a slow leveller, then the ceiling. Never raises.
+    """The on air sound: a slow leveller, then the true peak ceiling.
 
     What the listener gets, and only that. One instance each in the stream,
     the audio recorder, the picture recorder and the send, so none shares a
@@ -606,15 +743,24 @@ class ProgramChain:
     its own, after both sums are finished. It never touches the presenter's
     output, so nothing between a keypress and a sound has changed.
 
-    **The leveller holds while the duck is down** (``held``, which is
-    `DuckBus.loud`): under the voice or a drop the music is meant to be
-    quiet, and a leveller that noticed would wind it back up underneath
-    them. It also holds below C.ONAIR_FLOOR_LUFS, so a pause is not treated
-    as very quiet music. It measures what arrives, before its own gain, so a
-    block's correction never feeds back into its own measurement.
+    **The leveller holds while the music really is ducked** (``held``, which
+    the frame answers from the mixers' own duck gains): under the voice or a
+    drop the music is meant to be quiet, and a leveller that noticed would
+    wind it back up underneath them. A microphone open with ducking off is
+    not a duck. It also holds below C.ONAIR_FLOOR_LUFS, so a pause is not
+    treated as very quiet music. It measures what arrives, before its own
+    gain, so a block's correction never feeds back into its own measurement.
 
-    The ceiling is `Ceiling`, the voice chain's own: instant attack, nothing
-    held back, so the show is not one sample later for it.
+    **Off is a crossfade, and the work goes on.** ``on`` False hands back the
+    show untouched, after C.ONAIR_FADE_SECONDS: the compare key used to jump
+    10 dB in a sample. The leveller and the ceiling keep running while it is
+    off, so coming back lands where they would have been.
+
+    **Nothing that is not a number gets in.** One inf in a glitched file used
+    to reach the ceiling, take its gain to minus infinity and silence the
+    stream, both recordings and the send for the rest of the session, still
+    saying ON AIR. Every block is made finite and bounded on the way in, and
+    any state that is not finite is started again.
     """
 
     def __init__(self, samplerate, even=None, ceiling_db=None, held=None,
@@ -623,13 +769,19 @@ class ProgramChain:
         self.samplerate = int(samplerate)
         self.on = bool(on)
         self.even = even if even in EVEN_OUT else C.DEFAULT_ONAIR_EVEN
-        #: A callable answering whether the duck is down, or None.
+        #: A callable answering whether the music is ducked, or None.
         self.held = held
         self._floor = C.ONAIR_FLOOR_LUFS
-        self._ceiling = Ceiling(self.samplerate,
-                                C.DEFAULT_ONAIR_CEILING_DB
-                                if ceiling_db is None else ceiling_db,
-                                C.ONAIR_CEILING_RELEASE_MS)
+        self._sane = float(C.ONAIR_SANE_LEVEL)
+        self._ceiling = TruePeakCeiling(
+            self.samplerate,
+            (C.default_onair_ceiling(self.even) if ceiling_db is None
+             else ceiling_db),
+            C.ONAIR_CEILING_RELEASE_MS)
+        self._dry = _Delay(self._ceiling.delay)
+        self._fade_frames = max(1, int(C.ONAIR_FADE_SECONDS * self.samplerate))
+        #: How much of what goes out is the processed sound, 0 to 1.
+        self._wet = 1.0 if self.on else 0.0
         #: Where the leveller has the music, in decibels, and how loud the
         #: last window measured, for a report. Both this instance's own.
         self.gain_db = 0.0
@@ -659,6 +811,7 @@ class ProgramChain:
         self._window_energy = 0.0
         self._window_frames = 0
         self._ceiling.reset()
+        self._dry.reset()
 
     def _held(self):
         try:
@@ -666,16 +819,38 @@ class ProgramChain:
         except Exception:
             return False
 
+    def _sanitised(self, block):
+        data = np.asarray(block, dtype=np.float32)
+        if data.ndim == 1:
+            data = data[:, None]
+        if not np.all(np.isfinite(data)):
+            data = np.nan_to_num(data, nan=0.0, posinf=self._sane,
+                                 neginf=-self._sane)
+        return np.clip(data, -self._sane, self._sane)
+
     def process(self, block):
         """One block of the show in, the same length out."""
-        if not self.on or block is None or not len(block):
+        if block is None or not len(block):
             return block
         try:
-            out = np.asarray(block, dtype=np.float32)
+            data = self._sanitised(block)
+            if not (np.isfinite(self.gain_db)
+                    and np.isfinite(self._ceiling._gain_db)
+                    and np.all(np.isfinite(self._ceiling._g))):
+                self.reset()
+            dry = self._dry.process(data)
             plan = EVEN_OUT.get(self.even)
-            if plan is not None:
-                out = self._level(out, plan)
-            return self._ceiling.process(out)
+            wet = self._level(data, plan) if plan is not None else data
+            wet = self._ceiling.process(wet)
+            aim = 1.0 if self.on else 0.0
+            start = self._wet
+            if start == aim:
+                return wet if aim else dry
+            step = len(data) / float(self._fade_frames)
+            end = start + max(-step, min(step, aim - start))
+            self._wet = end
+            mix = np.linspace(start, end, len(data), dtype=np.float32)[:, None]
+            return (wet * mix + dry * (1.0 - mix)).astype(np.float32)
         except Exception:
             return block
 
@@ -688,7 +863,9 @@ class ProgramChain:
         if not self._held():
             # Measured only while not held, so the window is the MUSIC's
             # level and not the voice over it or the duck under it.
-            self._window.append((loudness.energy(block, rate), frames))
+            energy = loudness.energy(block, rate)
+            if np.isfinite(energy):
+                self._window.append((energy, frames))
             longest = plan["window"] * rate
             while (len(self._window) > 1
                    and sum(n for _e, n in self._window[1:]) >= longest):

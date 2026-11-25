@@ -1454,9 +1454,10 @@ class SettingsDialog(wx.Dialog):
         self.onair_ceiling.SetDigits(1)
         name_field(self.onair_ceiling, "Never louder than, in dBFS")
         self.onair_ceiling.SetToolTip(
-            "The loudest any moment of the show can be. Minus two leaves room "
-            "for MP3 and AAC, which come back out a little louder than they "
-            "went in.")
+            "The loudest any moment of the show can be, between the samples "
+            "as well. Minus two leaves room for MP3 and AAC, which come back "
+            "out louder than they went in; Firm starts at minus three, because "
+            "music limited hard all the time can still go a little over.")
         row.Add(self.onair_ceiling, 0)
         sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -1464,6 +1465,21 @@ class SettingsDialog(wx.Dialog):
             on = self.onair_on.GetValue()
             self.onair_even.Enable(on)
             self.onair_ceiling.Enable(on)
+
+        # Firm starts at minus three and the others at minus two. A ceiling
+        # still at the default of the mode being left moves with the mode;
+        # one the user chose stays where they put it.
+        self._onair_mode = self._onair_key()
+
+        def moved(event):
+            was, now = self._onair_mode, self._onair_key()
+            self._onair_mode = now
+            if (was != now and abs(float(self.onair_ceiling.GetValue())
+                                   - C.default_onair_ceiling(was)) < 0.01):
+                self.onair_ceiling.SetValue(C.default_onair_ceiling(now))
+            event.Skip()
+
+        self.onair_even.Bind(wx.EVT_CHOICE, moved)
 
         follows()
         self.onair_on.Bind(wx.EVT_CHECKBOX, lambda e: (follows(), e.Skip()))
@@ -1480,14 +1496,16 @@ class SettingsDialog(wx.Dialog):
             "hear as well as what goes out.")
         sizer.Add(self.match_loudness, 0, wx.ALL, 10)
 
+    def _onair_key(self):
+        keys = [key for key, _label in C.ONAIR_EVEN_CHOICES]
+        chosen = self.onair_even.GetSelection()
+        return keys[chosen] if 0 <= chosen < len(keys) else C.DEFAULT_ONAIR_EVEN
+
     @property
     def onair_settings(self):
         """What the On air sound tab says, as board fields."""
-        keys = [key for key, _label in C.ONAIR_EVEN_CHOICES]
-        chosen = self.onair_even.GetSelection()
         return {"onair_on": bool(self.onair_on.GetValue()),
-                "onair_even": keys[chosen] if 0 <= chosen < len(keys)
-                else C.DEFAULT_ONAIR_EVEN,
+                "onair_even": self._onair_key(),
                 "onair_ceiling_db": float(self.onair_ceiling.GetValue()),
                 "match_loudness": bool(self.match_loudness.GetValue())}
 

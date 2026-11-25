@@ -179,6 +179,13 @@ class DuckBus:
         #: microphone ever publishes here, and only when the board has duck
         #: while talking on. See Mixer._talk_ramp.
         self._talk = {}
+        #: Which mixers have their music below unity right now. What the on
+        #: air sound's leveller holds on: see music_down.
+        self._down = {}
+        #: Whether ducking is on at all. Set by the group with its mixers,
+        #: so "something loud is happening" is not reported as a duck that a
+        #: board has switched off. A lone Mixer leaves it on.
+        self.ducking = True
         self._lock = threading.Lock()
 
     def publish(self, key, loud):
@@ -189,15 +196,32 @@ class DuckBus:
         with self._lock:
             self._talk[key] = bool(talking)
 
+    def publish_down(self, key, down):
+        with self._lock:
+            self._down[key] = bool(down)
+
     def forget(self, key):
         with self._lock:
             self._loud.pop(key, None)
             self._talk.pop(key, None)
+            self._down.pop(key, None)
 
     @property
     def loud(self):
+        """Is something asking for the music to go down. Never while
+        ducking is off: then nothing is going to go down for it."""
         with self._lock:
-            return any(self._loud.values())
+            return self.ducking and any(self._loud.values())
+
+    @property
+    def music_down(self):
+        """Is the music really ducked on some card right now: ducking on and
+        a mixer's duck gain below unity. The on air leveller holds on this
+        and nothing looser. Holding whenever a microphone was open, ducking
+        or not, left a hot master 10 dB over the target for as long as
+        somebody kept their microphone open (Mark, 24 November 2026)."""
+        with self._lock:
+            return self.ducking and any(self._down.values())
 
     @property
     def talking(self):
@@ -242,8 +266,13 @@ class RateAdapter:
         self._owed = exact - take
         try:
             if take > 0:
-                got = self._resampler.resample_chunk(
-                    np.ascontiguousarray(fetch(take), dtype=np.float32))
+                piece = np.ascontiguousarray(fetch(take), dtype=np.float32)
+                if not np.all(np.isfinite(piece)):
+                    # A resampler fed a NaN carries it in its filter for
+                    # good, and every block after it is NaN too.
+                    piece = np.nan_to_num(piece, nan=0.0, posinf=1.0,
+                                          neginf=-1.0)
+                got = self._resampler.resample_chunk(piece)
                 if len(got):
                     self._held = np.concatenate([self._held, got])
         except Exception:
@@ -745,6 +774,9 @@ class Mixer:
 
         floor = self._floor_ramp(frames)
         talk = self._talk_ramp(frames)
+        self.duck_bus.publish_down(
+            self.key, self.ducking and (self._duck < 0.999
+                                        or self._talk < 0.999))
         if not isinstance(talk, np.ndarray) and talk == 1.0:
             return floor
         return floor * talk
@@ -853,6 +885,9 @@ class Mixer:
             self._duck = self._duck_target()
             self._talk = self._talk_from = self._talk_aim = \
                 self._talk_target()
+            self.duck_bus.publish_down(
+                self.key, self.ducking and (self._duck < 0.999
+                                            or self._talk < 0.999))
 
         # What this card is playing, offered to a monitor on another card.
         # Taken HERE, after the voices and before anything that belongs only
@@ -1524,6 +1559,7 @@ class MixerGroup:
     def ducking(self, value):
         for mixer in self._mixers.values():
             mixer.ducking = bool(value)
+        self.duck_bus.ducking = bool(value)
 
     @property
     def duck_db(self):

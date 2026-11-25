@@ -286,6 +286,11 @@ class _Ring:
         self.drops = 0
         self.inserts = 0
         self.holes = 0
+        #: Reads that came up a few milliseconds short and were made whole
+        #: with a repeat instead of a hole. See _rescued.
+        self.rescues = 0
+        self._last_rescue = None
+        self._reads = 0
         self._restart()
 
     def _restart(self):
@@ -303,6 +308,7 @@ class _Ring:
         self._window_low = None
         self._fix = 0
         self._low = 0
+        self._last_rescue = None
 
     def _frames(self, seconds):
         return max(1, int(round(seconds * self.rate)))
@@ -368,7 +374,11 @@ class _Ring:
             self._window_left = self._frames(C.RING_WINDOW_SECONDS)
             self._window_low = None
             self._fix = 0
+        self._reads += frames
         if self.available < frames:
+            rescued = self._rescued(frames, splice, margin)
+            if rescued is not None:
+                return rescued
             # The writer stopped. What is here fades out so the gap is a
             # silence and not a click, and the ring primes again.
             have = self.available
@@ -402,6 +412,55 @@ class _Ring:
                                       dtype=np.float32)[:, None]
             self._fresh = False
         return out
+
+    def _rescued(self, frames, splice, margin):
+        """A read a little short, made whole by playing a few ms twice.
+
+        Mark, 24 November 2026: with one callback in a hundred 4 ms late, a
+        microphone clocked 30 to 100 ppm slow still met one read an hour that
+        found the ring a few milliseconds short, and that was a 21 ms hole.
+        Every hole also taught the ring a whole write more margin, 10.7 ms
+        more delay in the presenter's ears for the rest of the session.
+
+        So a read that is short while the ring is running, with at least a
+        crossfade's worth to hand, is filled from audio already played, at
+        the point that best matches, crossfaded in exactly as an insert is:
+        the shortfall plus the whole margin, so the next read is not short
+        too. No margin is learnt from one. A second within a minute is no
+        longer a hiccup, so that one teaches the ring a write more margin,
+        as a hole does. A short read within a window of a rescue is a writer
+        that has really stopped, and is a hole, as it always was. Returns
+        None when it cannot be done.
+        """
+        have = self.available
+        short = frames - have
+        splice = min(splice, have)
+        if not self.primed or self._fresh or splice < 32:
+            return None
+        since = (None if self._last_rescue is None
+                 else self._reads - self._last_rescue)
+        if since is not None and since < self._frames(C.RING_WINDOW_SECONDS):
+            return None
+        search = self._frames(C.RING_SEARCH_SECONDS)
+        history = len(self.buf) - have - splice
+        least = short + margin
+        most = min(least + search, history)
+        if most < least:
+            return None
+        head = self._peek(0, splice)
+        span = self._peek(-most, most - least + splice)
+        back = most - self._best(head, span, splice)
+        incoming = self._peek(-back, frames)
+        self.available -= frames - back
+        up = np.linspace(0.0, 1.0, splice, dtype=np.float32)[:, None]
+        incoming[:splice] = head * (1.0 - up) + incoming[:splice] * up
+        if since is not None and since < 60 * self.rate:
+            self._extra = min(self._extra + self._largest_write,
+                              2 * self._largest_write)
+        self.rescues += 1
+        self._last_rescue = self._reads
+        self._fix = 0
+        return incoming
 
     def _decide(self, margin):
         """At the end of a window: is the ring holding too much, or too little."""
@@ -543,6 +602,8 @@ class MicInput:
         self.pick_louder = True
         self._side = None
         self._side_env = None
+        self._side_floor = None
+        self._side_quick = False
         self._side_held = 0.0
         self._side_for = _ASKED
         self._side_weights = (0.5, 0.5)
@@ -716,6 +777,7 @@ class MicInput:
             if device != self._side_for:
                 self._side = None
                 self._side_env = None
+                self._side_floor = None
                 self._side_held = 0.0
                 self._side_weights = (0.5, 0.5)
                 self._side_for = device
@@ -972,10 +1034,13 @@ class MicInput:
                 want = (1.0, 0.0) if side == 0 else (0.0, 1.0)
             have = self._side_weights
             if have == want:
+                self._side_quick = False
                 return pair[:, 0] * want[0] + pair[:, 1] * want[1]
             frames = len(pair)
-            step = frames / float(max(1, int(C.MIC_SIDE_GLIDE_SECONDS
-                                             * self.samplerate)))
+            # A second voice coming in is let in at once; see _judge_sides.
+            glide = (C.MIC_SIDE_JOIN_GLIDE_SECONDS if self._side_quick
+                     else C.MIC_SIDE_GLIDE_SECONDS)
+            step = frames / float(max(1, int(glide * self.samplerate)))
             moved = tuple(h + max(-step, min(step, w - h))
                           for h, w in zip(have, want))
             left = np.linspace(have[0], moved[0], frames, dtype=np.float32)
@@ -993,12 +1058,46 @@ class MicInput:
         change is only made once the evidence has pointed the same way for
         C.MIC_SIDE_HOLD_SECONDS of sound. Silence on both decides nothing,
         so a pause between sentences never puts the hiss back.
+
+        **Leaving one side out is slow and letting it back in is not.** Two
+        people on inputs 1 and 2 take turns, and the second one used to sit
+        under the mix for two seconds of every turn, measured by Mark on 24
+        November 2026. So the moment the side left out rises
+        C.MIC_SIDE_RISE_DB above its own noise floor, and is no longer
+        C.MIC_SIDE_SPLIT_DB under the side kept, both come back within a
+        block. The second test is what keeps a mic that only hears the other
+        person's bleed, a steady 18 dB under them, from flapping.
         """
         frames = len(pair)
         if not frames:
             return self._side
         power = np.mean(pair.astype(np.float64) ** 2, axis=0)
+        if not np.all(np.isfinite(power)):
+            # A broken sample decides nothing and is not remembered, or the
+            # smoothed levels would be NaN for the rest of the session.
+            return self._side
+        fast = 10.0 * np.log10(np.maximum(power, 1e-12))
+        floor = self._side_floor
+        seconds = frames / float(self.samplerate)
+        if (self._side is not None and floor is not None):
+            other = 1 - self._side
+            if (fast[other] > floor[other] + C.MIC_SIDE_RISE_DB
+                    and fast[other] > fast[self._side] - C.MIC_SIDE_SPLIT_DB
+                    and fast[other] > C.MIC_SIDE_FLOOR_DB):
+                self._side = None
+                self._side_held = 0.0
+                self._side_quick = True
+                self._side_env = power
+                self._side_floor = np.minimum(floor, fast)
+                return None
+        # The noise floor: falls at once to anything quieter, creeps up at
+        # C.MIC_SIDE_FLOOR_RISE_DB a second, so it is what a side sounds
+        # like with nobody talking into it.
+        self._side_floor = (fast.copy() if floor is None else np.minimum(
+            floor + C.MIC_SIDE_FLOOR_RISE_DB * seconds, fast))
         env = self._side_env
+        if env is not None and not np.all(np.isfinite(env)):
+            env = None
         if env is None:
             env = power
         else:
@@ -1042,6 +1141,8 @@ class MicInput:
         except Exception:
             threshold = C.TALK_THRESHOLD_DB
         power = float(np.mean(block[:, 0].astype(np.float64) ** 2))
+        if not np.isfinite(power):
+            return            # a broken block says nothing about a voice
         if 10.0 * np.log10(max(power, 1e-12)) > threshold:
             self._talk_left = int(C.TALK_HOLD_SECONDS * self.output_rate)
         else:

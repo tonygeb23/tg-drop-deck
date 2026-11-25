@@ -34,7 +34,8 @@ from . import audiofile
 from . import constants as C
 from . import loudness
 from .engine import probe
-from .slot import _loudness_fields, format_duration, take_loudness
+from .slot import (_loudness_fields, format_duration, loudness_due,
+                   measure_into, take_loudness, trim_was_set)
 
 
 def format_cue(seconds):
@@ -82,6 +83,8 @@ class Track:
     #: "whatever the playlist says", which is the case for almost every song.
     crossfade: float | None = None
     trim_db: float = 0.0
+    #: The user set that trim; the same rule as a pad's, see Slot.trim_set.
+    trim_set: bool = False
     #: Ticked or not. An unticked track stays in the running order, keeps its
     #: place and can be ticked again, but the player walks straight past it.
     #: Tony: "play this, this and this, don't play that."
@@ -100,6 +103,18 @@ class Track:
     loudness: float | None = None
     peak_db: float | None = None
     loudness_for: str | None = field(default=None, compare=False)
+    loudness_stamp: tuple | None = field(default=None, compare=False)
+    loudness_verified: bool = field(default=False, compare=False)
+
+    def __post_init__(self):
+        self._built = True
+
+    def __setattr__(self, name, value):
+        # The same as a pad's: a trim set on a song that exists is the
+        # user's, nought included. See Slot.trim_set.
+        object.__setattr__(self, name, value)
+        if name == "trim_db" and self.__dict__.get("_built"):
+            object.__setattr__(self, "trim_set", True)
 
     @property
     def is_drop(self) -> bool:
@@ -161,7 +176,7 @@ class Track:
         tail = float(self.tail_silence or 0.0)
         return max(0.0, duration - max(0.0, min(tail, duration)))
 
-    def read_metadata(self, loudness=False):
+    def read_metadata(self, loudness=False, stop=None):
         """Fill in artist, title and the run out. Safe to call twice.
 
         Returns True if anything changed. Never raises: a file with broken
@@ -190,7 +205,7 @@ class Track:
             changed = True
         if loudness and self.needs_loudness():
             try:
-                changed = self.measure_loudness() or changed
+                changed = self.measure_loudness(stop) or changed
             except Exception:
                 pass
         return changed
@@ -267,6 +282,7 @@ class Track:
         return {"filepath": self.filepath, "name": self.name,
                 "duration": self.duration, "kind": self.kind,
                 "crossfade": self.crossfade, "trim_db": float(self.trim_db),
+                "trim_set": bool(self.trim_set),
                 "enabled": bool(self.enabled),
                 "artist": self.artist, "title": self.title,
                 "tail_silence": self.tail_silence,
@@ -288,6 +304,7 @@ class Track:
             kind=kind if kind in (C.TRACK_SONG, C.TRACK_DROP) else C.TRACK_SONG,
             crossfade=_clean_crossfade(data.get("crossfade")),
             trim_db=float(data.get("trim_db", 0.0) or 0.0),
+            trim_set=trim_was_set(data),
             enabled=bool(data.get("enabled", True)),
             artist=data.get("artist"),
             title=data.get("title"),
@@ -299,19 +316,12 @@ class Track:
         return self
 
     def needs_loudness(self):
-        """Not measured for the file it holds now, and there to measure."""
-        return (bool(self.filepath) and self.loudness_for != self.filepath
-                and not self.is_missing)
+        """On the background pass: a file to measure. See slot.loudness_due."""
+        return loudness_due(self)
 
-    def measure_loudness(self):
+    def measure_loudness(self, stop=None):
         """Measure, on the background pass. True if anything changed."""
-        path = self.filepath
-        if not path or self.loudness_for == path:
-            return False
-        level, peak = audiofile.measure_loudness(path)
-        self.loudness, self.peak_db = level, peak
-        self.loudness_for = path
-        return True
+        return measure_into(self, stop)
 
 
 
@@ -693,14 +703,15 @@ class Playlist:
     def needs_metadata(self, loudness=False):
         """The tracks whose tags or run out have never been looked at.
 
-        ``loudness`` asks for the tracks not yet measured for loudness
-        matching as well. Only when matching is on: it decodes the whole
-        song, and a board that does not match has no use for the answer.
+        ``loudness`` asks for every track as well, when matching is on: the
+        pass checks each one's loudness against its file (slot.loudness_due)
+        and measures the ones that are new or have changed. It is not asked
+        here, because this runs on the window's thread.
         """
         return [t for t in self.tracks
                 if not t.is_missing
-                and (not t.has_metadata or t.tail_silence is None
-                     or (loudness and t.needs_loudness()))]
+                and (loudness or not t.has_metadata
+                     or t.tail_silence is None)]
 
     # ----------------------------------------------------------- relinking --
     def relink(self, index):

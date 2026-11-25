@@ -2074,7 +2074,8 @@ class Board:
             setattr(board, field, value is True)
         board.onair_even = _onair_even(data.get("onair_even"))
         board.onair_ceiling_db = _onair_ceiling(
-            data.get("onair_ceiling_db", C.DEFAULT_ONAIR_CEILING_DB))
+            data.get("onair_ceiling_db",
+                     C.default_onair_ceiling(board.onair_even)))
         board.playlist_volume = float(
             data.get("playlist_volume", C.DEFAULT_PLAYLIST_VOLUME))
         board.mic_device_name = data.get("mic_device_name")

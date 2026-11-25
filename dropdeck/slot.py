@@ -68,6 +68,11 @@ class Slot:
     loop: bool = field(default=False)
     #: Per-slot trim in decibels, so one loud sound can be tamed on its own.
     trim_db: float = 0.0
+    #: The user set that trim, so it wins over loudness matching even at
+    #: exactly 0 dB, which is how a pad is kept as recorded. A board saved
+    #: before this existed reads it as "any trim but nought", which is what
+    #: its trim meant then.
+    trim_set: bool = False
     #: Taken off the board. The slot keeps everything it had, including its
     #: sound and its hotkeys, and can be put back; it simply is not shown and
     #: its key does nothing. Removing one NEVER renumbers the others, because
@@ -110,7 +115,21 @@ class Slot:
         #: pad given another sound no longer matches it and is measured
         #: again; nothing uses a number for the wrong file.
         self.loudness_for = None
+        #: The file's size and modification time when it was measured, and
+        #: whether that has been checked against the file on this run. See
+        #: loudness_due.
+        self.loudness_stamp = None
+        self.loudness_verified = False
         self._last_pick = None
+        self._built = True
+
+    def __setattr__(self, name, value):
+        # Setting a trim on a pad that exists is the user setting it,
+        # whichever dialog or path it came through, so no way in can forget
+        # to say so. See trim_set.
+        object.__setattr__(self, name, value)
+        if name == "trim_db" and self.__dict__.get("_built"):
+            object.__setattr__(self, "trim_set", True)
 
     # ------------------------------------------------------------- identity --
     @property
@@ -168,21 +187,14 @@ class Slot:
         return bool(self.filepath) and not os.path.exists(self.filepath)
 
     def needs_loudness(self) -> bool:
-        """A file not yet measured for loudness matching. A folder pad plays
-        a different file each press, so it has no one loudness to match."""
-        return (bool(self.filepath) and self.loudness_for != self.filepath
-                and not self.is_folder and not self.is_missing)
+        """On the background pass: a file to measure for loudness matching.
+        A folder pad plays a different file each press, so it has no one
+        loudness to match. See loudness_due."""
+        return loudness_due(self)
 
-    def measure_loudness(self) -> bool:
+    def measure_loudness(self, stop=None) -> bool:
         """Measure, on the background pass. True if anything changed."""
-        from . import audiofile
-        path = self.filepath
-        if not path or self.loudness_for == path or self.is_folder:
-            return False
-        level, peak = audiofile.measure_loudness(path)
-        self.loudness, self.peak_db = level, peak
-        self.loudness_for = path
-        return True
+        return measure_into(self, stop)
 
     @property
     def display_name(self) -> str:
@@ -307,6 +319,7 @@ class Slot:
             "modifiers": self.modifiers,
             "loop": bool(self.loop),
             "trim_db": float(self.trim_db),
+            "trim_set": bool(self.trim_set),
             "folder_count": self.folder_count,
             "hidden": bool(self.hidden),
             "toggle_stop": bool(self.toggle_stop),
@@ -327,6 +340,7 @@ class Slot:
             modifiers=data.get("modifiers"),
             loop=bool(data.get("loop", bank_for_index(index) == C.LOOPING_BANK)),
             trim_db=float(data.get("trim_db", 0.0) or 0.0),
+            trim_set=trim_was_set(data),
             folder_count=_maybe_int(data.get("folder_count")),
             hidden=bool(data.get("hidden", False)),
             toggle_stop=bool(data.get("toggle_stop", False)),
@@ -342,6 +356,8 @@ class Slot:
         self.name = None
         self.duration = None
         self.trim_db = 0.0
+        self.trim_set = False          # after the trim: emptied, not chosen
+        forget_loudness(self)
         self.folder_count = None
         self._folder_files = []
         self._folder_stamp = None
@@ -360,21 +376,156 @@ def _number(value):
     return value
 
 
+def trim_was_set(data):
+    """Whether a saved pad's or song's trim was set by the user.
+
+    A board from before ``trim_set`` existed had no way to say "nought, and
+    I mean it", so there a trim of nought was matching's and anything else
+    the user's: it loads meaning exactly what it meant.
+    """
+    value = data.get("trim_set")
+    if isinstance(value, bool):
+        return value
+    try:
+        return float(data.get("trim_db", 0.0) or 0.0) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+# --------------------------------------------------------- loudness stamp --
+# Loudness numbers belong to one version of one file: its path, its size and
+# its modification time. Mark, 24 November 2026: a jingle re-rendered louder
+# under the same name kept the +6 dB measured on the quiet one, and played
+# with its peaks at +5.9 dBFS. Everything here that touches the disk runs on
+# the background pass, never between a keypress and a sound, because a stat
+# on a network share that has gone away can hang for half a minute.
+
+def file_stamp(path):
+    """(size, modification time in ns) of a file, or None for a file that is
+    not there or is a folder. Background pass only."""
+    import stat
+    try:
+        info = os.stat(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    if stat.S_ISDIR(info.st_mode):
+        return None
+    return (int(info.st_size), int(info.st_mtime_ns))
+
+
+def forget_loudness(item):
+    """Drop a pad's or a song's loudness, so it plays as it is."""
+    item.loudness_for = None
+    item.loudness = item.peak_db = None
+    item.loudness_stamp = None
+    item.loudness_verified = False
+
+
+def loudness_due(item):
+    """On the background pass: does ``item`` need measuring.
+
+    Numbers already held are checked against the file as it is now. If the
+    file has changed since, they are dropped at once, so the pad plays as
+    recorded rather than at a trim measured on something else, and it is
+    measured again. If it has not, they are marked as checked on this run,
+    which is what lets a trim from them bring a sound UP (see
+    loudness.trim_for).
+    """
+    path = item.filepath
+    if not path:
+        return False
+    stamp = file_stamp(path)
+    if stamp is None:
+        return False
+    if (item.loudness_for == path
+            and getattr(item, "loudness_stamp", None) == stamp):
+        item.loudness_verified = True
+        return False
+    if item.loudness_for is not None:
+        forget_loudness(item)
+    return True
+
+
+def measure_into(item, stop=None):
+    """Measure ``item``'s file, on the background pass. True if it changed.
+
+    ``stop`` (a threading.Event) ends it within one 100 ms piece, and a
+    measurement that was stopped is not kept: it is taken again next time.
+    """
+    from . import audiofile
+    path = item.filepath
+    if (not path or (item.loudness_for == path
+                     and getattr(item, "loudness_verified", False))):
+        return False
+    stamp = file_stamp(path)
+    if stamp is None:
+        return False
+    level, peak = audiofile.measure_loudness(path, stop=stop)
+    if stop is not None and stop.is_set():
+        return False
+    item.loudness, item.peak_db = level, peak
+    item.loudness_stamp = stamp
+    item.loudness_verified = True
+    # Last, so a press on another thread never pairs this path with the
+    # numbers of the file it held before.
+    item.loudness_for = path
+    return True
+
+
+def _plausible(level, peak):
+    """Could these two numbers have come out of measure_loudness.
+
+    BS.1770 gates everything under -70 LUFS away, so an integrated loudness
+    below that cannot be measured; a file that has a loudness has a peak; and
+    a programme cannot be more than about 7 dB louder than its own loudest
+    sample (a full scale square wave in both channels, K weighted, reads
+    about +6). Anything else in a board file is not a measurement.
+    """
+    if peak is not None and not -100.0 <= peak <= 12.0:
+        return False
+    if level is None:
+        return True
+    if not -70.0 <= level <= 10.0 or peak is None:
+        return False
+    return level - peak <= 8.0
+
+
 def _loudness_fields(item):
-    """The loudness a pad or a song saves: its numbers, only if they are for
-    the file it holds now, and never a path."""
-    if item.loudness_for is None or item.loudness_for != item.filepath:
+    """The loudness a pad or a song saves: its numbers and the stamp of the
+    file they were measured on, only if they are for the file it holds now,
+    and never a path."""
+    stamp = getattr(item, "loudness_stamp", None)
+    if (item.loudness_for is None or item.loudness_for != item.filepath
+            or stamp is None):
         return {}
     return {"loudness": item.loudness, "peak_db": item.peak_db,
-            "loudness_checked": True}
+            "loudness_checked": True, "loudness_stamp": list(stamp)}
 
 
 def take_loudness(item, data):
-    """Put saved loudness back on a pad or a song, for the file it names."""
+    """Put saved loudness back on a pad or a song, for the file it names.
+
+    A board file is not trusted. Numbers that could not have been measured
+    count as not measured at all; numbers without the stamp of the file
+    they were taken from are measured again; and numbers that are taken stay
+    unchecked until the background pass has compared that stamp with the
+    file on this machine. Until then they may only bring a sound down.
+    """
     if not isinstance(data, dict) or data.get("loudness_checked") is not True:
+        return
+    stamp = data.get("loudness_stamp")
+    if (not isinstance(stamp, (list, tuple)) or len(stamp) != 2
+            or not all(isinstance(v, int) and not isinstance(v, bool)
+                       and v >= 0 for v in stamp)):
         return
     level = _number(data.get("loudness"))
     peak = _number(data.get("peak_db"))
-    item.loudness = level if level is None or -80.0 <= level <= 10.0 else None
-    item.peak_db = peak if peak is None or -120.0 <= peak <= 30.0 else None
+    if (level is None) != (data.get("loudness") is None) or (
+            peak is None) != (data.get("peak_db") is None):
+        return
+    if not _plausible(level, peak):
+        return
+    item.loudness, item.peak_db = level, peak
+    item.loudness_stamp = (int(stamp[0]), int(stamp[1]))
+    item.loudness_verified = False
     item.loudness_for = item.filepath

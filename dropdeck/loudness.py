@@ -143,12 +143,17 @@ def trim_for(item, matching):
     ``filepath`` and the three loudness fields. Arithmetic on numbers
     measured earlier, so it is safe on the way from a keypress to a sound.
     A measurement taken of a different file than the one there now (the pad
-    was given another sound, or the file was relinked) is not used.
+    was given another sound, or the file was relinked) is not used. Numbers
+    read from a board file and not yet checked against the file on this
+    machine (slot.loudness_due) may cut a sound but never bring it up.
     """
     own = float(getattr(item, "trim_db", 0.0) or 0.0)
-    if own or not matching:
+    if own or not matching or getattr(item, "trim_set", False):
         return own
     if getattr(item, "loudness_for", None) != getattr(item, "filepath", None):
         return 0.0
-    return matched_trim(getattr(item, "loudness", None),
+    trim = matched_trim(getattr(item, "loudness", None),
                         getattr(item, "peak_db", None))
+    if not getattr(item, "loudness_verified", False):
+        trim = min(trim, 0.0)
+    return trim

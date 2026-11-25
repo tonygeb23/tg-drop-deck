@@ -20,7 +20,6 @@ import wx
 import webbrowser
 
 from . import appicon
-from . import cabletest
 from . import constants as C
 from . import dsp
 from . import endpoints
@@ -1193,28 +1192,33 @@ class DropDeckFrame(wx.Frame):
         matching = bool(getattr(board, "match_loudness", False))
         pending = board.playlist.needs_metadata(loudness=matching)
         # Only an attribute is looked at here, on the window's thread. Whether
-        # the file is there, or is a folder, is asked on the pass itself.
-        pads = ([slot for slot in board.slots
-                 if slot.filepath and slot.loudness_for != slot.filepath]
-                if matching else [])
+        # the file is there, is a folder or has changed since it was measured
+        # is asked on the pass itself (slot.loudness_due): every pad goes, so
+        # a sound re-rendered under the same name is measured again.
+        pads = [slot for slot in board.slots if slot.filepath] if matching else []
         if not pending and not pads:
             return None
 
         def work():
             changed = False
+            # The closing flag goes all the way down into the measuring, so
+            # closing in the middle of an hour long file is not kept waiting
+            # for the rest of it.
+            stop = self._closing
             for track in pending:
-                if self._closing.is_set():
+                if stop.is_set():
                     return
                 try:
-                    changed = track.read_metadata(loudness=matching) or changed
+                    changed = (track.read_metadata(loudness=matching, stop=stop)
+                               or changed)
                 except Exception:
                     pass          # a broken file is the trigger path's problem
             for slot in pads:
-                if self._closing.is_set():
+                if stop.is_set():
                     return
                 try:
                     if slot.needs_loudness():
-                        changed = slot.measure_loudness() or changed
+                        changed = slot.measure_loudness(stop) or changed
                 except Exception:
                     pass
             if changed and not self._closing.is_set():
@@ -1451,7 +1455,7 @@ class DropDeckFrame(wx.Frame):
         taken = self._keys_taken_elsewhere()
         if taken:
             bits.append(micdiag.keys_sentence(taken))
-        clashes = self._own_key_clashes()
+        clashes = self._own_key_clashes() + self._compare_key_note()
         bits.extend(clashes)
         # What the board asked for and was refused: a plugin not installed
         # here, a recording folder that is not on this computer, global
@@ -2206,8 +2210,6 @@ class DropDeckFrame(wx.Frame):
             # whose screen reader add-on has taken Ctrl+Shift+S or
             # Ctrl+Shift+P for itself (Clipboard Announcer's default is
             # Ctrl+Shift+S), which this app cannot see happening.
-            wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("P"),
-                                ID_ONAIR_COMPARE),
             wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT, ord("W"),
                                 ID_VIEW_NEXT),
             wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("V"), ID_PL_PASTE),
@@ -2314,6 +2316,13 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_RETURN, ID_PROPERTIES),
             wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_NUMPAD_ENTER, ID_PROPERTIES),
         ]
+        # Alt+Shift+P compares the on air sound, unless a pad on this board
+        # had the key first: bank 4 could always be given it, and a 3.10.1
+        # board that did keeps it. The compare is then on the menu only, and
+        # its label and the startup line say so. See _compare_key_holder.
+        if self._compare_key_holder() is None:
+            entries.append(wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT,
+                                               ord("P"), ID_ONAIR_COMPARE))
         for modifiers, key_code, index in fixed_accelerators():
             entries.append(wx.AcceleratorEntry(modifiers or wx.ACCEL_NORMAL,
                                                key_code, ID_SLOT_BASE + index))
@@ -2323,6 +2332,10 @@ class DropDeckFrame(wx.Frame):
                                                    slot.key_code,
                                                    ID_SLOT_BASE + slot.index))
         self._accelerators = entries
+        # The compare's label carries its key, or says whose it is now.
+        item = getattr(self, "onair_item", None)
+        if item is not None:
+            item.SetItemLabel(self._onair_label())
         # The same map with every bare printable key taken out, for while
         # somebody is typing into a box. See _apply_accelerators.
         self._typing_accelerators = [
@@ -3483,6 +3496,8 @@ class DropDeckFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             slot.trim_db = dialog.trim_db
+            # Chosen, so it wins over matching, nought included.
+            slot.trim_set = True
         self._sync_button(slot)
         self.announce_help(f"{slot.display_name} level {slot.trim_db:+.0f} decibels")
         self._touch()
@@ -3516,6 +3531,7 @@ class DropDeckFrame(wx.Frame):
             changes.append("named %s" % name)
         if chosen["trim_db"] != slot.trim_db:
             slot.trim_db = chosen["trim_db"]
+            slot.trim_set = True
             changes.append("level %+.0f decibels" % slot.trim_db)
         if chosen["loop"] is not None and chosen["loop"] != slot.loop:
             slot.loop = chosen["loop"]
@@ -4300,7 +4316,7 @@ class DropDeckFrame(wx.Frame):
                     consumer.processor = dsp.ProgramChain(
                         rate, even=board.onair_even,
                         ceiling_db=board.onair_ceiling_db,
-                        held=lambda: bus.loud, on=active)
+                        held=lambda: bus.music_down, on=active)
                 else:
                     chain.configure(on=active, even=board.onair_even,
                                     ceiling_db=board.onair_ceiling_db)
@@ -4320,8 +4336,38 @@ class DropDeckFrame(wx.Frame):
             state = "off for now"
         else:
             state = "on"
+        holder = self._compare_key_holder()
+        if holder is not None:
+            # No key after a tab: on Windows the menu would bind it as well.
+            return ("&Quick compare, on air sound is %s. No key, Alt+Shift+P "
+                    "plays %s on this board" % (state, holder.display_name))
         return ("&Quick compare, on air sound is %s" % state
                 + chr(9) + "Alt+Shift+P")
+
+    def _compare_key_holder(self):
+        """The bank 4 pad that has Alt+Shift+P, or None.
+
+        A pad's key is the user's, chosen before the compare existed, and a
+        sound that will not play is worse than a compare that has no key.
+        Whether or not it holds a sound: an emptied pad keeps its key.
+        """
+        board = getattr(self, "board", None)
+        if board is None:
+            return None
+        wanted = wx.ACCEL_ALT | wx.ACCEL_SHIFT
+        for slot in board.bank_slots(C.BANK_MISC):
+            if slot.key_code == ord("P") and (slot.modifiers or 0) == wanted:
+                return slot
+        return None
+
+    def _compare_key_note(self):
+        """For the startup line, once: why Alt+Shift+P is a sound here."""
+        holder = self._compare_key_holder()
+        if holder is None:
+            return []
+        return ["Alt+Shift+P plays %s on this board, so the quick compare of "
+                "the on air sound has no key. It is on the On air menu"
+                % holder.display_name]
 
     def _on_onair_compare(self, _event=None):
         """Alt+Shift+P. The on air sound off, and on again, to compare.
@@ -5035,6 +5081,10 @@ class DropDeckFrame(wx.Frame):
         if not event.GetActive():
             return
         wx.CallLater(C.BOARD_CHECK_DELAY_MS, self._check_board_file)
+        # Coming back from an editor is when a sound has been re-rendered
+        # under the same name: the pass checks every one against its file.
+        if getattr(self.board, "match_loudness", False):
+            wx.CallLater(C.BOARD_CHECK_DELAY_MS, self.scan_playlist_metadata)
 
     def _check_board_file(self, wait=False):
         """Has the board's file changed outside the app, and if so, act.
@@ -5942,18 +5992,18 @@ class DropDeckFrame(wx.Frame):
         unchosen = []
         refused = []
         soloed = self.anything_soloed()
-        # A source on the far end of the send's own cable is never opened
-        # while the send runs: it would put the show back into itself.
-        far_end = self._send_far_end() if self.sending() else ""
+        # A source on the other end of the virtual cable the send goes into
+        # is never opened while the send runs: it would put the show back
+        # into itself. By the cable's naming only; see routing.loops_back.
+        sent_to = self.board.send_device_name if self.sending() else ""
         for source in getattr(self, "sources", []):
             try:
                 loops = ([] if (getattr(source, "is_program", False)
                                 or not getattr(source, "wanted_on_air",
                                                False))
                          else routing.captures_itself(
-                             far_end, [(source.name,
-                                        getattr(source, "device_name", ""))],
-                             self.board.send_device_name))
+                             sent_to, [(source.name,
+                                        getattr(source, "device_name", ""))]))
                 if loops:
                     source.stop()
                     source.last_error = ("refused, it would send your show "
@@ -7462,22 +7512,6 @@ class DropDeckFrame(wx.Frame):
                 pass
         return " ".join(said)
 
-    def _send_far_end(self):
-        """The recording end of the cable the send goes into, or "".
-
-        Found the one way this app knows two ends belong together, the
-        cable's own pairing in the registry (`cabletest.capture_for`), and
-        never by guessing from a name. Reading the registry may fail for any
-        reason, and that is "not known", never a refusal.
-        """
-        name = self.board.send_device_name
-        if not name:
-            return ""
-        try:
-            return cabletest.capture_for(name) or ""
-        except Exception:
-            return ""
-
     def _mic_capture_name(self):
         """The input the microphone would really open, by name.
 
@@ -7490,8 +7524,8 @@ class DropDeckFrame(wx.Frame):
         return micinput.default_input_name()
 
     def _captures(self):
-        """(who, device name) for every input that would put the far end
-        back into the send: the microphone if it is OPEN and goes out, and
+        """(who, device name) for every input that could put the send back
+        into itself: the microphone if it is OPEN and goes out, and
         each sound card source set to go on air, muted or not, because
         unmuting it must not be what closes the loop. A closed microphone is
         Ctrl+M's to refuse, and a source you only listen to is never sent."""
@@ -7509,12 +7543,13 @@ class DropDeckFrame(wx.Frame):
         """Why these inputs would put the send back into itself. Sentences.
 
         Empty with no send set up, which is the ordinary case and costs one
-        attribute read.
+        attribute read. Only a known virtual cable's other end, or a loopback
+        input on the card sent into, is ever refused (routing.loops_back): a
+        refused guest is worse than a missed echo.
         """
         if not (self.board.send_on and self.board.send_device_name):
             return []
-        return routing.captures_itself(self._send_far_end(), captures,
-                                       self.board.send_device_name)
+        return routing.captures_itself(self.board.send_device_name, captures)
 
     def _live_bank_devices(self):
         """The bank routing as device indices, which is what routing wants."""
