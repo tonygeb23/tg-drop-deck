@@ -1693,15 +1693,13 @@ class DropDeckFrame(wx.Frame):
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_bank_changed)
         outer.Add(self.views, 1, wx.EXPAND | wx.ALL, 6)
 
-        stop = wx.Button(panel, ID_STOP_ALL,
-                         "Stop everything  (Escape three times)")
+        stop = wx.Button(panel, ID_STOP_ALL, "Stop everything")
         stop.SetFont(stop.GetFont().Bold())
         stop.SetMinSize(wx.Size(-1, self.FromDIP(38)))
-        stop.SetToolTip("Stop every sound and bed, with a short fade. "
-                        "This button does it at once; Escape needs three "
-                        "presses, so a stray one cannot take the show off")
         stop.Bind(wx.EVT_BUTTON, lambda _e: self.stop_all())
         outer.Add(stop, 0, wx.EXPAND | wx.ALL, 6)
+        self.stop_button = stop
+        self._sync_stop_words()
 
         panel.SetSizer(outer)
 
@@ -1771,9 +1769,9 @@ class DropDeckFrame(wx.Frame):
                       + "Ctrl+Space",
                       "Stops the most recent sound and leaves everything else "
                       "playing. Press it again for the one before that")
-        sounds.Append(ID_STOP_ALL, "Stop &everything",
-                      "Stops every sound, bed and the running order. "
-                      "Escape three times does it from the keyboard")
+        self.stop_all_item = sounds.Append(
+            ID_STOP_ALL, "Stop &everything",
+            "Stops every sound, bed and the running order")
         sounds.AppendSeparator()
         # A check item, so the menu itself says whether global hotkeys are
         # armed. While they are on, this app owns those combinations across the
@@ -1912,8 +1910,11 @@ class DropDeckFrame(wx.Frame):
         # reached neither, and the menu test skipped submenu headers and
         # never saw it. Two items in a submenu give Who is listening the T.
         mic_menu = wx.Menu()
+        # "Microphone", not "Microphone on": it is a check item, and
+        # unticked it read as "Microphone on, not checked", which says the
+        # opposite of itself in its first two words. The tick says the state.
         self.mic_item = mic_menu.AppendCheckItem(
-            ID_MIC_TOGGLE, "&Microphone on\tCtrl+M",
+            ID_MIC_TOGGLE, "&Microphone\tCtrl+M",
             "While it is on, the beds and the playlist duck out of the way")
         mic_menu.Append(ID_MIC_SETTINGS,
                         "Microphone &settings...\tCtrl+Shift+M",
@@ -2501,6 +2502,9 @@ class DropDeckFrame(wx.Frame):
     def _on_assign_global_hotkey(self, _event=None):
         slot = self._focused_slot()
         if slot is None:
+            # Said, the way every other pad command says it. This one
+            # returned in silence, so the menu item looked broken.
+            self.announce("Move to a sound button first")
             return
         dialog = AssignHotkeyDialog(self, slot, global_mode=True)
         try:
@@ -2799,7 +2803,9 @@ class DropDeckFrame(wx.Frame):
         """
         if (self._speech_level() == C.SPEECH_ALL
                 and getattr(self.board, "announce_playback", True)):
-            self.speaker.say(text)
+            # Through `_say`, so a sound started from a menu is named after
+            # the screen reader has read where focus landed, not under it.
+            self._say(text)
         self.status.SetStatusText(text, 1)
 
     def announce_recording(self, short, detail=""):
@@ -2872,7 +2878,10 @@ class DropDeckFrame(wx.Frame):
         hear for yourself, or that a screen reader will read off the control,
         belongs on one of the other three.
         """
-        self.speaker.say(text)
+        # Through `_say` like the others: an answer asked for from a menu
+        # was spoken the moment it closed, and the screen reader's reading of
+        # the focus coming back cut it off.
+        self._say(text)
         self.note(text)
 
     def note(self, text):
@@ -3127,6 +3136,35 @@ class DropDeckFrame(wx.Frame):
         """
         return None if self.board.stop_fade else 0.0
 
+    def _stop_presses(self):
+        """How many Escapes stop everything on this board, within range."""
+        return max(C.MIN_STOP_PRESSES,
+                   min(C.MAX_STOP_PRESSES, int(self.board.stop_presses)))
+
+    def _sync_stop_words(self):
+        """Say on the Stop everything button how many Escapes it takes.
+
+        It said "Escape three times" whatever Preferences said, and the
+        default has been two since 3.1. Called when the button is built, when
+        a board is opened and when Preferences closes, the three ways the
+        number can change.
+        """
+        presses = self._stop_presses()
+        words = "Escape %s" % {1: "once", 2: "twice"}.get(
+            presses, "%s times" % {3: "three", 4: "four"}.get(
+                presses, str(presses)))
+        button = getattr(self, "stop_button", None)
+        if button is not None:
+            button.SetLabel("Stop everything  (%s)" % words)
+            button.SetToolTip(
+                "Stop every sound and bed. This button does it at once; %s "
+                "from the keyboard, so a stray press cannot take the show off"
+                % words)
+        item = getattr(self, "stop_all_item", None)
+        if item is not None:
+            item.SetHelp("Stops every sound, bed and the running order. %s "
+                         "does it from the keyboard" % words)
+
     def _escape_pressed(self):
         """Escape, which takes three to stop the show.
 
@@ -3138,8 +3176,7 @@ class DropDeckFrame(wx.Frame):
         The count is spoken, because a key that appears to do nothing twice
         is a key you assume is broken.
         """
-        wanted = max(C.MIN_STOP_PRESSES,
-                     min(C.MAX_STOP_PRESSES, int(self.board.stop_presses)))
+        wanted = self._stop_presses()
         now = time.monotonic()
         if now - getattr(self, "_escape_at", 0.0) > self.ESCAPE_WINDOW_MS / 1000.0:
             self._escapes = 0
@@ -3183,10 +3220,11 @@ class DropDeckFrame(wx.Frame):
             self.mixer.set_playlist_gain(self.mixer.playlist_gain + step)
             self.board.playlist_volume = self.mixer.playlist_gain
             said = f"Playlist volume {percent(self.mixer.playlist_gain)}"
-            if self.streaming() and self.board.playlist_monitor_only:
+            if self.going_anywhere() and self.board.playlist_monitor_only:
                 # Worth saying while live. Turning the music down and not
                 # knowing whether the listeners heard it is the sort of
-                # doubt that ruins a show.
+                # doubt that ruins a show. A recording and the send take
+                # the same mix as the stream, so they count too.
                 said += ", what you hear only"
             self.announce(said)
         else:
@@ -3373,6 +3411,13 @@ class DropDeckFrame(wx.Frame):
                 and self._view_focused(VIEW_PLAYLIST)):
             if action == "clear":
                 self.playlist_panel.remove_selected()
+                return
+            if action == "properties":
+                # Alt+Enter is properties everywhere, and a row's own setting
+                # is its crossfade: the same thing its menu offers. The guide
+                # has always said so, and the key answered "That one is for
+                # the soundboard".
+                self.playlist_panel.crossfade_selected()
                 return
             self.announce("That one is for the soundboard. "
                           "Ctrl+Shift+S goes back to it")
@@ -3744,7 +3789,15 @@ class DropDeckFrame(wx.Frame):
             button = self.pages[self._current_bank()].first_visible()
             if button is not None:
                 button.SetFocus()
-        self.announce(self._view_summary(view))
+        # The view and the bank only. Focus is moving as this is said, and
+        # the screen reader reads the row or the pad it lands on, so the whole
+        # playlist summary on top of that was cut off or cut it off. The
+        # summary is still said by pressing the key again where you are.
+        if view == VIEW_PLAYLIST:
+            self.announce("Playlist")
+        else:
+            self.announce("Soundboard, %s"
+                          % self.board.bank_name(self._current_bank()))
 
     def show_view_playlist(self):
         """Bring the playlist up without announcing anything.
@@ -4463,7 +4516,9 @@ class DropDeckFrame(wx.Frame):
         if self._mic_open():
             self.mic.stop()
             self.mic_item.Check(False)
-            self.announce("Microphone off. Music back up")
+            # Two words. Feedback 48: the whole line was said on every press
+            # of a show, and "music back up" was said with ducking off too.
+            self.announce("Mic off")
             self._update_status()
             return False
 
@@ -4499,14 +4554,10 @@ class DropDeckFrame(wx.Frame):
         if fell_back is not None and fell_back != micinput.SYSTEM_DEFAULT:
             # Named as the one that was CHOSEN, by its full name: the route it
             # came in by may be MME, which cuts every name to 31 characters.
-            line = "Microphone on, %s. Music ducked" % _input_name(fell_back)
+            name = _input_name(fell_back)
         else:
-            line = ("Microphone on, %s. Music ducked"
-                    % describe_input(self.mic.device))
-        if missing:
-            line += (". Your chosen microphone, %s, is not plugged in, so this "
-                     "is the system default" % missing)
-        self.announce(line)
+            name = describe_input(self.mic.device)
+        self.announce(self._mic_on_line(name, fell_back is not None, missing))
         if self.mic.default_by_mme and not getattr(self, "_told_slow_mic",
                                                    False):
             # Once a session, queued behind the line above. Everything else
@@ -4531,6 +4582,32 @@ class DropDeckFrame(wx.Frame):
         wx.CallLater(C.MIC_SIGNAL_CHECK_MS, self._check_mic_signal,
                      self.mic.openings)
         return True
+
+    def _mic_on_line(self, name, rerouted=False, missing=None):
+        """What Ctrl+M and Alt+Shift+M say when the microphone opens.
+
+        Feedback 48: it was long, and the same long line on every press of a
+        show. "Mic on", then only what is news. The device the first time
+        this session, when it is not the one opened last, or when it came in
+        another way, and never on the tenth press of the same microphone.
+        "Music ducked" only while ducking is on: with Ctrl+D off nothing goes
+        down, and saying it did was untrue. "Not on air" while a stream, a
+        recording or the send is running and "Put the microphone on air" is
+        off, because the presenter hears themselves perfectly and nobody
+        else does.
+        """
+        parts = ["Mic on"]
+        if rerouted or missing or name != getattr(self, "_mic_named", None):
+            parts[0] += ", " + name
+        self._mic_named = name
+        if self.mixer.ducking:
+            parts.append("Music ducked")
+        if self.going_anywhere() and not self.board.stream_mic:
+            parts.append("Not on air")
+        if missing:
+            parts.append("Your chosen microphone, %s, is not plugged in, so "
+                         "this is the system default" % missing)
+        return ". ".join(parts)
 
     @staticmethod
     def _route(device):
@@ -4895,7 +4972,8 @@ class DropDeckFrame(wx.Frame):
             menu.Append(ID_RENAME, "Re&name...\tF2")
             menu.Append(ID_TRIM, f"&Level... (now {slot.trim_db:+.0f} decibels)")
         if slot.is_bed:
-            item = menu.AppendCheckItem(ID_LOOP, "&Loop this bed")
+            # O, because Level above it has L on every pad's menu.
+            item = menu.AppendCheckItem(ID_LOOP, "L&oop this bed")
             item.Check(bool(slot.loop))
         if slot.bank == C.BANK_MISC:
             menu.Append(ID_HOTKEY,
@@ -5607,6 +5685,7 @@ class DropDeckFrame(wx.Frame):
         self.mixer.bed_fade_in = board.bed_fade_in
         self.mixer.bed_fade_out = board.bed_fade_out
         self._sync_warning()
+        self._sync_stop_words()
         self.stop_playlist(quiet=True)
         self.player.playlist = board.playlist
         self.player.index = -1
@@ -6423,11 +6502,17 @@ class DropDeckFrame(wx.Frame):
         video = getattr(self, "stream_item", None)
         radio = getattr(self, "stream_audio_item", None)
         on_video = live and self.board.live_to == C.LIVE_TO_VIDEO
+        # The letter that put you on air takes you off, as the key does. It
+        # was "Come o&ff air" on both, and F is Open the recordings folder,
+        # so Alt+F reached neither while live. On air has twenty four items
+        # and no free letter any of these words contain, so the label keeps
+        # the letter of the item it stands in for rather than taking one.
         if video is not None:
-            video.SetItemLabel(("Come o&ff air" if on_video
+            video.SetItemLabel(("&Go off air from video" if on_video
                                 else "&Go live on video") + chr(9) + "Ctrl+B")
         if radio is not None:
-            radio.SetItemLabel(("Come o&ff air" if (live and not on_video)
+            radio.SetItemLabel(("Go off air from ra&dio"
+                                if (live and not on_video)
                                 else "Go live on ra&dio")
                                + chr(9) + "Alt+Shift+B")
 
@@ -6438,6 +6523,19 @@ class DropDeckFrame(wx.Frame):
 
     def _destination_key(self, which):
         return "Ctrl+B" if which == C.LIVE_TO_VIDEO else "Alt+Shift+B"
+
+    def _on_air_name(self):
+        """The station or the platform by name, for "On air". No address:
+        that is the setting, and the name is what its owner calls it. The
+        two names are never borrowed one for the other (see where_it_goes)."""
+        board = self.board
+        if board.live_to == C.LIVE_TO_VIDEO:
+            channel = (board.video_name or "").strip()
+            platform = streamout.server_label(board.video_server) or ""
+            if channel and platform:
+                return "%s, on %s" % (channel, platform)
+            return channel or platform or "your video platform"
+        return (board.stream_name or "").strip() or "your radio station"
 
     def start_stream(self):
         """Open the tap and start the thread. Says why if it cannot.
@@ -7325,8 +7423,9 @@ class DropDeckFrame(wx.Frame):
         """
         item = getattr(self, "send_item", None)
         if item is not None:
+            # I both ways. "Stop sen&ding" shared D with Go live on radio.
             item.SetItemLabel(
-                ("Stop sen&ding this show" if self.sending()
+                ("Stop sending th&is show" if self.sending()
                  else "Send th&is show to another program...")
                 + chr(9) + "Alt+Shift+O")
         item = getattr(self, "send_monitor_item", None)
@@ -8070,16 +8169,18 @@ class DropDeckFrame(wx.Frame):
         self.board.live_to = want
         self._touch()
         report = self.preflight()
+        # The key that really goes there. This said "Ctrl+B now goes to your
+        # radio station", and since 3.8.2 Ctrl+B is always the video platform
+        # and Alt+Shift+B the radio station, whatever is picked here.
+        key = self._destination_key(want)
         if report is not None and report.blocked:
-            self.announce("Ctrl+B now goes to your %s. %s"
-                          % ("video platform" if want == C.LIVE_TO_VIDEO
-                             else "radio station", report.stops[0].text))
+            self.announce("%s goes live to %s. %s"
+                          % (key, self._destination_words(want),
+                             report.stops[0].text))
         else:
-            self.announce("Ctrl+B now goes to %s"
-                          % (report.summary() if report is not None
-                             else "your " + ("video platform"
-                                             if want == C.LIVE_TO_VIDEO
-                                             else "radio station")))
+            self.announce("%s goes live to %s"
+                          % (key, report.summary() if report is not None
+                             else self._destination_words(want)))
         self._rebuild_station_menu()
         self._update_status()
 
@@ -8282,9 +8383,20 @@ class DropDeckFrame(wx.Frame):
             # video, 128k audio to a.rtmps.youtube.com" was never heard by
             # anybody. The same lesson is already written down twenty lines
             # from here and was not applied on this path.
-            said = "On air, %s" % detail if detail else "On air"
-            warning = self._going_live_warning()
-            self.announce("%s. %s" % (said, warning) if warning else said)
+            #
+            # And the whole line once per broadcast. Every reconnect said it
+            # again, server address and all, and on a flaky connection that
+            # is a paragraph every few minutes about a place already known.
+            # The numbers are still on Ctrl+Shift+B.
+            streamer = getattr(self, "streamer", None)
+            if streamer is not None and getattr(
+                    self, "_aired_streamer", None) is streamer:
+                self.announce("Back on air")
+            else:
+                self._aired_streamer = streamer
+                said = "On air, %s" % self._on_air_name()
+                warning = self._going_live_warning()
+                self.announce("%s. %s" % (said, warning) if warning else said)
         elif state == streamout.CONNECTING:
             self.announce_help("Connecting to the server")
         elif state == streamout.RECONNECTING:
@@ -8940,6 +9052,7 @@ class DropDeckFrame(wx.Frame):
                     board_module.remember_record_folder(folder)
                 self.board.record_folder = folder
             self.board.stop_presses = int(dialog.stop_presses.GetValue())
+            self._sync_stop_words()
             self.board.stop_fade = dialog.stop_fade.GetValue()
             self.board.playlist.crossfade = dialog.crossfade
             stream = dialog.stream_settings

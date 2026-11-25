@@ -51,6 +51,39 @@ MOD_CTRL = wx.ACCEL_CTRL
 MOD_SHIFT = wx.ACCEL_SHIFT
 
 
+def _speech_level_of(window):
+    """The board's speech level, found by walking up to the frame.
+
+    A dialog speaks through a speaker it borrows from its parent, and its
+    parent may be another dialog (the hotkey window opened from Properties),
+    so the board is looked for up the chain rather than one level up.
+    """
+    while window is not None:
+        board = getattr(window, "board", None)
+        if board is not None and hasattr(board, "speech_level"):
+            return board.speech_level
+        try:
+            window = window.GetParent()
+        except Exception:
+            break
+    return C.DEFAULT_SPEECH_LEVEL
+
+
+def _level_allows(window, essential=True):
+    """Whether a dialog's own line is spoken at this board's speech level.
+
+    The frame's rule, for the lines a dialog says itself: an ``essential``
+    one (the frame's `announce`) is silent only at "none", and a
+    confirmation (its `announce_help`) is said only at "all". These lines
+    went straight to the speaker, so "none" silenced the app and not its
+    windows.
+    """
+    level = _speech_level_of(window)
+    if level == C.SPEECH_NONE:
+        return False
+    return essential or level == C.SPEECH_ALL
+
+
 class AppKey(str):
     """What one of the window's own keys does, as `_hotkey_map` hands it over.
 
@@ -243,9 +276,13 @@ class AssignHotkeyDialog(wx.Dialog):
         The captured key goes into a read-only edit and the clash warning into
         a static text; neither fires an accessible event, so without this the
         dialog is silent about the only two things it has to tell you.
+
+        Essential, then, by the frame's rule: the key captured, a clear and
+        the reason one is refused cannot be known any other way. Only "none"
+        silences them, as it silences everything.
         """
         speaker = getattr(self.GetParent(), "speaker", None)
-        if speaker is not None:
+        if speaker is not None and _level_allows(self):
             speaker.say(text)
 
     def _on_key(self, event):
@@ -420,6 +457,16 @@ class SearchDialog(wx.Dialog):
         self.results.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._accept(False))
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
 
+        #: The count is said once typing stops, not on every key. One timer,
+        #: restarted by each change, so five letters typed quickly are one
+        #: count rather than five queued behind each other. A CallLater and
+        #: not a wx.Timer owned by this window: a timer whose owner has been
+        #: destroyed is an access violation when it fires (measured, with a
+        #: letter typed and the window closed inside the wait).
+        self._count_later = None
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+        self._closed = False
+
         self._matches = []
         self._refresh("")
         self.query.SetFocus()
@@ -430,16 +477,57 @@ class SearchDialog(wx.Dialog):
         if self._matches:
             self.results.SetSelection(0)
         self.play_button.Enable(bool(self._matches))
-        if speak:
-            speaker = getattr(self.GetParent(), "speaker", None)
-            if speaker is not None:
-                # The count only ever appeared as a silently changing list, so
-                # typing into this box gave a screen reader user nothing back -
-                # and no matches at all was indistinguishable from a match.
-                n = len(self._matches)
-                speaker.say("No matches" if not n else
-                            "%d match%s" % (n, "" if n == 1 else "es"),
-                            interrupt=False)
+        if speak and not self._closed:
+            later = self._count_later
+            if later is not None and later.IsRunning():
+                later.Restart(C.SEARCH_COUNT_DELAY_MS)
+            else:
+                self._count_later = wx.CallLater(C.SEARCH_COUNT_DELAY_MS,
+                                                 self._say_count)
+
+    def _say_count(self):
+        """The number of matches, once typing has stopped.
+
+        The count only ever appeared as a silently changing list, so typing
+        into this box gave a screen reader user nothing back, and no matches
+        at all was indistinguishable from a match.
+
+        **Essential, by the frame's three channel rule**: it is what you
+        cannot otherwise know without leaving the box you are typing in, the
+        same as a number you asked for, so it is said at "essential" and
+        silenced only at "none". At "none" the list still shows it.
+        """
+        # A window that has gone is False. IsShown as well as the flag:
+        # Escape and Cancel close it from wx's own side, and a hidden search
+        # is a closed one.
+        if not self or self._closed or not self.IsShown() \
+                or not _level_allows(self):
+            return
+        speaker = getattr(self.GetParent(), "speaker", None)
+        if speaker is None:
+            return
+        n = len(self._matches)
+        speaker.say("No matches" if not n else
+                    "%d match%s" % (n, "" if n == 1 else "es"),
+                    interrupt=False)
+
+    def _stop_counting(self):
+        """Nothing is said about a search that has closed."""
+        self._closed = True
+        later, self._count_later = self._count_later, None
+        if later is not None:
+            try:
+                later.Stop()
+            except Exception:
+                pass
+
+    def _on_destroy(self, event):
+        self._stop_counting()
+        event.Skip()
+
+    def EndModal(self, code):
+        self._stop_counting()
+        super().EndModal(code)
 
     def _on_filter(self, _event):
         self._refresh(self.query.GetValue(), speak=True)
@@ -658,7 +746,9 @@ class SlotPropertiesDialog(wx.Dialog):
         return text + ("   (%s)" % duration if duration else "")
 
     def _say(self, text):
-        if self.speaker is not None:
+        # A confirmation of the key the hotkey window has just said, so at
+        # "all" only, the frame's announce_help rule.
+        if self.speaker is not None and _level_allows(self, essential=False):
             self.speaker.say(text)
 
     # ------------------------------------------------------------- hotkeys --
@@ -3442,9 +3532,12 @@ class DropsLibraryDialog(wx.Dialog):
         self._refresh()
         self.list.SetFocus()
 
-    def _say(self, text):
+    def _say(self, text, essential=False):
+        """Mostly confirmations of what was just done, so "all" only. Adding
+        files that were all there already is essential: nothing changed on
+        screen, and only this says so."""
         speaker = getattr(self.GetParent(), "speaker", None)
-        if speaker is not None:
+        if speaker is not None and _level_allows(self, essential):
             speaker.say(text)
 
     def _refresh(self, keep=None):
@@ -3479,7 +3572,7 @@ class DropsLibraryDialog(wx.Dialog):
         added = self.library.add(paths)
         self._refresh(keep=len(self.library) - len(added) if added else None)
         if not added:
-            self._say("Those are already in the library")
+            self._say("Those are already in the library", essential=True)
         else:
             self._say("%d added" % len(added))
 
@@ -3747,8 +3840,10 @@ class NativePreview:
 
     # ---------------------------------------------------------------- work --
     def _say(self, text):
+        # Only ever a file that will not play: essential, the frame's rule
+        # for a failure you could not otherwise hear.
         speaker = getattr(self.frame, "speaker", None)
-        if speaker is not None:
+        if speaker is not None and _level_allows(self.frame):
             speaker.say(text)
 
     def _silence(self):
@@ -4214,7 +4309,9 @@ class FeedbackDialog(wx.Dialog):
         self.message.Bind(wx.EVT_TEXT, lambda _e: self._refresh())
         outer.Add(self.message, 1, wx.EXPAND | wx.ALL, 10)
 
-        outer.Add(wx.StaticText(self, label="What will be &sent"), 0,
+        # W, not S: Submit has S, and two of one letter is a letter that
+        # only moves between them. The preview is the one read, not used.
+        outer.Add(wx.StaticText(self, label="What &will be sent"), 0,
                   wx.LEFT | wx.RIGHT, 10)
         self.preview = wx.TextCtrl(
             self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
@@ -6026,7 +6123,8 @@ class ShotCheckDialog(wx.Dialog):
         self.go = wx.Button(self, wx.ID_OK, "&Check the shot")
         self.go.SetDefault()
         row.AddButton(self.go)
-        shut = wx.Button(self, wx.ID_CANCEL, "&Close")
+        # L, not C, which is Check the shot. Escape closes it anyway.
+        shut = wx.Button(self, wx.ID_CANCEL, "C&lose")
         row.AddButton(shut)
         row.Realize()
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 10)
@@ -6244,7 +6342,8 @@ class ColourChoiceDialog(wx.Dialog):
 
         row = wx.StdDialogButtonSizer()
         row.AddButton(wx.Button(self, wx.ID_OK, "&Use this one"))
-        row.AddButton(wx.Button(self, wx.ID_CANCEL, "&Cancel"))
+        # A, not C, which is the Colours list. Escape cancels anyway.
+        row.AddButton(wx.Button(self, wx.ID_CANCEL, "C&ancel"))
         row.Realize()
         outer.Add(row, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
 

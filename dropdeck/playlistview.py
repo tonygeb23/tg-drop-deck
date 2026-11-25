@@ -609,9 +609,13 @@ class PlaylistPanel(wx.Panel):
                 ID_PL_ROW_TICK, "&Ticked to play	Space")
             item.Check(bool(track.enabled))
             menu.AppendSeparator()
+            # One letter each. T was Ticked, Move to the top and Stop, and R
+            # was Remove and the random drop, so the second of each was a
+            # letter that only moved the highlight. Ticked and Remove keep
+            # theirs, the ones a menu user reaches for.
             menu.Append(ID_PL_ROW_UP, "Move &up	Alt+Up")
             menu.Append(ID_PL_ROW_DOWN, "Move &down	Alt+Down")
-            menu.Append(ID_PL_ROW_TOP, "Move to the &top	Alt+Home")
+            menu.Append(ID_PL_ROW_TOP, "Move to the t&op	Alt+Home")
             menu.Append(ID_PL_ROW_BOTTOM, "Move to the &end	Alt+End")
             menu.Append(ID_PL_ROW_FADE,
                         "&Crossfade out of this one... (now %s)"
@@ -619,7 +623,7 @@ class PlaylistPanel(wx.Panel):
                             track.crossfade_seconds(self.playlist.crossfade))
                            or "none"))
             menu.Append(ID_PL_ROW_RANDOM,
-                        "Insert a &random drop from the library\tAlt+D")
+                        "Insert a ra&ndom drop from the library\tAlt+D")
             menu.Append(ID_PL_ROW_DROP, "&Insert a drop before this...")
             if track.is_drop:
                 menu.Append(ID_PL_ROW_TO_LIBRARY,
@@ -630,7 +634,7 @@ class PlaylistPanel(wx.Panel):
 
         menu.Append(ID_PL_ROW_ADD, "&Add files to the end...")
         if self.player.playing:
-            menu.Append(ID_PL_ROW_STOP, "S&top the playlist")
+            menu.Append(ID_PL_ROW_STOP, "Stop the pla&ylist")
 
         position = event.GetPosition()
         if position == wx.DefaultPosition or tuple(position) == (-1, -1):
@@ -742,17 +746,43 @@ class PlaylistPanel(wx.Panel):
         if index is None:
             self.frame.announce("There is nothing to remove")
             return
+        # The track on the air is the one row Delete asks about, because
+        # removing it stops the music, and a stray Delete mid show was a
+        # silent stop. No is the default so Enter keeps it playing. Every
+        # other row goes at once, as it always has.
+        on_air = self.player.playing and self.player.index == index
+        if on_air:
+            name = self.playlist[index].display_name
+            answer = wx.MessageBox(
+                "%s is on the air. Removing it stops the playlist.\n\n"
+                "Remove it and stop the music?" % name,
+                "Remove the track on the air",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION, self.frame)
+            came_back = getattr(self.frame, "_window_came_back", None)
+            if callable(came_back):
+                came_back()
+            if answer != wx.YES:
+                self.frame.announce("%s is still playing" % name)
+                return
+            # Asked again: the song may have ended while the box was up.
+            on_air = self.player.playing and self.player.index == index
         track = self.playlist.remove(index)
         if track is None:
             return
         # Removing what is on air would leave the player pointing at a
         # different song from the one you can hear, so it is taken off first.
-        if self.player.playing and self.player.index == index:
+        if on_air:
             self.frame.stop_playlist(quiet=True)
         elif self.player.index > index:
             self.player.index -= 1
         self.refresh(keep=min(index, len(self.playlist) - 1))
-        self.frame.announce_help("Removed %s" % track.display_name)
+        if on_air:
+            # Essential: the music stopping is the news, at every level but
+            # none, and it used to be said at "all" only.
+            self.frame.announce("Removed %s. The playlist has stopped"
+                                % track.display_name)
+        else:
+            self.frame.announce_help("Removed %s" % track.display_name)
         self.frame.playlist_changed()
 
     def move_to_end(self, top):

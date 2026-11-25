@@ -142,6 +142,19 @@ def bound_ids():
 
 
 app = wx.App(redirect=False)
+# No sound card. The row and bed menus below are read while something plays,
+# and nothing in this file needs to be heard.
+import dropdeck.ui as _uimod                           # noqa: E402
+from dropdeck.mixer import MixerGroup as _MixerGroup   # noqa: E402
+
+
+class _QuietGroup(_MixerGroup):
+    def __init__(self, *args, **kw):
+        kw["open_stream"] = False
+        super().__init__(*args, **kw)
+
+
+_uimod.MixerGroup = _QuietGroup
 frame = DropDeckFrame()
 frame.board.path = os.path.join(_tempfile.mkdtemp(), "menus.json")
 bar = frame.GetMenuBar()
@@ -170,84 +183,101 @@ check("and no two menus share one",
 # ---------------------------------------------------------------------------
 print("Every item in every menu")
 
-problems = {"no mnemonic": [], "unbound": [], "bad accelerator": [],
-            "wrong command": []}
-duplicates = []
-total = 0
 
-for position in range(bar.GetMenuCount()):
-    menu = bar.GetMenu(position)
-    title = bar.GetMenuLabel(position)
-    # ONE NAMESPACE PER MENU LEVEL, which is how Windows actually resolves a
-    # mnemonic: only the open level is listening, so Alt+D on a submenu item
-    # cannot be confused with Alt+D on the menu above it, which is shut by
-    # then. This used to pool a whole top level menu and its submenus into
-    # one namespace, deliberately stricter than Windows, and On air had
-    # reached the point where that strictness was the binding constraint:
-    # 22 of 26 letters were spoken for and the four spare ones (j, q, x, z)
-    # appear in no label anybody would write, so the menu could not accept
-    # another item at all. That is the guard deciding the product rather
-    # than protecting it.
-    #
-    # Within one level the check is unchanged, and that is the half that
-    # matters: two items you can see at once must not answer the same key.
-    seen_by_level = {}
-    for path, item in headers(menu):
-        text = item.GetItemLabel().split(chr(9))[0]
-        where = "%s > %s%s" % (title, path, item.GetItemLabelText())
-        if "&" not in text:
-            problems["no mnemonic"].append(where)
-            continue
-        seen = seen_by_level.setdefault(path, {})
-        letter = text[text.index("&") + 1].lower()
-        if letter in seen:
-            duplicates.append("%s and %s both use Alt+%s in %s"
-                              % (seen[letter], item.GetItemLabelText(),
-                                 letter.upper(), title))
-        seen[letter] = item.GetItemLabelText()
-    for path, item in walk(menu):
-        total += 1
-        seen = seen_by_level.setdefault(path, {})
-        label = item.GetItemLabel()
-        where = "%s > %s%s" % (title, path, item.GetItemLabelText())
+def audit(bar):
+    """(items, problems, duplicates) for the menu bar as it reads NOW.
 
-        # A mnemonic, and a unique one within this menu.
-        text = label.split(chr(9))[0]
-        if "&" not in text:
-            problems["no mnemonic"].append(where)
-        else:
+    A function, because several items relabel themselves (Go live, the send,
+    the recordings) and the labels they change to have to be audited as well
+    as the ones the window opens with. "Come off air" and "Open the
+    recordings folder" both answered Alt+F while live from 3.8.2 until the
+    review of 24 November 2026, and this file only ever saw the menu off air.
+    """
+    problems = {"no mnemonic": [], "unbound": [], "bad accelerator": [],
+                "wrong command": []}
+    duplicates = []
+    total = _audit_into(bar, problems, duplicates)
+    return total, problems, duplicates
+
+
+def _audit_into(bar, problems, duplicates):
+    total = 0
+    for position in range(bar.GetMenuCount()):
+        menu = bar.GetMenu(position)
+        title = bar.GetMenuLabel(position)
+        # ONE NAMESPACE PER MENU LEVEL, which is how Windows actually resolves a
+        # mnemonic: only the open level is listening, so Alt+D on a submenu item
+        # cannot be confused with Alt+D on the menu above it, which is shut by
+        # then. This used to pool a whole top level menu and its submenus into
+        # one namespace, deliberately stricter than Windows, and On air had
+        # reached the point where that strictness was the binding constraint:
+        # 22 of 26 letters were spoken for and the four spare ones (j, q, x, z)
+        # appear in no label anybody would write, so the menu could not accept
+        # another item at all. That is the guard deciding the product rather
+        # than protecting it.
+        #
+        # Within one level the check is unchanged, and that is the half that
+        # matters: two items you can see at once must not answer the same key.
+        seen_by_level = {}
+        for path, item in headers(menu):
+            text = item.GetItemLabel().split(chr(9))[0]
+            where = "%s > %s%s" % (title, path, item.GetItemLabelText())
+            if "&" not in text:
+                problems["no mnemonic"].append(where)
+                continue
+            seen = seen_by_level.setdefault(path, {})
             letter = text[text.index("&") + 1].lower()
             if letter in seen:
                 duplicates.append("%s and %s both use Alt+%s in %s"
                                   % (seen[letter], item.GetItemLabelText(),
                                      letter.upper(), title))
             seen[letter] = item.GetItemLabelText()
+        for path, item in walk(menu):
+            total += 1
+            seen = seen_by_level.setdefault(path, {})
+            label = item.GetItemLabel()
+            where = "%s > %s%s" % (title, path, item.GetItemLabelText())
 
-        # Something has to happen when it is chosen.
-        if item.GetId() not in BOUND:
-            problems["unbound"].append(where)
+            # A mnemonic, and a unique one within this menu.
+            text = label.split(chr(9))[0]
+            if "&" not in text:
+                problems["no mnemonic"].append(where)
+            else:
+                letter = text[text.index("&") + 1].lower()
+                if letter in seen:
+                    duplicates.append("%s and %s both use Alt+%s in %s"
+                                      % (seen[letter], item.GetItemLabelText(),
+                                         letter.upper(), title))
+                seen[letter] = item.GetItemLabelText()
 
-        # What the label promises after the tab has to be real.
-        if chr(9) in label:
-            shortcut = label.split(chr(9))[1].strip()
-            parsed = parse_accelerator(shortcut)
-            if parsed is None:
-                problems["bad accelerator"].append("%s (%s)" % (where, shortcut))
-            elif parsed in registered and item.GetId() not in registered[parsed]:
-                # THE check. wx registers a menu item's own shortcut for you,
-                # so a key missing from the table is fine - but a key that IS
-                # in the table beats the menu, and if it fires something else
-                # the menu is advertising a key that no longer does what it
-                # says. That is how Ctrl+Shift+S quietly stopped saving a
-                # board when 2.5.0 gave it to the soundboard view.
-                #
-                # Ctrl+Tab and Alt+F4 are Windows' own and are advertised
-                # without being ours to register.
-                if shortcut.lower() not in ("ctrl+tab", "alt+f4"):
-                    problems["wrong command"].append(
-                        "%s promises %s, which fires something else"
-                        % (where, shortcut))
+            # Something has to happen when it is chosen.
+            if item.GetId() not in BOUND:
+                problems["unbound"].append(where)
 
+            # What the label promises after the tab has to be real.
+            if chr(9) in label:
+                shortcut = label.split(chr(9))[1].strip()
+                parsed = parse_accelerator(shortcut)
+                if parsed is None:
+                    problems["bad accelerator"].append("%s (%s)" % (where, shortcut))
+                elif parsed in registered and item.GetId() not in registered[parsed]:
+                    # THE check. wx registers a menu item's own shortcut for you,
+                    # so a key missing from the table is fine - but a key that IS
+                    # in the table beats the menu, and if it fires something else
+                    # the menu is advertising a key that no longer does what it
+                    # says. That is how Ctrl+Shift+S quietly stopped saving a
+                    # board when 2.5.0 gave it to the soundboard view.
+                    #
+                    # Ctrl+Tab and Alt+F4 are Windows' own and are advertised
+                    # without being ours to register.
+                    if shortcut.lower() not in ("ctrl+tab", "alt+f4"):
+                        problems["wrong command"].append(
+                            "%s promises %s, which fires something else"
+                            % (where, shortcut))
+    return total
+
+
+total, problems, duplicates = audit(bar)
 check("there are menus worth auditing", total > 30, total)
 check("every item has a mnemonic", not problems["no mnemonic"],
       problems["no mnemonic"])
@@ -258,6 +288,149 @@ check("every advertised shortcut can be read", not problems["bad accelerator"],
       problems["bad accelerator"])
 check("no advertised shortcut is stolen by something else",
       not problems["wrong command"], problems["wrong command"])
+
+# ---------------------------------------------------------------------------
+print("The labels that change, as they read while it is happening")
+
+
+class _Sending:
+    """A send that is running, for the label that says so."""
+
+    is_running = True
+
+    class confidence:
+        on = False
+
+
+def _states():
+    """Put the menu bar in each state the app relabels it for, in turn.
+
+    Through the frame's own relabelling functions, the ones going live, a
+    send and a recording call, so the words audited are the words shown.
+    """
+    board = frame.board
+    was = board.live_to
+    for name, live_to, live, sending, recording in (
+            ("live on video", C.LIVE_TO_VIDEO, True, False, False),
+            ("live on radio", C.LIVE_TO_AUDIO, True, False, False),
+            ("sending", C.LIVE_TO_VIDEO, False, True, False),
+            ("recording", C.LIVE_TO_VIDEO, False, False, True),
+            ("live, sending and recording at once", C.LIVE_TO_AUDIO, True,
+             True, True)):
+        board.live_to = live_to
+        frame.send = _Sending() if sending else None
+        frame._set_air_labels(live)
+        frame._sync_send_menu()
+        frame._set_record_label(recording)
+        frame._set_video_record_label(recording)
+        yield name
+    frame.send = None
+    board.live_to = was
+    frame._set_air_labels(False)
+    frame._sync_send_menu()
+    frame._set_record_label(False)
+    frame._set_video_record_label(False)
+
+
+for state in _states():
+    _total, state_problems, state_duplicates = audit(bar)
+    check("%s, no two items in one menu share a mnemonic" % state,
+          not state_duplicates, state_duplicates)
+    check("%s, every item still has one" % state,
+          not state_problems["no mnemonic"], state_problems["no mnemonic"])
+    check("%s, and every shortcut still does what it says" % state,
+          not state_problems["wrong command"],
+          state_problems["wrong command"])
+
+# ---------------------------------------------------------------------------
+print("The two menus opened on one thing: a playlist row, and a bed")
+
+# They are built when they are opened, so they are opened: the frame's own
+# handlers build them, and PopupMenu is stood in to read the menu and return
+# at once instead of waiting for a click.
+_popped = []
+
+
+def _read_popup(self, menu, *args, **kw):
+    letters, missing = {}, []
+    for item in menu.GetMenuItems():
+        if item.IsSeparator():
+            continue
+        text = item.GetItemLabel().split(chr(9))[0].replace("&&", "")
+        if "&" not in text:
+            missing.append(item.GetItemLabelText())
+            continue
+        letters.setdefault(text[text.index("&") + 1].lower(), []).append(
+            item.GetItemLabelText())
+    _popped.append((letters, missing))
+    return True
+
+
+def _shared(letters):
+    return {k: v for k, v in letters.items() if len(v) > 1}
+
+
+import numpy as _np                                    # noqa: E402
+import soundfile as _sf                                # noqa: E402
+
+_sounds = _tempfile.mkdtemp(prefix="dropdeck-menus-sounds-")
+
+
+def _wav(name, seconds):
+    path = os.path.join(_sounds, name + ".wav")
+    _sf.write(path, _np.zeros((int(48000 * seconds), 2), _np.float32), 48000)
+    return path
+
+
+_saved_popup = {cls: cls.__dict__.get("PopupMenu")
+                for cls in (wx.Window, wx.ListCtrl, wx.Button)}
+for _cls in _saved_popup:
+    _cls.PopupMenu = _read_popup
+try:
+    _panel = frame.playlist_panel
+    _panel.add_paths([_wav("Song A", 4.0), _wav("Song B", 4.0)])
+    frame.board.playlist.insert_drop(_wav("Ident", 1.0), at=1)
+    _panel.refresh()
+    for _playing in (False, True):
+        if _playing:
+            frame.play_playlist(0)
+        for _row in range(len(frame.board.playlist)):
+            _panel.select(_row)
+            _popped.clear()
+            _event = wx.ContextMenuEvent(wx.wxEVT_CONTEXT_MENU,
+                                         _panel.list.GetId())
+            _event.SetEventObject(_panel.list)
+            _panel.list.GetEventHandler().ProcessEvent(_event)
+            _letters, _missing = _popped[0] if _popped else ({}, ["no menu"])
+            check("the playlist row menu on row %d%s has no letter twice"
+                  % (_row + 1, ", playing" if _playing else ""),
+                  _popped and not _shared(_letters), _shared(_letters))
+            check("and every item on it has one", not _missing, _missing)
+    frame.stop_playlist(quiet=True)
+
+    _bed = frame.board.bank_slots(C.LOOPING_BANK)[0]
+    _bed.filepath = _wav("Bed", 3.0)
+    _bed.name = "Bed"
+    for _playing in (False, True):
+        if _playing:
+            frame.trigger(_bed.index)
+        _popped.clear()
+        frame.show_slot_menu(_bed, frame._button_for(_bed))
+        _letters, _missing = _popped[0] if _popped else ({}, ["no menu"])
+        check("the bed menu%s has no letter twice"
+              % (", playing" if _playing else ""),
+              _popped and not _shared(_letters), _shared(_letters))
+        check("and every item on it has one", not _missing, _missing)
+    frame.mixer.stop_all(fade_out=0.0)
+finally:
+    for _cls, _method in _saved_popup.items():
+        if _method is None:
+            try:
+                del _cls.PopupMenu
+            except AttributeError:
+                pass
+        else:
+            _cls.PopupMenu = _method
 
 # ---------------------------------------------------------------------------
 print("What the items say")

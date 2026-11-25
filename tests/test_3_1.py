@@ -142,6 +142,10 @@ app.Yield()
 # 3.2 after the first person to use it counted four, so the count is pinned
 # here rather than assumed; tests/test_stopping.py checks every value of it.
 frame.board.stop_presses = 3
+# The button follows the board's count since the review of 24 November 2026
+# (it said three whatever the board wanted). Preferences and opening a board
+# both bring it up to date; this is the same call they make.
+frame._sync_stop_words()
 
 stopped = []
 real_stop = frame.stop_all

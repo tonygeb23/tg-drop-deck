@@ -321,13 +321,19 @@ def check(settings, board, audio_running=True, mic_open=False,
     server = settings.get("server", "")
     host = settings.get("host", "")
     page = C.FIX_VIDEO if video else C.FIX_AUDIO
+    # Ctrl+B was the radio key until 3.8.2 and is the video key now, so a
+    # radio presenter pressing it out of habit is stopped by a video setup
+    # they never made. The stop says which key their show goes out on.
+    radio_key = (". For your radio station, press Alt+Shift+B"
+                 if video and getattr(board, "stream_host", "") else "")
 
     # ---------------------------------------------------------- where it goes
     if not host:
         lines.append(("Going to", "nowhere: no %s is set up yet"
                       % ("video platform" if video else "server")))
-        notes.append(Note(STOP, "There is no %s set up yet"
-                          % ("video platform" if video else "server"), page))
+        notes.append(Note(STOP, "There is no %s set up yet%s"
+                          % ("video platform" if video else "server",
+                             radio_key), page))
     else:
         lines.append(("Going to", where_it_goes(settings, video)))
 
@@ -363,8 +369,8 @@ def check(settings, board, audio_running=True, mic_open=False,
         # belongs to another server.
         notes.append(Note(STOP, held_key_sentence(settings), C.FIX_VIDEO))
     elif video and not settings.get("password"):
-        notes.append(Note(STOP, "There is no stream key for this station",
-                          C.FIX_VIDEO))
+        notes.append(Note(STOP, "There is no stream key for this station"
+                          + radio_key, C.FIX_VIDEO))
     if video and settings.get("key_unconfirmed"):
         # Not a stop: this is the question. Going live is the answer.
         notes.append(Note(WARN, unconfirmed_key_sentence(settings),

@@ -217,6 +217,53 @@ Plain sentences for the changelog and the release post, added by each step.
 
 ## Speech and keys
 
+- Ctrl+M and Alt+Shift+M now say "Mic on" and "Mic off" (feedback 48). The
+  microphone is named only the first time, when it is a different one, or
+  when it came in another way, and "music ducked" is said only when ducking
+  is on.
+- If your microphone is on while you stream, record or send, but "Put the
+  microphone on air" is off, Ctrl+M says "not on air", so you know nobody
+  else can hear you.
+- After a dropped connection comes back, Drop Deck says "Back on air"
+  instead of the whole going live line and the server address again. The
+  first time it says "On air" with your station or platform name.
+- Delete on the playlist track that is playing now asks before it stops the
+  music, with No as the answer Enter gives. Deleting any other track is
+  still instant. Whatever you choose is said even at the middle speech
+  level.
+- Choosing your radio station in Streaming location now says Alt+Shift+B
+  goes live there, which is what really happens. If you press Ctrl+B with
+  no video set up and a radio station that is, Drop Deck tells you to press
+  Alt+Shift+B for your radio station.
+- The Stop everything button says how many presses of Escape your board
+  really needs, twice unless you changed it, and changes when you change it
+  in Preferences or open another board.
+- With "F7 and F8 change what I hear, not what goes out" on, F7 and F8 now
+  say "what you hear only" while you record or send, not only while you
+  stream.
+- Alt+Enter on a playlist track opens its crossfade, as the guide says.
+- Assign a global hotkey says "Move to a sound button first" when you are
+  not on one, instead of nothing.
+- Answers such as Ctrl+L, and the names of sounds you start from a menu, are
+  no longer cut off by the screen reader reading where the menu left you.
+- Swapping between the soundboard and the playlist says only where you are,
+  "Playlist" or "Soundboard" and the bank. The playlist summary is still
+  there when you press the key for the view you are already in.
+- Search sounds says how many match once you stop typing, rather than after
+  every letter, and says nothing at the speech level None. The hotkey,
+  Properties and drops library windows follow the speech level too.
+- No two items on one menu share a letter any more. While you are live, the
+  On air menu reads "Go off air from video", letter G, or "Go off air from
+  radio", letter D: the same letter that put you on air. Open the recordings
+  folder keeps F. Stopping the send is I, the same letter as starting it.
+- On a playlist track's menu, Move to the top is now O, Stop the playlist Y
+  and Insert a random drop N. On a bed's menu, Loop this bed is O. In
+  Submit feedback, What will be sent is W; in Check my shot, Close is L; in
+  the colour picker, Cancel is A.
+- The microphone item on the On air menu is now called "Microphone", ticked
+  while it is on, so it no longer reads as "Microphone on, not checked".
+  Ctrl+M and the M are unchanged.
+
 ## Where things are
 
 ## Help and the guide

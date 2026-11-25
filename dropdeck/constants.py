@@ -550,6 +550,10 @@ EXPORT_PROGRESS_EVERY_SECONDS = 5.0
 AFTER_MENU_SECONDS = 0.5
 AFTER_MENU_SPEECH_MS = 400
 
+#: Search sounds says how many match once typing has stopped for this long,
+#: rather than once per key, which queued a count behind every letter.
+SEARCH_COUNT_DELAY_MS = 400
+
 #: How many device slots to walk when PortAudio cannot hand the whole list
 #: over in one go. Far more than any machine has; the walk stops at the first
 #: index past the end.
@@ -834,8 +838,8 @@ THE MICROPHONE
                             Ctrl+M for itself
   Ctrl+Shift+M              Which microphone, how much gain, which output
                             you hear yourself on, and whether you do
-  Microphone on and Microphone settings are on the On air menu, under
-  Microphone.
+  Microphone, ticked while it is on, and Microphone settings are on the On
+  air menu, under Microphone.
 
   While the microphone is ON, the beds and the playlist duck out of the way,
   and they come back up the moment you turn it off. That happens because the
@@ -858,7 +862,7 @@ THE MICROPHONE
 
   IF CTRL+M DOES NOTHING AT ALL, another program has probably taken the key
   before Drop Deck can hear it. Drop Deck says so when it starts if it can
-  tell. Alt+Shift+M still works, and so does Microphone on in the On air
+  tell. Alt+Shift+M still works, and so does Microphone in the On air
   menu. With NVDA, press NVDA+1, then Ctrl+M, then NVDA+1 again to turn input
   help off. If NVDA describes a command, an add-on or one of your own input
   gestures has the key.
