@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.0.0 for Windows, 24 November 2026
+## 4.0.0 for Windows, 25 November 2026
 
 A major release of Drop Deck for Windows. Your board, your sounds and your
 settings are all kept when you update.

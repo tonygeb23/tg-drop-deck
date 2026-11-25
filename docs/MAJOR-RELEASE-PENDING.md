@@ -113,20 +113,27 @@ Things agents handed back for the lead to apply at the end. Not user facing.
 ## Open points
 
 Applied to CLAUDE.md, the changelog and the guide on 24 November 2026 for
-the 4.0.0 release candidate. What is still open:
+the 4.0.0 release candidate.
 
-- **Deploy the Windows guide with the release, after Tony's go**, by the
-  site's own steps (build.py, scp, chmod, curl every page). It is not in git;
-  the copies as they were are in the session scratchpad, `guide_before`,
-  `guide_before_final` and `guide_before_write`.
+**Released 25 November 2026** on Tony's go ("go ahead and build, publish,
+and send an update to Mastodon"). Rebuilt from 62a7975 with a clean tree:
+installer 90,509,362 bytes, zip 121,723,560. The frozen selftest reported
+4.0.0 with the channel live and every check passing but screen capture,
+which a private desktop cannot give (the capture code loaded; only the grab
+was refused). `release_app.py publish` rehearsed, uploaded and verified the
+live feed for both kinds of copy. The site, with the rewritten Windows
+guide, deployed by `deploy.py`; all six sites and all seven update channels
+checked. The changelog date moved from 24 to 25 November, the day it
+shipped. What is still open:
 - **The Mac pickup** is `docs/MAC-PICKUP-4.0.0.md`.
 - **Tony's call:** "Go live here when I press Ctrl+B" on the Video streaming
   page is stale. Since 3.8.2 Ctrl+B always goes to the video platform, and
   the box only moves the Streaming location dot. It is kept because a
   learned control is not taken away; reword or retire it?
-- **Tony to check on real hardware before release:** late blocks on a 96 kHz
-  card with the on air sound and a recording running; Alt+Shift+A pressed
-  for real; the NVDA list in the release candidate message.
+- **Not checked before release, Tony to check on real hardware:** late
+  blocks on a 96 kHz card with the on air sound and a recording running;
+  Alt+Shift+A pressed for real; the NVDA list in the release candidate
+  message.
 - **Not fixed, noticed in Area 5:** with Send the track title off, the video
   card gets the first song at go live and never updates.
 - **AAC at 128k on a brickwalled master** can still decode over full scale,
