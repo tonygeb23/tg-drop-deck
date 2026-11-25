@@ -359,9 +359,10 @@ def check(settings, board, audio_running=True, mic_open=False,
                       else "on the air when you open it, Ctrl+M"))
     else:
         lines.append(("Microphone", "NOT going out"))
+        # Put it right opens the Microphone page, where that box is now.
         notes.append(Note(WARN, "Your microphone is not on the air, so "
                                 "listeners will not hear you at all",
-                          C.FIX_AUDIO))
+                          C.FIX_MIC))
 
     # ------------------------------------------------------------- the faults
     if video and settings.get("key_held"):

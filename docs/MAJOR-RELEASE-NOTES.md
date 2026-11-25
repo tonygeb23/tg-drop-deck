@@ -221,9 +221,9 @@ Plain sentences for the changelog and the release post, added by each step.
   microphone is named only the first time, when it is a different one, or
   when it came in another way, and "music ducked" is said only when ducking
   is on.
-- If your microphone is on while you stream, record or send, but "Put the
-  microphone on air" is off, Ctrl+M says "not on air", so you know nobody
-  else can hear you.
+- If your microphone is on while you stream, record or send, but "Send my
+  microphone to streams, recordings and the send" is off, Ctrl+M says "not
+  on air", so you know nobody else can hear you.
 - After a dropped connection comes back, Drop Deck says "Back on air"
   instead of the whole going live line and the server address again. The
   first time it says "On air" with your station or platform name.
@@ -263,7 +263,58 @@ Plain sentences for the changelog and the release post, added by each step.
 - The microphone item on the On air menu is now called "Microphone", ticked
   while it is on, so it no longer reads as "Microphone on, not checked".
   Ctrl+M and the M are unchanged.
+- Nothing says Ctrl+B about your radio station any more, because Ctrl+B is
+  always your video platform and Alt+Shift+B your radio station. Ctrl+Shift+B
+  off air says "Off air. Alt+Shift+B goes live to" your station, and Ctrl+B
+  only for your video platform.
+- Loading a saved station from the On air menu says the key for where that
+  station goes, and if you are live it names the key that takes you off air.
+- Ctrl+Shift+W no longer says Ctrl+B goes to your radio station "until you
+  switch Ctrl+B over". It says your radio station, on Alt+Shift+B, takes no
+  picture, and that the picture goes out with Ctrl+B to your video platform
+  and into the file with Ctrl+Shift+R.
+- The status bar names Alt+Shift+B beside Off air or ON AIR when your show
+  goes to your radio station, and Ctrl+B when it goes to your video platform.
+- The tooltips on "Say what is going out before Ctrl+B goes live" and on the
+  go live window's "Do not ask again" now say they cover Alt+Shift+B as well,
+  which they always did.
 
 ## Where things are
+
+- The cue sheet is on the Playlist menu now, as "Cue sheet, what is coming
+  up", letter T, with its key, Ctrl+Shift+C.
+- "Add songs to the end" on the Playlist menu has a key: Alt+Shift+A
+  (feedback 51). If a pad in bank 4 already has Alt+Shift+A, the pad keeps
+  it, the same as Alt+Shift+P: Add songs is then on the menu only, and the
+  menu and the startup line say which pad has the key.
+- "Put the microphone on air" has moved from Audio streaming to the
+  Microphone page, and is now called "Send my microphone to streams,
+  recordings and the send", because it decides all three. Its letter is
+  still I, and a saved station still remembers it. On the go live window,
+  Put it right on "Your microphone is not on the air" opens that page.
+- "Hear yourself through", on the Microphone page, is now "What I listen
+  on", because it also chooses where you hear the beep before a track ends,
+  the sounds you audition and, on a card of its own, the whole show. Its
+  letter is still O. The box under it, "Hear yourself through the output",
+  is unchanged.
+- The ducking box on Sounds and beds now says what it does: "Duck the music
+  under sounds, drops and the microphone". Its letter is still D, and Ctrl+D
+  is unchanged.
+- The status bar starts with what matters most: whether your microphone is
+  on, whether you are on air, recording or sending. The three volumes and
+  ducking come after, so the state is no longer cut off or read last.
+- Ctrl+S on a board that has never had a name, one from File, New, the demo
+  pack or an import, now asks where to save it, as Save board as does. It
+  used to save "New board.json" in the settings folder and say so, dot json
+  and all. A board you have named or opened saves where it is, as before.
+- New: "Send song titles as", on the Audio streaming page under "Send the
+  track title" (feedback 39). Title by Artist, as before, Artist - Title, or
+  Artist - Title - Album, each read out with an example. Anything a song's
+  file does not say, such as its album, is left out with no hyphen left
+  hanging. The album is read with the artist and the title, once, when a
+  song goes in, and songs already in a running order have it read once in
+  the background.
+- With "Send the track title" off, going live no longer sends your station
+  the title of the song that is playing at that moment.
 
 ## Help and the guide

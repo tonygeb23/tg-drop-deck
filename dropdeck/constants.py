@@ -664,6 +664,7 @@ THE PLAYLIST - a running order that cues itself
   Ctrl+V                    Paste songs copied in File Explorer
                             Works from anywhere and brings you to the list.
                             You can drag files onto the list as well.
+  Alt+Shift+A               Add songs to the end, from a file window
   Enter                     Play from the item you are on
   Space                     Tick or untick it. An unticked track stays in
                             the list, keeps its place, and is skipped.
@@ -805,7 +806,7 @@ WHERE YOUR AUDIO GOES
   Three separate questions, and Ctrl+Shift+W answers all three at once.
   Preferences, Output is where your SOUNDS play, and a bank can have a card
   of its own if you ride levels on a desk.
-  Preferences, Microphone, Hear yourself through is what YOU hear. It carries
+  Preferences, Microphone, What I listen on is what YOU hear. It carries
   every card's show, so putting a bank on another card does not make you deaf
   to it.
   Alt+Shift+O is the whole show OUT of this machine, for another program.
@@ -1097,6 +1098,25 @@ Your board saves itself on exit and whenever you change it.
 #: seconds is enough to ride out a network hiccup without the stream noticing,
 #: and short enough that a listener is never far behind the presenter.
 AIR_RING_SECONDS = 2.0
+
+#: Send song titles as: the order a radio station is told a song in, the
+#: board's `stream_title_format`. Feedback 39. The first two keys are the
+#: Mac's own, so a board carries its choice between the two copies; the
+#: third is new here. Title by Artist is what every station was sent before
+#: there was a choice, so it is the default and an unknown value means it.
+TITLE_BY_ARTIST = "title_by_artist"
+ARTIST_TITLE = "artist_title"
+ARTIST_TITLE_ALBUM = "artist_title_album"
+TITLE_FORMATS = (TITLE_BY_ARTIST, ARTIST_TITLE, ARTIST_TITLE_ALBUM)
+DEFAULT_TITLE_FORMAT = TITLE_BY_ARTIST
+#: A song worked through in each, because a screen reader may say nothing
+#: for a hyphen, and "Artist Title" alone does not say which word is which.
+TITLE_FORMAT_LABELS = {
+    TITLE_BY_ARTIST: "Title by Artist, as in Dancing Queen by Abba",
+    ARTIST_TITLE: "Artist - Title, as in Abba - Dancing Queen",
+    ARTIST_TITLE_ALBUM: ("Artist - Title - Album, as in Abba - Dancing Queen "
+                         "- Arrival"),
+}
 
 # ------------------------------------------------------------------- send --
 # The same mix, out of a sound card, whether or not anything is live. See
@@ -1737,6 +1757,9 @@ HEALTH_BACK = "The picture is back"
 #: importing wx, which is what keeps it testable with no display.
 FIX_AUDIO = "audio"
 FIX_VIDEO = "video"
+#: Whether the microphone goes out is on the Microphone page, not Audio
+#: streaming, since the major release after 3.10.1.
+FIX_MIC = "mic"
 
 SCREEN_ALL = "all"
 SCREEN_MAIN = "main"

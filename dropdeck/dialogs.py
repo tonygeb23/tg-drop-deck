@@ -897,7 +897,7 @@ class SettingsDialog(wx.Dialog):
                    "Everything plays here, and only here, unless a bank below\n"
                    "is sent to an output of its own. To hear the show on a\n"
                    "second card as well, choose it on the Microphone tab,\n"
-                   "under Hear yourself through.")
+                   "under What I listen on.")
 
         # Per-bank outputs.
         #
@@ -935,8 +935,12 @@ class SettingsDialog(wx.Dialog):
     def _build_sound_tab(self):
         panel, sizer = self._page("Sounds and beds")
 
+        # The playlist and the microphone too, not only the beds: Ctrl+D and
+        # this box are one switch for every way the music ducks, so the
+        # label says all three. D, as it always was.
         self.duck_on = wx.CheckBox(
-            panel, label="&Duck the music beds under sounds and drops")
+            panel, label="&Duck the music under sounds, drops and the "
+                         "microphone")
         self.duck_on.SetValue(bool(self.board.ducking))
         sizer.Add(self.duck_on, 0, wx.ALL, 10)
 
@@ -1213,18 +1217,25 @@ class SettingsDialog(wx.Dialog):
             "quiet headset, lower it for a hot one.")
         sizer.Add(self.mic_gain, 0, wx.EXPAND | wx.ALL, 10)
 
-        self._label(panel, sizer, "Hear yourself thr&ough")
+        # "What I listen on", and the O it has always had. It was "Hear
+        # yourself through", and it chooses far more than that: the beep
+        # before a track ends, the sounds you audition and, on a card of its
+        # own, the whole show. The box below keeps its words and its H.
+        self._label(panel, sizer, "What I listen &on")
         self.monitor_choices = ["Same as the soundboard"] + [
             "%s - %s" % (d["name"], d["hostapi"]) for d in self.devices]
         self.mic_output = wx.Choice(panel, choices=self.monitor_choices)
         # The same words as the label in front of it, which is what a
         # screen reader actually reads. Two names for one control is
         # how a codebase loses track of what a listener hears.
-        self.mic_output.SetName("Hear yourself through")
+        self.mic_output.SetName("What I listen on")
         self.mic_output.SetSelection(self._monitor_selection())
         self.mic_output.SetToolTip(
-            "Put monitoring on your headphones and leave the show on the main "
-            "output. The beep before a track ends comes out here too.")
+            "Usually your headphones. Choose a card and the whole show plays "
+            "on it as well as on the main output, with what is only for you: "
+            "the beep before a track ends, the sounds you audition and, when "
+            "you hear yourself, your own voice. Same as the soundboard keeps "
+            "all of it on the main output.")
         sizer.Add(self.mic_output, 0, wx.EXPAND | wx.ALL, 10)
 
         self.mic_monitor = wx.CheckBox(
@@ -1234,6 +1245,25 @@ class SettingsDialog(wx.Dialog):
             "On headphones this is how you know you are live. On speakers it "
             "is a feedback loop, which is why it is off to begin with.")
         sizer.Add(self.mic_monitor, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Whether you are in the show at all. It sat on Audio streaming as
+        # "Put the microphone on air", saved per station, and it also decides
+        # both recordings and the send, so somebody who only records or only
+        # sends never found it. Here, beside hearing yourself, which is the
+        # other half of the same question. Still the board's stream_mic,
+        # still saved with a station, still the I it had: _stream_controls
+        # fills it when a station loads and Cancel puts the board back.
+        self.stream_mic = wx.CheckBox(
+            panel,
+            label="Send my m&icrophone to streams, recordings and the send")
+        self.stream_mic.SetValue(bool(self.board.stream_mic))
+        self.stream_mic.SetToolTip(
+            "Separate from hearing yourself. With this on your voice goes "
+            "into the stream, both recordings and the send whenever the "
+            "microphone is open, whether or not you are monitoring. Off, you "
+            "still hear yourself and nobody else does. A saved station "
+            "remembers it.")
+        sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         sizer.Add(wx.StaticText(panel, label=self._mic_status_text()), 0,
                   wx.ALL, 10)
@@ -1746,27 +1776,22 @@ class SettingsDialog(wx.Dialog):
         sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 10)
 
         # Check boxes carry their own label, so nothing above can steal it.
-        # Their access keys still have to be unique: i did two jobs here.
-        self.stream_mic = wx.CheckBox(
-            panel, label="Put the m&icrophone on air")
-        self.stream_mic.SetValue(bool(self.board.stream_mic))
-        self.stream_mic.SetToolTip(
-            "Separate from hearing yourself. With this on you go out live "
-            "whenever the microphone is open, whether or not you are "
-            "monitoring, which is the normal way to work on speakers.")
-        sizer.Add(self.stream_mic, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        # Their access keys still have to be unique. Whether the microphone
+        # goes out is on the Microphone page now: it decides the recordings
+        # and the send as well as the stream. See _build_mic_tab.
 
         # The dialog itself carries a "do not ask again", so without this
         # that would be a one way door: no way back to the summary short of
-        # editing the board file.
+        # editing the board file. Both keys ask: Alt+Shift+B goes through
+        # the same toggle_stream as Ctrl+B, so the words say both.
         self.ask_before_live = wx.CheckBox(
             panel, label="S&ay what is going out before Ctrl+B goes live")
         self.ask_before_live.SetValue(bool(self.board.ask_before_live))
         self.ask_before_live.SetToolTip(
-            "Ctrl+B says where the show is going, what it is sending and "
-            "whether your microphone is on the air, and waits for Enter. "
-            "Turn it off and Ctrl+B goes straight on the air; Ctrl+Shift+B "
-            "still answers at any time.")
+            "Ctrl+B and Alt+Shift+B say where the show is going, what it is "
+            "sending and whether your microphone is on the air, and wait for "
+            "Enter. Turn it off and both go straight on the air; "
+            "Ctrl+Shift+B still answers at any time.")
         sizer.Add(self.ask_before_live, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
 
         self.stream_titles = wx.CheckBox(
@@ -1776,6 +1801,25 @@ class SettingsDialog(wx.Dialog):
             "Listeners see the artist and title of whatever the playlist is "
             "playing, taken from the file.")
         sizer.Add(self.stream_titles, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        # Feedback 39: which way round the station shows a song. A choice,
+        # three of them, each with a song worked through, because "Artist -
+        # Title" read aloud does not say which word is which. The keys are
+        # the Mac's own (C.TITLE_FORMATS). Built after its label, for MSAA.
+        self._label(panel, sizer, "Send s&ong titles as")
+        self.title_format = wx.Choice(panel, choices=[
+            C.TITLE_FORMAT_LABELS[key] for key in C.TITLE_FORMATS])
+        name_field(self.title_format, "Send song titles as")
+        chosen = getattr(self.board, "stream_title_format",
+                         C.DEFAULT_TITLE_FORMAT)
+        self.title_format.SetSelection(
+            C.TITLE_FORMATS.index(chosen) if chosen in C.TITLE_FORMATS
+            else 0)
+        self.title_format.SetToolTip(
+            "How your radio station shows the song that is playing, while "
+            "Send the track title is ticked. Anything a song's file does not "
+            "say, such as its album, is left out.")
+        sizer.Add(self.title_format, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
 
         self.playlist_monitor_only = wx.CheckBox(
             panel, label="F7 and F8 change what I &hear, not what goes out")
@@ -2467,6 +2511,13 @@ class SettingsDialog(wx.Dialog):
             "stats_url": self.stream_stats.GetValue().strip(),
             "public": self.stream_public.GetValue(),
         }
+
+    @property
+    def title_format_key(self):
+        """Send song titles as, as the board's `stream_title_format`."""
+        chosen = self.title_format.GetSelection()
+        return (C.TITLE_FORMATS[chosen] if 0 <= chosen < len(C.TITLE_FORMATS)
+                else C.DEFAULT_TITLE_FORMAT)
 
     def _build_picture_tab(self):
         """Going out on YouTube, Facebook or any RTMP server.
@@ -5352,11 +5403,13 @@ class GoLiveDialog(wx.Dialog):
         else:
             self.trouble = None
 
+        # Both keys, because both ask: Alt+Shift+B reaches this window
+        # through the same toggle_stream as Ctrl+B.
         self.again = wx.CheckBox(
             self, label="&Do not ask again, just go live")
-        self.again.SetToolTip("Ctrl+B goes straight on the air. Ctrl+Shift+B "
-                              "still says what is going out, and you can turn "
-                              "this back on in Preferences.")
+        self.again.SetToolTip("Ctrl+B and Alt+Shift+B go straight on the air. "
+                              "Ctrl+Shift+B still says what is going out, and "
+                              "you can turn this back on in Preferences.")
         outer.Add(self.again, 0, wx.ALL, 10)
 
         row = wx.StdDialogButtonSizer()

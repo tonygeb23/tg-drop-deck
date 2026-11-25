@@ -368,10 +368,13 @@ def _first(value):
 _ARTIST_KEYS = ("artist", "albumartist", "TPE1", "\xa9ART", "Author",
                 "WM/AlbumArtist", "ARTIST")
 _TITLE_KEYS = ("title", "TIT2", "\xa9nam", "Title", "TITLE")
+#: And the album, for Send song titles as. Read in the same pass as the two
+#: above, so it costs no second look at the file.
+_ALBUM_KEYS = ("album", "TALB", "\xa9alb", "WM/AlbumTitle", "Album", "ALBUM")
 
 
 def tags(path):
-    """An artist and a title out of the file, as far as it has them.
+    """An artist, a title and an album out of the file, as far as it has them.
 
     A file with no tags, unreadable tags, or no mutagen on the machine gives
     an empty dict back and the caller falls back to the file name. Reading a
@@ -390,7 +393,8 @@ def tags(path):
         if meta is not None:
             metas.append(meta)
     found = {}
-    for field, keys in (("artist", _ARTIST_KEYS), ("title", _TITLE_KEYS)):
+    for field, keys in (("artist", _ARTIST_KEYS), ("title", _TITLE_KEYS),
+                        ("album", _ALBUM_KEYS)):
         for meta in metas:
             for key in keys:
                 try:

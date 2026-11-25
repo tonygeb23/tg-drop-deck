@@ -64,7 +64,7 @@ from .engine import probe
 from . import micdiag
 from . import micinput
 from .micinput import MicInput, describe_input, resolve_input
-from .playlist import PlaylistPlayer
+from .playlist import PlaylistPlayer, station_title
 from .plids import (ID_PL_ROW_ADD, ID_PL_ROW_DOWN, ID_PL_ROW_DROP,
                     ID_PL_ROW_FADE, ID_PL_ROW_PLAY, ID_PL_ROW_RANDOM,
                     ID_PL_ROW_BOTTOM, ID_PL_ROW_REMOVE, ID_PL_ROW_SEGUE,
@@ -561,8 +561,22 @@ _KEYS_OFF_THE_MENUS = {
     ID_VOL_BED_UP: "turns the beds up",
     ID_VOL_PL_DOWN: "turns the playlist down",
     ID_VOL_PL_UP: "turns the playlist up",
-    ID_CUE_SHEET: "opens the cue sheet",
     ID_STOP_ALL_KEY: "stops everything",
+}
+
+
+#: Keys of ours that bank 4 could already be given before the command had
+#: one, and that a pad on an older board may still hold. The pad keeps it:
+#: its key is the user's, and a sound that will not play is worse than a
+#: command with no key. The command is then on its menu only, and its label
+#: and the startup line say so (`_pad_holding`). All of them Alt+Shift.
+#: {command: (key code, what it is in a sentence, the menu it is on)}
+_KEYS_PADS_KEEP = {
+    ID_ONAIR_COMPARE: (ord("P"), "the quick compare of the on air sound",
+                       "On air"),
+    # Feedback 51. Checked free before it was given: in no table, on no
+    # menu, and not a key Windows, NVDA or JAWS documents as their own.
+    ID_PL_ADD: (ord("A"), "Add songs to the end", "Playlist"),
 }
 
 
@@ -1455,7 +1469,7 @@ class DropDeckFrame(wx.Frame):
         taken = self._keys_taken_elsewhere()
         if taken:
             bits.append(micdiag.keys_sentence(taken))
-        clashes = self._own_key_clashes() + self._compare_key_note()
+        clashes = self._own_key_clashes() + self._pad_key_notes()
         bits.extend(clashes)
         # What the board asked for and was refused: a plugin not installed
         # here, a recording folder that is not on this computer, global
@@ -1809,7 +1823,9 @@ class DropDeckFrame(wx.Frame):
         pl.AppendSeparator()
         pl.Append(ID_PL_PASTE, "Paste son&gs from the clipboard\tCtrl+V",
                   "Copy files in File Explorer, then paste them in here")
-        pl.Append(ID_PL_ADD, "&Add songs to the end...")
+        # Alt+Shift+A since the major release after 3.10.1, feedback 51,
+        # unless a bank 4 pad on this board had it first. See _KEYS_PADS_KEEP.
+        self.pl_add_item = pl.Append(ID_PL_ADD, self._add_songs_label())
         pl.Append(ID_PL_DROP_RANDOM, "Insert a &random drop\tAlt+D",
                   "One from your drops library, never the same one twice "
                   "running")
@@ -1829,6 +1845,11 @@ class DropDeckFrame(wx.Frame):
         pl.Append(ID_PL_PLAY, "Play &from here\tCtrl+Shift+Enter")
         pl.Append(ID_PL_GOTO_PLAYING, "Go to w&hat is on air\tCtrl+Shift+L",
                   "Put the cursor on the track that is playing")
+        # The cue sheet had a key and no menu, so nobody who did not already
+        # know Ctrl+Shift+C could find it. T, which this level had spare.
+        pl.Append(ID_CUE_SHEET, "Cue shee&t, what is coming up\tCtrl+Shift+C",
+                  "Everything ticked in the running order that is still to "
+                  "come, top to bottom, in a window of its own")
         pl.Append(ID_PL_NEXT, "&Next track")
         pl.Append(ID_PL_PREV, "Pre&vious track")
         pl.Append(ID_PL_STOP, "Stop the play&list")
@@ -2014,7 +2035,7 @@ class DropDeckFrame(wx.Frame):
         self.SetMenuBar(bar)
 
         self.Bind(wx.EVT_MENU, self._on_new, id=wx.ID_NEW)
-        self.Bind(wx.EVT_MENU, lambda _e: self._save(), id=wx.ID_SAVE)
+        self.Bind(wx.EVT_MENU, self._on_save, id=wx.ID_SAVE)
         self.Bind(wx.EVT_MENU, self._on_save_as, id=ID_SAVE_AS)
         self.Bind(wx.EVT_MENU, self._on_open, id=wx.ID_OPEN)
         self.Bind(wx.EVT_MENU, self._on_import, id=ID_IMPORT)
@@ -2317,13 +2338,15 @@ class DropDeckFrame(wx.Frame):
             wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_RETURN, ID_PROPERTIES),
             wx.AcceleratorEntry(wx.ACCEL_ALT, wx.WXK_NUMPAD_ENTER, ID_PROPERTIES),
         ]
-        # Alt+Shift+P compares the on air sound, unless a pad on this board
-        # had the key first: bank 4 could always be given it, and a 3.10.1
-        # board that did keeps it. The compare is then on the menu only, and
-        # its label and the startup line say so. See _compare_key_holder.
-        if self._compare_key_holder() is None:
-            entries.append(wx.AcceleratorEntry(wx.ACCEL_ALT | wx.ACCEL_SHIFT,
-                                               ord("P"), ID_ONAIR_COMPARE))
+        # Alt+Shift+P compares the on air sound and Alt+Shift+A adds songs,
+        # unless a pad on this board had the key first: bank 4 could always
+        # be given either, and a 3.10.1 board that did keeps it. The command
+        # is then on its menu only, and the label and the startup line say
+        # so. See _KEYS_PADS_KEEP.
+        for command, (code, _what, _menu) in _KEYS_PADS_KEEP.items():
+            if self._pad_holding(command) is None:
+                entries.append(wx.AcceleratorEntry(
+                    wx.ACCEL_ALT | wx.ACCEL_SHIFT, code, command))
         for modifiers, key_code, index in fixed_accelerators():
             entries.append(wx.AcceleratorEntry(modifiers or wx.ACCEL_NORMAL,
                                                key_code, ID_SLOT_BASE + index))
@@ -2333,10 +2356,13 @@ class DropDeckFrame(wx.Frame):
                                                    slot.key_code,
                                                    ID_SLOT_BASE + slot.index))
         self._accelerators = entries
-        # The compare's label carries its key, or says whose it is now.
-        item = getattr(self, "onair_item", None)
-        if item is not None:
-            item.SetItemLabel(self._onair_label())
+        # Each of those labels carries its key, or says whose it is now.
+        for item, label in ((getattr(self, "onair_item", None),
+                             self._onair_label),
+                            (getattr(self, "pl_add_item", None),
+                             self._add_songs_label)):
+            if item is not None:
+                item.SetItemLabel(label())
         # The same map with every bare printable key taken out, for while
         # somebody is typing into a box. See _apply_accelerators.
         self._typing_accelerators = [
@@ -2900,19 +2926,32 @@ class DropDeckFrame(wx.Frame):
             status.SetStatusText(text, 1)
 
     def _update_status(self):
-        self.status.SetStatusText(
-            f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)   "
-            f"Beds {percent(self.mixer.bed_gain)} (F5, F6)   "
-            f"Playlist {percent(self.mixer.playlist_gain)} (F7, F8)   "
-            f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)   "
-            f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)   "
-            f"{self._air_label()} (Ctrl+B)"
-            + (("   RECORDING PAUSED (Alt+Shift+R)"
-                if self.recording_paused() else "   RECORDING (Ctrl+R)")
-               if self.recording() else "")
-            + ("   RECORDING PICTURE (Ctrl+Shift+R)"
-               if self.recording_video() else "")
-            + self._send_label(), 0)
+        """The readout in the first field. Every announcement goes in the
+        second (`announce` and the rest), so this order is this field's own.
+
+        **The state first**: whether you are heard, on air, recording or
+        sending. It came last, after three volumes, so on screen it was cut
+        off and a screen reader read it last; it is what the bar is read for.
+        The key after the air state is the one for where the show goes,
+        Alt+Shift+B for the radio station, and not always Ctrl+B.
+        """
+        parts = [f"Mic {'ON' if self._mic_open() else 'off'} (Ctrl+M)",
+                 "%s (%s)" % (self._air_label(),
+                              self._destination_key(self.board.live_to))]
+        if self.recording():
+            parts.append("RECORDING PAUSED (Alt+Shift+R)"
+                         if self.recording_paused() else "RECORDING (Ctrl+R)")
+        if self.recording_video():
+            parts.append("RECORDING PICTURE (Ctrl+Shift+R)")
+        sending = self._send_label()
+        if sending:
+            parts.append(sending)
+        parts += [
+            f"Sound {percent(self.mixer.sfx_gain)} (F3, F4)",
+            f"Beds {percent(self.mixer.bed_gain)} (F5, F6)",
+            f"Playlist {percent(self.mixer.playlist_gain)} (F7, F8)",
+            f"Ducking {'on' if self.mixer.ducking else 'off'} (Ctrl+D)"]
+        self.status.SetStatusText("   ".join(parts), 0)
 
     def _send_label(self):
         """What the status bar says about the send, or nothing at all.
@@ -2926,7 +2965,7 @@ class DropDeckFrame(wx.Frame):
         if send is None:
             return ""
         ok, _why = send.keeping_up()
-        return "   SENDING%s (Alt+Shift+O)" % ("" if ok else ", losing audio")
+        return "SENDING%s (Alt+Shift+O)" % ("" if ok else ", losing audio")
 
     def _keep_beds_off_the_playlist(self):
         """A bed and a playlist track are both music, so never both.
@@ -4389,38 +4428,56 @@ class DropDeckFrame(wx.Frame):
             state = "off for now"
         else:
             state = "on"
-        holder = self._compare_key_holder()
-        if holder is not None:
-            # No key after a tab: on Windows the menu would bind it as well.
-            return ("&Quick compare, on air sound is %s. No key, Alt+Shift+P "
-                    "plays %s on this board" % (state, holder.display_name))
-        return ("&Quick compare, on air sound is %s" % state
-                + chr(9) + "Alt+Shift+P")
+        return self._keyed_label("&Quick compare, on air sound is %s" % state,
+                                 ID_ONAIR_COMPARE)
 
-    def _compare_key_holder(self):
-        """The bank 4 pad that has Alt+Shift+P, or None.
+    def _add_songs_label(self):
+        return self._keyed_label("&Add songs to the end...", ID_PL_ADD)
 
-        A pad's key is the user's, chosen before the compare existed, and a
-        sound that will not play is worse than a compare that has no key.
-        Whether or not it holds a sound: an emptied pad keeps its key.
+    def _keyed_label(self, words, command):
+        """A menu label with its key after a tab, or saying whose it is.
+
+        No key after a tab while a pad has it: on Windows the menu would bind
+        it as well, and `_app_key_uses` would then refuse the pad its own key.
+        """
+        code = _KEYS_PADS_KEEP[command][0]
+        key = key_label(code, wx.ACCEL_ALT | wx.ACCEL_SHIFT)
+        holder = self._pad_holding(command)
+        if holder is None:
+            return words + chr(9) + key
+        return "%s%sNo key, %s plays %s on this board" % (
+            words, " " if words.endswith(".") else ". ", key,
+            holder.display_name)
+
+    def _pad_holding(self, command):
+        """The bank 4 pad that has this command's key, or None.
+
+        One of `_KEYS_PADS_KEEP`. A pad's key is the user's, chosen before
+        the command had one, and a sound that will not play is worse than a
+        command that has no key. Whether or not it holds a sound: an emptied
+        pad keeps its key.
         """
         board = getattr(self, "board", None)
-        if board is None:
+        if board is None or command not in _KEYS_PADS_KEEP:
             return None
+        code = _KEYS_PADS_KEEP[command][0]
         wanted = wx.ACCEL_ALT | wx.ACCEL_SHIFT
         for slot in board.bank_slots(C.BANK_MISC):
-            if slot.key_code == ord("P") and (slot.modifiers or 0) == wanted:
+            if slot.key_code == code and (slot.modifiers or 0) == wanted:
                 return slot
         return None
 
-    def _compare_key_note(self):
-        """For the startup line, once: why Alt+Shift+P is a sound here."""
-        holder = self._compare_key_holder()
-        if holder is None:
-            return []
-        return ["Alt+Shift+P plays %s on this board, so the quick compare of "
-                "the on air sound has no key. It is on the On air menu"
-                % holder.display_name]
+    def _pad_key_notes(self):
+        """For the startup line, once each: which of our keys is a sound here."""
+        notes = []
+        for command, (code, what, menu) in _KEYS_PADS_KEEP.items():
+            holder = self._pad_holding(command)
+            if holder is not None:
+                notes.append("%s plays %s on this board, so %s has no key. "
+                             "It is on the %s menu"
+                             % (key_label(code, wx.ACCEL_ALT | wx.ACCEL_SHIFT),
+                                holder.display_name, what, menu))
+        return notes
 
     def _on_onair_compare(self, _event=None):
         """Alt+Shift+P. The on air sound off, and on again, to compare.
@@ -4592,7 +4649,7 @@ class DropDeckFrame(wx.Frame):
         another way, and never on the tenth press of the same microphone.
         "Music ducked" only while ducking is on: with Ctrl+D off nothing goes
         down, and saying it did was untrue. "Not on air" while a stream, a
-        recording or the send is running and "Put the microphone on air" is
+        recording or the send is running and "Send my microphone" is
         off, because the presenter hears themselves perfectly and nobody
         else does.
         """
@@ -5255,6 +5312,24 @@ class DropDeckFrame(wx.Frame):
         except Exception:
             return False
 
+    def _on_save(self, _event=None):
+        """Ctrl+S. A board that has never had a name asks for one first.
+
+        File, New, the demo pack and an import each get a file of their own
+        in the settings folder (`_give_new_home`), and Ctrl+S on one of them
+        wrote "New board.json" there and said so, dot json and all: a file
+        the user never chose, in a folder they never see. So it is Save
+        board as, which is what Ctrl+S does in any Windows program with a
+        document that has never been saved. Meanwhile the save timer keeps
+        the work safe in that file, as it always did. A board that was named
+        or opened saves where it is.
+        """
+        home = getattr(self, "_fresh_home", None)
+        if home and same_path(home, self.board.path):
+            self._on_save_as(None)
+            return
+        self._save()
+
     def _on_save_as(self, _event):
         with wx.FileDialog(self, "Save board as", wildcard="Boards (*.json)|*.json",
                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
@@ -5699,7 +5774,7 @@ class DropDeckFrame(wx.Frame):
         notes.extend(self._follow_board_sources())
         notes.extend(self._follow_board_send())
         # With the sources and the send in place, so mute, solo and this
-        # board's "Put the microphone on air" decide what goes out.
+        # board's "Send my microphone" decide what goes out.
         self._sync_air_taps()
         self.apply_source_mixing()
         notes.extend(self._follow_board_hotkeys())
@@ -6606,7 +6681,7 @@ class DropDeckFrame(wx.Frame):
             on_trouble=self._on_stream_trouble,
             video_source=self.video_source)
         self._apply_onair()
-        self.streamer.set_title(self._now_playing_title())
+        self.streamer.set_title(self._station_title())
         self.streamer.start()
         self._start_framing()
         # A recording already running now takes the stream's own frames
@@ -6824,8 +6899,9 @@ class DropDeckFrame(wx.Frame):
             if mic.on_air:
                 inside.append("your microphone")
             elif not self.board.stream_mic:
-                outside.append("your microphone, which is switched off on the "
-                               "Audio streaming page")
+                # Where the box is now, by its own words.
+                outside.append("your microphone, because Send my microphone "
+                               "is off on the Microphone page of Preferences")
             elif mic.muted:
                 outside.append("your microphone, which is muted")
         soloed = self.anything_soloed()
@@ -7596,9 +7672,13 @@ class DropDeckFrame(wx.Frame):
             # The sentence Tony's report was asking for. His radio station
             # takes no picture, and that is not a reason for him to have no
             # picture: it is a reason to say which of the two this is for.
-            said.append("Nothing is using it yet. Ctrl+B goes to your radio "
-                        "station, which sends no picture, so this is for "
-                        "Ctrl+Shift+R until you switch Ctrl+B over.")
+            # It said Ctrl+B went to the radio station "until you switch
+            # Ctrl+B over", and since 3.8.2 nothing switches: Alt+Shift+B is
+            # the radio station and Ctrl+B is always the video platform.
+            said.append("Nothing is using it yet. Your radio station, on "
+                        "Alt+Shift+B, takes no picture. The picture goes out "
+                        "with Ctrl+B to your video platform, and into the "
+                        "file with Ctrl+Shift+R.")
         if feed is not None and feed.running and feed.fallen_back:
             said.append("A card is standing in%s."
                         % ((", because %s" % feed.reason) if feed.reason
@@ -7680,11 +7760,12 @@ class DropDeckFrame(wx.Frame):
         if not self.board.stream_mic:
             # The same rule as the mix minus sentence below: something that
             # is NOT in the send must never be described as though it were.
-            # board.stream_mic is a checkbox on the Audio streaming page and
-            # somebody who does not stream would reasonably turn it off, and
-            # then the call cannot hear them and nothing says why.
-            parts.append("Your microphone is switched off on the Audio "
-                         "streaming page, so your voice is not in it.")
+            # board.stream_mic is a checkbox on the Microphone page, and
+            # until the major release after 3.10.1 it was on Audio streaming,
+            # where somebody who does not stream would reasonably turn it
+            # off, and then the call cannot hear them and nothing says why.
+            parts.append("Send my microphone is off on the Microphone page "
+                         "of Preferences, so your voice is not in it.")
         wanted = (self.board.send_minus or "").strip()
         if not wanted:
             parts.append("Everything is in it.")
@@ -8195,8 +8276,10 @@ class DropDeckFrame(wx.Frame):
             return
         if self.streaming():
             # Swapping the server under a live stream mid sentence is not a
-            # thing to do quietly. Come off air first, deliberately.
-            self.announce("Come off air first, Ctrl+B, then change station")
+            # thing to do quietly. Come off air first, deliberately, with the
+            # key for where the show IS, as Streaming location says it.
+            self.announce("Come off air first, %s, then change station"
+                          % self._destination_key(self.board.live_to))
             self._rebuild_station_menu()
             return
         if self.board.load_station(name):
@@ -8204,10 +8287,14 @@ class DropDeckFrame(wx.Frame):
             # Where it goes, not just what was loaded. A saved setup carries
             # its own destination, so loading one can move the show from the
             # radio station to the video platform without anything saying so.
+            # And the key that goes there: this said Ctrl+B about a radio
+            # station, which has been Alt+Shift+B's since 3.8.2.
             report = self.preflight()
-            self.announce("%s. Ctrl+B goes to %s"
-                          % (name, report.summary() if report is not None
-                             else self.board.stream_host))
+            want = self.board.live_to
+            self.announce("%s. %s goes to %s"
+                          % (name, self._destination_key(want),
+                             report.summary() if report is not None
+                             else self._destination_words(want)))
         self._rebuild_station_menu()
         self._update_status()
 
@@ -8500,9 +8587,10 @@ class DropDeckFrame(wx.Frame):
             if answer != wx.ID_APPLY:
                 self.announce("Staying off air")
                 return False
-            self._on_settings(page=(SettingsDialog.PAGE_VIDEO
-                                    if fix == C.FIX_VIDEO
-                                    else SettingsDialog.PAGE_STREAM))
+            self._on_settings(page={
+                C.FIX_VIDEO: SettingsDialog.PAGE_VIDEO,
+                C.FIX_MIC: SettingsDialog.PAGE_MIC}.get(
+                    fix, SettingsDialog.PAGE_STREAM))
             try:
                 settings = self._stream_settings()
                 confirm = bool(settings.get("key_unconfirmed"))
@@ -8873,15 +8961,19 @@ class DropDeckFrame(wx.Frame):
             report = self.preflight()
             if report is None:
                 return "Off air, and no server is set up yet." + tail
+            # The key for the destination the report is about. It said
+            # Ctrl+B about a radio station, and since 3.8.2 Ctrl+B is the
+            # video platform's key and Alt+Shift+B the radio station's.
+            key = self._destination_key(self.board.live_to)
             if report.blocked:
                 # Both halves. Where it WOULD go is still the answer to the
                 # question, and a reason on its own leaves somebody guessing
                 # which of the two destinations is the one complaining.
-                return "Off air. Ctrl+B would go to %s, but %s.%s" % (
-                    report.summary(), report.stops[0].text[0].lower()
+                return "Off air. %s would go to %s, but %s.%s" % (
+                    key, report.summary(), report.stops[0].text[0].lower()
                     + report.stops[0].text[1:], tail)
-            return "Off air. Ctrl+B goes live to %s.%s" % (report.summary(),
-                                                           tail)
+            return "Off air. %s goes live to %s.%s" % (key, report.summary(),
+                                                       tail)
         if streamer.state != streamout.ON_AIR:
             return "%s. %s" % (streamer.state.capitalize(),
                                streamer.detail or streamer.error or "")
@@ -8938,12 +9030,29 @@ class DropDeckFrame(wx.Frame):
         track = self.player.current if self.player.playing else None
         return track.display_name if track is not None else ""
 
+    def _station_title(self):
+        """What the streamer is handed as playing: the one place it is made.
+
+        For the radio station, in the board's own order (feedback 39, Send
+        song titles as, see `playlist.station_title`), and nothing at all
+        with Send the track title off: Ctrl+B used to hand over the first
+        title whatever that box said, and the station showed it. The video
+        platform takes no title of its own, only the card's words, which
+        keep the name the rest of the picture uses.
+        """
+        if self.board.live_to != C.LIVE_TO_AUDIO:
+            return self._now_playing_title()
+        if not self.board.stream_titles:
+            return ""
+        track = self.player.current if self.player.playing else None
+        return station_title(track, self.board.stream_title_format)
+
     def _push_stream_title(self):
         """Tell the server what is playing, if it is wanted and has changed."""
         streamer = getattr(self, "streamer", None)
         if streamer is None or not self.board.stream_titles:
             return
-        streamer.set_title(self._now_playing_title())
+        streamer.set_title(self._station_title())
 
     @contextlib.contextmanager
     def _board_held(self):
@@ -9129,6 +9238,7 @@ class DropDeckFrame(wx.Frame):
                     mic_out = False
             self.board.stream_mic = mic_out
             self.board.stream_titles = dialog.stream_titles.GetValue()
+            self.board.stream_title_format = dialog.title_format_key
             self.board.ask_before_live = (dialog.ask_before_live.GetValue())
             self.board.playlist_monitor_only = (
                 dialog.playlist_monitor_only.GetValue())
@@ -9194,7 +9304,7 @@ class DropDeckFrame(wx.Frame):
         else:
             self.warm_cache()
             self.announce_help("Preferences saved. " + mic_said)
-        # "Put the microphone on air" and the microphone's own settings reach
+        # "Send my microphone" and the microphone's own settings reach
         # a show that is already going out. Nothing else calls these when a
         # setting changes, so a change mid show used to wait for the next
         # mute, solo or stream to be noticed. After the cards have moved,

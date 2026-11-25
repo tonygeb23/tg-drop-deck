@@ -93,6 +93,10 @@ class Track:
     #: an empty string means we looked and the file does not say.
     artist: str | None = None
     title: str | None = None
+    #: The album, read with the other two, for Send song titles as. ``None``
+    #: on a track saved before it was read, which the background pass then
+    #: looks at once more, for the album alone.
+    album: str | None = None
     #: Seconds of silence on the end of the file, measured once. This is what
     #: the cue point is taken from, so a crossfade lands on the song and not
     #: on the run out after it. ``None`` means not measured yet.
@@ -151,7 +155,8 @@ class Track:
     @property
     def has_metadata(self) -> bool:
         """Have the tags been read. Empty strings count: they mean we looked."""
-        return self.artist is not None and self.title is not None
+        return (self.artist is not None and self.title is not None
+                and self.album is not None)
 
     @property
     def display_name(self) -> str:
@@ -177,7 +182,7 @@ class Track:
         return max(0.0, duration - max(0.0, min(tail, duration)))
 
     def read_metadata(self, loudness=False, stop=None):
-        """Fill in artist, title and the run out. Safe to call twice.
+        """Fill in artist, title, album and the run out. Safe to call twice.
 
         Returns True if anything changed. Never raises: a file with broken
         tags still plays, and a file that will not open is somebody else's
@@ -191,8 +196,14 @@ class Track:
                     found = audiofile.tags(self.filepath)
                 except Exception:
                     found = {}
-            self.artist = found.get("artist") or ""
-            self.title = found.get("title") or ""
+            if self.artist is None or self.title is None:
+                self.artist = found.get("artist") or ""
+                self.title = found.get("title") or ""
+            # The album on its own for a track whose artist and title were
+            # read before there was an album to read, so what those already
+            # say, a running order file's words included, is left alone.
+            if self.album is None:
+                self.album = found.get("album") or ""
             changed = True
         if self.tail_silence is None:
             measured = 0.0
@@ -285,6 +296,7 @@ class Track:
                 "trim_set": bool(self.trim_set),
                 "enabled": bool(self.enabled),
                 "artist": self.artist, "title": self.title,
+                "album": self.album,
                 "tail_silence": self.tail_silence,
                 **_loudness_fields(self)}
 
@@ -308,6 +320,7 @@ class Track:
             enabled=bool(data.get("enabled", True)),
             artist=data.get("artist"),
             title=data.get("title"),
+            album=data.get("album"),
             tail_silence=tail,
         )._take_loudness(data)
 
@@ -323,6 +336,34 @@ class Track:
         """Measure, on the background pass. True if anything changed."""
         return measure_into(self, stop)
 
+
+def station_title(track, form=C.DEFAULT_TITLE_FORMAT):
+    """What a radio station is told is playing, in the board's order.
+
+    Feedback 39, Send song titles as. Title by Artist is `display_name`
+    exactly, which is what every station was sent before there was a choice.
+    The other two are the order most stations and players show, joined with
+    a plain hyphen, because the far end shows it as text in whatever font a
+    listener's player has. A part the file does not say is left out with its
+    hyphen. A name typed for the track is all of it, as it is everywhere
+    else in the app, and a file with no title tag goes by its file name
+    alone, which often holds the artist already.
+
+    From what the track already holds and nothing else: the tags are read
+    when the track goes in and on the background pass, never here, because
+    this runs every time the playlist ticks.
+    """
+    if track is None:
+        return ""
+    title = str(track.title or "").strip()
+    if (form not in (C.ARTIST_TITLE, C.ARTIST_TITLE_ALBUM) or track.name
+            or not title):
+        return track.display_name
+    parts = [track.artist, title]
+    if form == C.ARTIST_TITLE_ALBUM:
+        parts.append(track.album)
+    return " - ".join(text for text in (str(part or "").strip()
+                                        for part in parts) if text)
 
 
 def _is_relative(path):
@@ -434,7 +475,8 @@ class Playlist:
         return Track(filepath=path, duration=duration, kind=kind,
                      crossfade=crossfade,
                      artist=found.get("artist") or "",
-                     title=found.get("title") or "")
+                     title=found.get("title") or "",
+                     album=found.get("album") or "")
 
     def add(self, paths, at=None, kind=C.TRACK_SONG, crossfade=None):
         """Put files into the running order. Returns the tracks that went in.
@@ -497,6 +539,7 @@ class Playlist:
                 # than the file itself has is worth keeping.
                 track.artist = found.get("artist") or entry.get("artist") or ""
                 track.title = found.get("title") or entry.get("title") or ""
+                track.album = found.get("album") or ""
             else:
                 # Nothing to measure. Keep what the file said so the row can
                 # still be read out and recognised.
@@ -506,6 +549,7 @@ class Playlist:
                     track.duration = None
                 track.artist = entry.get("artist") or ""
                 track.title = entry.get("title") or ""
+                # The album is left unread, so a relinked file is asked.
             added.append(track)
         if not added:
             return []

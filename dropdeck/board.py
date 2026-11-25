@@ -1187,6 +1187,9 @@ class Board:
         #: Send the playlist's artist and title to the server, so listeners
         #: see what is playing.
         self.stream_titles = True
+        #: Which way round: one of C.TITLE_FORMATS, the key the Mac already
+        #: writes. The board's, not a station's, as on the Mac.
+        self.stream_title_format = C.DEFAULT_TITLE_FORMAT
 
         #: What goes on the screen when the destination insists on a picture.
         #: YouTube refuses an audio only ingest, so a radio show still has to
@@ -1930,6 +1933,7 @@ class Board:
             "stream_public": bool(self.stream_public),
             "stream_mic": bool(self.stream_mic),
             "stream_titles": bool(self.stream_titles),
+            "stream_title_format": self.stream_title_format,
             "playlist_monitor_only": bool(self.playlist_monitor_only),
             "stream_stations": list(self.stream_stations),
             "mic_channel": self.mic_channel,
@@ -2234,6 +2238,11 @@ class Board:
         board.stream_public = bool(data.get("stream_public", False))
         board.stream_mic = bool(data.get("stream_mic", True))
         board.stream_titles = bool(data.get("stream_titles", True))
+        # Whitelisted: anything else, a later version's choice included, is
+        # the default, which is what a station was always sent.
+        form = data.get("stream_title_format")
+        board.stream_title_format = (form if form in C.TITLE_FORMATS
+                                     else C.DEFAULT_TITLE_FORMAT)
         board.playlist_monitor_only = bool(
             data.get("playlist_monitor_only", True))
         channel = data.get("mic_channel")
