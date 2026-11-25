@@ -69,6 +69,15 @@ Things agents handed back for the lead to apply at the end. Not user facing.
   value `artist_title_album` and the album tag. The Mac treats that value
   as its default and writes `title_by_artist` back over it, so a board
   shared through Dropbox loses the choice.
+- Review fixes (23de026): the Mac reads the new mic channel `average` as
+  `mix` and saves `mix` back, so "Both, always mixed" is lost after a Mac
+  save. The Mac keeps `never_named` as an unknown key, so a Mac Save As
+  copies `true` into the named file: it should honour the flag on Cmd+S and
+  clear it on Save As. Also the wording (the Ctrl+M reason first, the
+  compare and its Ctrl+Shift+H hint, the Firm ceiling line, the station mic
+  sentence, the first start note, the pad held labels, the label renames),
+  Delete twice on the track on air instead of any box, and the status bar
+  read whole if AppKit truncates it.
 
 ## Open points
 
