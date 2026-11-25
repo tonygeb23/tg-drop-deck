@@ -38,7 +38,9 @@ Things agents handed back for the lead to apply at the end. Not user facing.
 - The duck while talking nuance: the open microphone is still the floor; the
   second stage only goes further down while the voice is above the threshold.
 - tools/run_private.py is how tests run while somebody is at the machine;
-  test_proccapture and test_sourcelist play a tone and are skipped by it.
+  test_proccapture and test_sourcelist play a tone and test_framing opens
+  a real camera, so it skips all three unless --with-sound or
+  --with-camera.
 
 ## Mac pickup
 

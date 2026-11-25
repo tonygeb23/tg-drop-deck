@@ -28,6 +28,8 @@ ensuring a good audit." Windows only.
   - Do not launch the app itself (`main.py`, `launch.pyw`, the built exe).
   - Do not play sound through the speakers. Offline renders with
     `open_stream=False` are fine, as the existing tests do.
+- The runner skips `test_proccapture` and `test_sourcelist` (they play a
+  tone) and `test_framing` (it opens a real camera). Never force them.
 - **Do not commit, push, build, bump the version or edit CHANGELOG.md.** The
   lead does those after checking your work.
 - **Do not touch the website or the server.** The guide edits happen in their
@@ -51,7 +53,7 @@ ensuring a good audit." Windows only.
   desktop for reasons that are the desktop, not the code (they also fail on
   untouched 3.10.1): `test_3_4_1` (screen capture checks only), `test_3_5_1`,
   `test_feedback_2_7`, `test_proccapture`, `test_stopping` (fade check),
-  `test_framing` (needs a lit room), and `test_playlist` can hang at teardown
+  and `test_playlist` can hang at teardown
   after every check passed. Compare against the baseline in your brief rather
   than assuming.
 - `python tools/nodashes.py` on every file you changed.
